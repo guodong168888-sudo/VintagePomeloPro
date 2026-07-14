@@ -48,31 +48,31 @@ Wine 构建使用 stamp 文件 + `find -newer` 检测源码变更：
 H="hdc -t <device_ip>"
 
 # 完整部署流程 (改 Wine 后需卸载重装)
-$H shell "bm uninstall -n app.hackeris.winehua"
+$H shell "bm uninstall -n com.vintage.pomelopro"
 $H file send "/data/share/wineohos/entry/build/default/outputs/default/entry-default-signed.hap" "/data/local/tmp/winehua.hap"
 $H shell "bm install -p /data/local/tmp/winehua.hap"
-$H shell "rm -rf /data/app/el2/100/base/app.hackeris.winehua/files/.wine /data/app/el2/100/base/app.hackeris.winehua/files/wine"
-$H shell "aa start -a EntryAbility -b app.hackeris.winehua"
+$H shell "rm -rf /data/app/el2/100/base/com.vintage.pomelopro/files/.wine /data/app/el2/100/base/com.vintage.pomelopro/files/wine"
+$H shell "aa start -a EntryAbility -b com.vintage.pomelopro"
 
 # 仅改 ArkTS/C++ (不改 Wine): 无需卸载, force-stop + install + start
-$H shell "aa force-stop app.hackeris.winehua"
+$H shell "aa force-stop com.vintage.pomelopro"
 $H file send "..." "/data/local/tmp/winehua.hap"
 $H shell "bm install -p /data/local/tmp/winehua.hap"
-$H shell "aa start -a EntryAbility -b app.hackeris.winehua"
+$H shell "aa start -a EntryAbility -b com.vintage.pomelopro"
 ```
 
 ### Wine 子进程 stderr 日志
 
 Wine 内部 stderr 输出被捕获到：
-- **文件**: `/data/app/el2/100/base/app.hackeris.winehua/temp/wine_stderr_YYYYMMDD.log`
+- **文件**: `/data/app/el2/100/base/com.vintage.pomelopro/temp/wine_stderr_YYYYMMDD.log`
 - **hilog tag**: `WineChild-stderr`
 
 ```bash
 # 读取今天的 Wine stderr 日志
-$H shell "cat /data/app/el2/100/base/app.hackeris.winehua/temp/wine_stderr_$(date +%Y%m%d).log"
+$H shell "cat /data/app/el2/100/base/com.vintage.pomelopro/temp/wine_stderr_$(date +%Y%m%d).log"
 
 # 搜索特定内容
-$H shell "grep -i '关键词' /data/app/el2/100/base/app.hackeris.winehua/temp/wine_stderr_$(date +%Y%m%d).log"
+$H shell "grep -i '关键词' /data/app/el2/100/base/com.vintage.pomelopro/temp/wine_stderr_$(date +%Y%m%d).log"
 ```
 
 **注意:** Wine TRACE 日志通过 `WINEDEBUG` 环境变量控制。默认 `WINEDEBUG=-all`（全部禁用）。如需开启特定 channel，修改 `wine_env.cpp` 中的 `WINEDEBUG` 值（如 `-all,+waylanddrv`），然后用 `fprintf(stderr, ...)` 替代 `TRACE(...)`（后者在 release build 中可能被优化掉）。
@@ -203,7 +203,7 @@ grep -E 'CLICK-PIPE|KBD-PIPE|PIPE|winehua|WineWM|WL_Plugin|WL_Seat|WL_Input|WWA|
 
 ```bash
 cd /data/share/wineohos && bash build.sh hap && bash build.sh deploy <device_ip>
-hdc -t <device_ip> shell "aa start -a EntryAbility -b app.hackeris.winehua"
+hdc -t <device_ip> shell "aa start -a EntryAbility -b com.vintage.pomelopro"
 ```
 
 ### 2. 启动持续日志采集（后台运行）

@@ -515,7 +515,7 @@ export class WineWindowManager {
     }
 
     const want: Want = {
-      bundleName: 'app.hackeris.winehua',
+      bundleName: 'com.vintage.pomelopro',
       abilityName: 'WineWindowAbility',
       parameters: { toplevelId: id, title: title }
     };
@@ -580,7 +580,7 @@ export class WineWindowManager {
     }
     try {
       const want: Want = {
-        bundleName: 'app.hackeris.winehua',
+        bundleName: 'com.vintage.pomelopro',
         abilityName: 'DesktopAbility',
         parameters: { toplevelId: rootId }
       };
