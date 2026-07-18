@@ -1,8 +1,15 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { common } from '@kit.AbilityKit';
 import testNapi from 'libentry.so';
 import { WineWindowManager } from '../service/WineWindowManager';
 import { OH2EVDEV } from '../common/KeyMap';
 import { mapMouseButton } from '../common/MouseMap';
+import { VirtualControls } from '../components/VirtualControls';
+import { GlobalSettings, InputProfile, createDefaultGlobalSettings, createDefaultInputProfile } from '../model/AppModels';
+import { AppSettingsStore } from '../service/AppSettingsStore';
+import { InputRouter } from '../service/InputRouter';
+import { GamepadConnectionListener, GamepadManager } from '../service/GamepadManager';
+import { InputProfileService } from '../service/InputProfileService';
 
 const DOMAIN = 0x0000;
 
@@ -20,7 +27,7 @@ class DesktopController extends XComponentController {
     if (rootId > 0) {
       try {
         testNapi.resizeRenderer(rootId, rect.surfaceWidth, rect.surfaceHeight);
-        const s = 2.0;
+        const s = WineWindowManager.getInstance().getEffectiveScale();
         testNapi.notifyToplevelResize(rootId,
           Math.round(rect.surfaceWidth / s), Math.round(rect.surfaceHeight / s));
       } catch (_) {}
@@ -39,6 +46,10 @@ class DesktopController extends XComponentController {
 @Component
 struct DesktopPage {
   controller: DesktopController = new DesktopController();
+  @State private settings: GlobalSettings = createDefaultGlobalSettings();
+  @State private inputProfile: InputProfile = createDefaultInputProfile();
+  @State private hardwareInputActive: boolean = false;
+  private gamepadConnectionCallback: GamepadConnectionListener | null = null;
   // 触控状态机: IDLE → PENDING → (DRAGGING | 长按 | 点击)
   // 双指进入 SCROLLING 模式, 覆盖单指状态
   private touchPending: boolean = false;
@@ -68,6 +79,27 @@ struct DesktopPage {
   private twoFingerAccumY: number = 0;
   private twoFingerAccumX: number = 0;
   private static readonly SCROLL_STEP_PX: number = 40; // 物理像素/滚动步, winewayland.drv 只处理 discrete
+
+  aboutToAppear(): void {
+    this.settings = AppSettingsStore.getInstance().getGlobalSettings();
+    InputProfileService.getInstance().initialize(getContext(this) as common.UIAbilityContext).then(() => {
+      this.inputProfile = InputProfileService.getInstance().getProfile('default');
+    });
+    GamepadManager.getInstance().initialize(this.settings.gamepadDeadzone);
+    this.gamepadConnectionCallback = (connected: boolean): void => {
+      if (connected) this.hardwareInputActive = true;
+    };
+    GamepadManager.getInstance().subscribeConnection(this.gamepadConnectionCallback);
+    InputRouter.getInstance().setActiveToplevel(WineWindowManager.getInstance().getDesktopRootId());
+  }
+
+  aboutToDisappear(): void {
+    if (this.gamepadConnectionCallback) {
+      GamepadManager.getInstance().unsubscribeConnection(this.gamepadConnectionCallback);
+    }
+    GamepadManager.getInstance().releaseAll();
+    InputRouter.getInstance().releaseAllKeys();
+  }
 
   build() {
     Stack() {
@@ -152,6 +184,7 @@ struct DesktopPage {
           if (!t) return;
           const px = Math.round(vp2px(t.x));
           const py = Math.round(vp2px(t.y));
+          InputRouter.getInstance().rememberPointer(px, py);
 
           if (ev.type === TouchType.Down) {
             // 查找目标 toplevel (px,py 为物理坐标, findToplevelAt 内部通过 viewport 转逻辑坐标)
@@ -162,6 +195,7 @@ struct DesktopPage {
             }
             hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] TOUCH tl=%{public}d px=(%{public}d,%{public}d)', tl, px, py);
             testNapi.raiseToplevel(tl);
+            InputRouter.getInstance().setActiveToplevel(tl);
             // 进入 PENDING 状态: 暂不发送事件, 等判定长按/拖拽/点击
             this.touchPending = true;
             this.isDragging = false;
@@ -269,18 +303,38 @@ struct DesktopPage {
         }
       })
 
+      .onMouse((ev: MouseEvent) => {
+        this.hardwareInputActive = true;
+        const px = Math.round(vp2px(ev.x));
+        const py = Math.round(vp2px(ev.y));
+        const hit = testNapi.findToplevelAt(px, py) as number;
+        const target = hit > 0 ? hit : WineWindowManager.getInstance().getDesktopRootId();
+        if (target <= 0) return;
+        if (ev.action === MouseAction.Press) {
+          testNapi.raiseToplevel(target);
+          InputRouter.getInstance().setActiveToplevel(target);
+        }
+        InputRouter.getInstance().sendPointer(ev.action, px, py, mapMouseButton(ev.button));
+      })
+
       // ── 键盘事件 ──
       .onKeyEvent((ev: KeyEvent) => {
+        this.hardwareInputActive = true;
         const rootId = WineWindowManager.getInstance().getDesktopRootId();
         if (rootId <= 0) return;
         ev.stopPropagation();
+        if (GamepadManager.getInstance().handleKey(ev.keyCode, ev.type === KeyType.Down)) return;
         const code = OH2EVDEV[ev.keyCode] ?? 0;
         if (code <= 0) return;
-        testNapi.sendKeyEvent(rootId, code, ev.type === KeyType.Down);
+        if (InputRouter.getInstance().getActiveToplevel() <= 0) {
+          InputRouter.getInstance().setActiveToplevel(rootId);
+        }
+        InputRouter.getInstance().sendKey(code, ev.type === KeyType.Down);
       })
 
       // ── 滚轮事件 ──
       .onAxisEvent((ev?: AxisEvent) => {
+        this.hardwareInputActive = true;
         const rootId = WineWindowManager.getInstance().getDesktopRootId();
         if (rootId <= 0 || !ev) return;
         const wpx = Math.round(vp2px(ev.x));
@@ -288,10 +342,16 @@ struct DesktopPage {
         const vert = ev.getVerticalAxisValue();
         const horiz = ev.getHorizontalAxisValue();
         const step = ev.scrollStep ?? 0;
-        const tl: number = testNapi.findToplevelAt(wpx, wpy) as number;
+        const hit = testNapi.findToplevelAt(wpx, wpy) as number;
+        const tl: number = hit > 0 ? hit : rootId;
         if (vert !== 0) testNapi.sendScrollEvent(tl, 0, vert, step, wpx, wpy);
         if (horiz !== 0) testNapi.sendScrollEvent(tl, 1, horiz, step, wpx, wpy);
       })
+
+      if (this.settings.showVirtualControls &&
+        !(this.settings.autoHideVirtualControls && this.hardwareInputActive)) {
+        VirtualControls({ opacityValue: this.settings.controlOpacity, profile: this.inputProfile })
+      }
     }
     .width('100%').height('100%').backgroundColor('#000')
   }

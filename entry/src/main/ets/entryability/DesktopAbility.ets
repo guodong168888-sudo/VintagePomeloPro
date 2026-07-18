@@ -4,6 +4,8 @@ import { window } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import testNapi from 'libentry.so';
 import { WineWindowManager } from '../service/WineWindowManager';
+import { GamepadManager } from '../service/GamepadManager';
+import { InputRouter } from '../service/InputRouter';
 
 const DOMAIN = 0x0000;
 const TAG = 'DWA';
@@ -52,6 +54,7 @@ export default class DesktopAbility extends UIAbility {
 
   onForeground(): void {
     hilog.info(DOMAIN, TAG, '[DWA] onForeground tl=%{public}d', this.toplevelId);
+    InputRouter.getInstance().setActiveToplevel(WineWindowManager.getInstance().getDesktopRootId());
   }
 
   onNewWant(want: Want): void {
@@ -62,11 +65,15 @@ export default class DesktopAbility extends UIAbility {
 
   onBackground(): void {
     hilog.info(DOMAIN, TAG, '[DWA] onBackground tl=%{public}d', this.toplevelId);
+    GamepadManager.getInstance().releaseAll();
+    InputRouter.getInstance().releaseAllKeys();
   }
 
   onDestroy(): void {
     hilog.info(DOMAIN, TAG, '[DWA] onDestroy tl=%{public}d', this.toplevelId);
     try {
+      GamepadManager.getInstance().releaseAll();
+      InputRouter.getInstance().releaseAllKeys();
       testNapi.destroyToplevel(this.toplevelId);
       WineWindowManager.getInstance().unregisterAbility(this.toplevelId);
     } catch (e) {
