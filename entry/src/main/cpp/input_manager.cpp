@@ -292,27 +292,65 @@ void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double p
     // 坐标转换
     wl_fixed_t wx, wy;
     auto* ws = WaylandServer::GetInstance();
+    // Desktop 模式: 按桌面坐标解析精确输入目标 (菜单 subsurface 有自己的
+    // wl_surface, 必须 enter 它并用层相对坐标 — 经父窗口 surface 的越界
+    // 坐标会被 winewayland 的 motion clamp 夹回窗口内, 菜单伸出部分点不中)
+    wl_resource* targetSurf = nullptr;
     if (ws->IsDesktopMode() && tl != ws->GetDesktopRootToplevelId()) {
         CoordTransform(px, py, ws->GetDesktopRootToplevelId(), &wx, &wy);
-        wx -= wl_fixed_from_int(ws->GetToplevelX(tl));
-        wy -= wl_fixed_from_int(ws->GetToplevelY(tl));
+        WaylandServer::InputTarget target;
+        if (ws->FindInputTargetAt(wl_fixed_to_int(wx), wl_fixed_to_int(wy), target)) {
+            // 全屏黑边: 只吞 PRESS (防幻影点击/焦点切换)。MOVE/RELEASE 照常透传 —
+            // 越界坐标由 winewayland 的 motion clamp 夹回窗口边缘;
+            // 吞掉 RELEASE 会让 pressedButtons_ 永不清位 (按键卡死)
+            if (target.swallow && action == ACT_PRESS) return;
+            tl = target.toplevelId;
+            targetSurf = target.surface;
+            // 桌面坐标 → surface 局部坐标。target.scale > 1 表示全屏窗口
+            // 保比例放大显示, 局部坐标需按同一缩放除回来
+            const double localX = (wl_fixed_to_double(wx) - target.originX) / target.scale;
+            const double localY = (wl_fixed_to_double(wy) - target.originY) / target.scale;
+            wx = wl_fixed_from_double(localX);
+            wy = wl_fixed_from_double(localY);
+        } else {
+            // 目标 surface 不可用: 退回旧路径 (父窗口相对坐标)
+            wx -= wl_fixed_from_int(ws->GetToplevelX(tl));
+            wy -= wl_fixed_from_int(ws->GetToplevelY(tl));
+        }
     } else {
         CoordTransform(px, py, tl, &wx, &wy);
     }
 
-    OH_LOG_INFO(LOG_APP, "[Input] PTR action=%{public}d tl=%{public}u btn=0x%{public}x px=(%{public}.0f,%{public}.0f)"
-                " wine=(%{public}.0f,%{public}.0f) ptrRes=%{public}d needsEnter=%{public}d pressedBits=0x%{public}x",
-                action, tl, button, px, py,
-                wl_fixed_to_double(wx), wl_fixed_to_double(wy),
-                seat->HasPointerResource(), NeedsPointerEnter(), pressedButtons_);
+    // MOVE 是高频路径 (hover 移动 ~125Hz), 全量日志会刷爆 hilog → 抽样 120:1;
+    // PRESS/RELEASE 低频且诊断价值高, 保持全量
+    if (action != ACT_MOVE) {
+        OH_LOG_INFO(LOG_APP, "[Input] PTR action=%{public}d tl=%{public}u btn=0x%{public}x px=(%{public}.0f,%{public}.0f)"
+                    " wine=(%{public}.0f,%{public}.0f) ptrRes=%{public}d needsEnter=%{public}d pressedBits=0x%{public}x",
+                    action, tl, button, px, py,
+                    wl_fixed_to_double(wx), wl_fixed_to_double(wy),
+                    seat->HasPointerResource(), NeedsPointerEnter(), pressedButtons_);
+    } else {
+        static uint32_t sMoveLogN = 0;
+        if (++sMoveLogN % 120 == 0)
+            OH_LOG_INFO(LOG_APP, "[Input] PTR MOVE tl=%{public}u px=(%{public}.0f,%{public}.0f)"
+                        " wine=(%{public}.0f,%{public}.0f) focusedTl=%{public}u n=%{public}u",
+                        tl, px, py, wl_fixed_to_double(wx), wl_fixed_to_double(wy),
+                        pointerFocusedToplevel_.load(), sMoveLogN);
+    }
 
     switch (action) {
         case ACT_PRESS: {
             // 每次都发 enter: Wine 在两次点击间需要新的 pointer focus
             {
-                wl_resource* surf = ws->GetSurfaceForToplevel(tl);
+                wl_resource* surf = targetSurf ? targetSurf : ws->GetSurfaceForToplevel(tl);
                 if (surf) {
-                    if (pointerFocusedToplevel_.load() != 0 && pointerFocusedToplevel_.load() != tl)
+                    // desktop: surface 级比较 (菜单层与父窗口同 toplevelId);
+                    // 其余模式保持 toplevel 级比较 (一窗一 surface, 语义等价)
+                    wl_resource* focused = pointerFocusedSurface_.load();
+                    const bool needLeave = targetSurf
+                        ? (focused != nullptr && focused != surf)
+                        : (pointerFocusedToplevel_.load() != 0 && pointerFocusedToplevel_.load() != tl);
+                    if (needLeave)
                         Enqueue(InputEvent::PTR_LEAVE, 0, nullptr, 0, 0, 0, 0);
                     Enqueue(InputEvent::PTR_ENTER, tl, surf, wx, wy, 0, 0);
                 }
@@ -371,14 +409,22 @@ void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double p
             break;
         }
         case ACT_MOVE: {
-            OH_LOG_INFO(LOG_APP, "[Input] MOVE tl=%{public}u wine=(%{public}.0f,%{public}.0f) needsEnter=%{public}d focusedTl=%{public}u ptrRes=%{public}d",
-                        tl, wl_fixed_to_double(wx), wl_fixed_to_double(wy),
-                        NeedsPointerEnter(), pointerFocusedToplevel_.load(), seat->HasPointerResource());
-            if (NeedsPointerEnter() || pointerFocusedToplevel_.load() != tl) {
-                wl_resource* surf = WaylandServer::GetInstance()->GetSurfaceForToplevel(tl);
+            // 高频路径不打全量日志 (入口已有 120:1 抽样); MOVE-ENTER 是低频
+            // 焦点切换事件, 保留全量日志
+            // desktop: surface 级焦点判定 — 鼠标从窗口移入菜单层 (同 toplevelId,
+            // 不同 surface) 时必须重新 enter, 否则 motion 继续发给窗口 surface
+            const bool needEnter = targetSurf
+                ? (NeedsPointerEnter() || pointerFocusedSurface_.load() != targetSurf)
+                : (NeedsPointerEnter() || pointerFocusedToplevel_.load() != tl);
+            if (needEnter) {
+                wl_resource* surf = targetSurf ? targetSurf : ws->GetSurfaceForToplevel(tl);
                 OH_LOG_INFO(LOG_APP, "[Input] MOVE-ENTER try surf=%{public}p for tl=%{public}u", surf, tl);
                 if (surf) {
-                    if (pointerFocusedToplevel_.load() != 0 && pointerFocusedToplevel_.load() != tl)
+                    wl_resource* focused = pointerFocusedSurface_.load();
+                    const bool needLeave = targetSurf
+                        ? (focused != nullptr && focused != surf)
+                        : (pointerFocusedToplevel_.load() != 0 && pointerFocusedToplevel_.load() != tl);
+                    if (needLeave)
                         Enqueue(InputEvent::PTR_LEAVE, 0, nullptr, 0, 0, 0, 0);
                     Enqueue(InputEvent::PTR_ENTER, tl, surf, wx, wy, 0, 0);
                     OH_LOG_INFO(LOG_APP, "[Input] MOVE-ENTER enqueued OK");
@@ -615,10 +661,11 @@ void InputManager::InjectPointerEnter(uint32_t tl, wl_resource* surface, wl_fixe
         return;
     }
 
-    // 防御: surface 可能在入队后到 flush 前被 Wine 销毁
-    // 通过 toplevelSurfaceMap_ 验证 surface 仍然有效
-    if (!WaylandServer::GetInstance()->GetSurfaceForToplevel(tl)) {
-        OH_LOG_WARN(LOG_APP, "[Input] InjectEnter DROP tl=%{public}u: surface no longer in map (destroyed before flush?)", tl);
+    // 防御: surface 可能在入队后到 flush 前被 Wine 销毁。
+    // 用 surfaceResources_ 精确验证该 surface 本体仍存活 —
+    // 菜单 subsurface 不在 toplevelSurfaceMap_ 里, 不能用 tl 的映射代替
+    if (!WaylandServer::GetInstance()->IsSurfaceAlive(surface)) {
+        OH_LOG_WARN(LOG_APP, "[Input] InjectEnter DROP tl=%{public}u surf=%{public}p: surface destroyed before flush", tl, surface);
         gDropEnter.fetch_add(1); MaybeReportDrops();
         return;
     }
@@ -651,8 +698,11 @@ void InputManager::InjectPointerMotion(wl_fixed_t sx, wl_fixed_t sy) {
             wl_pointer_send_frame(ptr);
         }
     }
-    OH_LOG_INFO(LOG_APP, "[Input] InjectMotion sx=%{public}.1f sy=%{public}.1f OK n=%{public}zu",
-                wl_fixed_to_double(sx), wl_fixed_to_double(sy), ptrs.size());
+    // 高频路径 (hover ~125Hz) 抽样 120:1, 防止刷爆 hilog
+    static uint32_t sInjMotionLogN = 0;
+    if (++sInjMotionLogN % 120 == 0)
+        OH_LOG_INFO(LOG_APP, "[Input] InjectMotion sx=%{public}.1f sy=%{public}.1f OK n=%{public}u ptrs=%{public}zu",
+                    wl_fixed_to_double(sx), wl_fixed_to_double(sy), sInjMotionLogN, ptrs.size());
 }
 
 void InputManager::InjectPointerButton(uint32_t button, uint32_t state) {
@@ -684,12 +734,14 @@ void InputManager::InjectPointerAxis(int axis, wl_fixed_t value) {
     uint32_t t = NowMs();
     for (auto* ptr : ptrs) {
         if (ptr) {
-            // winewayland.drv 只处理 axis_discrete/axis_value120, axis 是空函数
-            wl_pointer_send_axis(ptr, t, axisEnum, value);
+            // winewayland.drv 只处理 axis_discrete/axis_value120, axis 是空函数。
+            // 协议规定 discrete 在配对 axis 之前; steps 直接比较 wl_fixed 原值,
+            // 避免 wl_fixed_to_int 截断把 |值|<1 的正向滚动 (触控板细步) 误判成反向
             if (wl_resource_get_version(ptr) >= WL_POINTER_AXIS_DISCRETE_SINCE_VERSION) {
-                int32_t steps = (wl_fixed_to_int(value) > 0) ? 1 : -1;
+                int32_t steps = (value > 0) ? 1 : -1;
                 wl_pointer_send_axis_discrete(ptr, axisEnum, steps);
             }
+            wl_pointer_send_axis(ptr, t, axisEnum, value);
             wl_pointer_send_frame(ptr);
             nSent++;
         }
@@ -700,8 +752,17 @@ void InputManager::InjectPointerAxis(int axis, wl_fixed_t value) {
 
 void InputManager::InjectPointerLeave() {
     auto ptrs = Seat::GetInstance()->GetAllPointerResources();
-    wl_resource* surf = pointerFocusedSurface_;
+    wl_resource* surf = pointerFocusedSurface_.load();
     if (ptrs.empty() || !surf) return;
+    // 防御: surface 可能在 leave 入队后到 flush 前被销毁 — 对已复用的
+    // 对象 id 发 leave 会让 client 报 "invalid object ... leave(uo)" 并断开
+    if (!WaylandServer::GetInstance()->IsSurfaceAlive(surf)) {
+        OH_LOG_WARN(LOG_APP, "[Input] InjectLeave SKIP surf=%{public}p: destroyed before flush", surf);
+        pointerFocusedToplevel_ = 0;
+        pointerFocusedSurface_ = nullptr;
+        pointerEnterSerial_ = 0;
+        return;
+    }
     uint32_t s = serial_++;
     struct wl_client* surfClient = wl_resource_get_client(surf);
     for (auto* ptr : ptrs) {
@@ -787,6 +848,14 @@ void InputManager::InjectKeyboardLeave() {
     auto kbds = Seat::GetInstance()->GetAllKeyboardResources();
     wl_resource* surf = keyboardFocusedSurface_;
     if (kbds.empty() || !keyboardEntered_.load() || !surf) return;
+    // 防御: 同 InjectPointerLeave — 对已销毁/复用的对象 id 发 leave 会断开 client
+    if (!WaylandServer::GetInstance()->IsSurfaceAlive(surf)) {
+        OH_LOG_WARN(LOG_APP, "[Input] InjectKbdLeave SKIP surf=%{public}p: destroyed before flush", surf);
+        keyboardEntered_ = false;
+        keyboardFocusedToplevel_ = 0;
+        keyboardFocusedSurface_ = nullptr;
+        return;
+    }
     uint32_t s = serial_++;
     struct wl_client* surfClient = wl_resource_get_client(surf);
     for (auto* kbd : kbds) {
