@@ -29,6 +29,10 @@ interface PendingToplevelAssociation {
   toplevelId: number;
 }
 
+const DESKTOP_SESSION_ID = 'desktop';
+const DESKTOP_APP_ID = 'builtin-desktop';
+const DESKTOP_EXECUTABLE = 'explorer.exe';
+
 export class AppSessionService {
   private static instance: AppSessionService | null = null;
   private context: common.UIAbilityContext | null = null;
@@ -93,19 +97,10 @@ export class AppSessionService {
     const ready = await WineEngineService.getInstance().ensureReady(mode, homeDirectory);
     if (!ready) return null;
 
-    if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP) {
-      const desktopSession: RuntimeSession = {
-        sessionId: 'desktop',
-        appId: app.id,
-        executable: app.launchTarget.executable,
-        pid: 0,
-        displayMode: DisplayMode.DESKTOP,
-        state: SessionState.RUNNING,
-        toplevelId: 0,
-        startedAt: Date.now()
-      };
-      this.sessions.set(desktopSession.sessionId, desktopSession);
-      return desktopSession;
+    if (mode === DisplayMode.DESKTOP) {
+      const desktopSession = await this.ensureDesktopSession();
+      if (!desktopSession) return null;
+      if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP) return desktopSession;
     }
 
     const result = WineEngineService.getInstance().launchExecutable(
@@ -145,12 +140,14 @@ export class AppSessionService {
       try { testNapi.raiseToplevel(session.toplevelId); } catch (_) {}
     }
     if (session.displayMode === DisplayMode.DESKTOP) {
+      if (session.toplevelId <= 0) return;
       const want: Want = {
         bundleName: 'com.vintage.pomelopro',
         abilityName: 'DesktopAbility'
       };
       await this.context.startAbility(want);
     } else {
+      if (session.toplevelId <= 0) return;
       const want: Want = {
         bundleName: 'com.vintage.pomelopro',
         abilityName: 'SingleAppAbility',
@@ -223,8 +220,13 @@ export class AppSessionService {
         if (session.pid === clientPid) matched = session;
       });
     }
+    if (!matched && sessionId === DESKTOP_SESSION_ID &&
+      WineEngineService.getInstance().getMode() === DisplayMode.DESKTOP) {
+      matched = this.upsertDesktopSession(toplevelId, clientPid);
+    }
     if (matched) {
-      if (matched.toplevelId === 0) matched.toplevelId = toplevelId;
+      if (matched.pid <= 0 && clientPid > 0) matched.pid = clientPid;
+      if (sessionId === DESKTOP_SESSION_ID || matched.toplevelId === 0) matched.toplevelId = toplevelId;
       matched.state = SessionState.RUNNING;
     } else if (toplevelId > 0) {
       this.pendingToplevels.push({ sessionId: sessionId, clientPid: clientPid, toplevelId: toplevelId });
@@ -254,7 +256,78 @@ export class AppSessionService {
     }
   }
 
+  private async ensureDesktopSession(): Promise<RuntimeSession | null> {
+    const existing = this.sessions.get(DESKTOP_SESSION_ID) ?? null;
+    if (existing && existing.toplevelId > 0) {
+      await this.resume(existing);
+      return existing;
+    }
+    let session = this.syncDesktopSessionFromNative();
+    if (session && session.toplevelId > 0) {
+      await this.resume(session);
+      return session;
+    }
+    const pending = session;
+    for (let index = 0; index < 40; index++) {
+      await new Promise<void>((resolve: () => void): void => {
+        setTimeout((): void => resolve(), 250);
+      });
+      session = this.syncDesktopSessionFromNative();
+      if (session && session.toplevelId > 0) {
+        await this.resume(session);
+        return session;
+      }
+    }
+    return session ?? pending ?? null;
+  }
+
+  private syncDesktopSessionFromNative(): RuntimeSession | null {
+    let nativeSession: NativeWineSessionInfo | null = null;
+    try {
+      nativeSession = testNapi.getWineSession(DESKTOP_SESSION_ID) as NativeWineSessionInfo | null;
+    } catch (_) {
+      nativeSession = null;
+    }
+    if (!nativeSession || nativeSession.pid <= 0) {
+      const existing = this.sessions.get(DESKTOP_SESSION_ID) ?? null;
+      if (existing && existing.toplevelId > 0 &&
+        WineEngineService.getInstance().getState() === EngineState.READY) {
+        return existing;
+      }
+      this.sessions.delete(DESKTOP_SESSION_ID);
+      return null;
+    }
+    return this.upsertDesktopSession(nativeSession.toplevelId, nativeSession.pid);
+  }
+
+  private upsertDesktopSession(toplevelId: number, pid: number): RuntimeSession {
+    const existing = this.sessions.get(DESKTOP_SESSION_ID);
+    if (existing) {
+      if (pid > 0) existing.pid = pid;
+      if (toplevelId > 0) existing.toplevelId = toplevelId;
+      existing.state = SessionState.RUNNING;
+      return existing;
+    }
+    const session: RuntimeSession = {
+      sessionId: DESKTOP_SESSION_ID,
+      appId: DESKTOP_APP_ID,
+      executable: DESKTOP_EXECUTABLE,
+      pid: pid > 0 ? pid : 0,
+      displayMode: DisplayMode.DESKTOP,
+      state: SessionState.RUNNING,
+      toplevelId: toplevelId > 0 ? toplevelId : 0,
+      startedAt: Date.now()
+    };
+    this.sessions.set(DESKTOP_SESSION_ID, session);
+    this.resolvePendingToplevel(session);
+    return session;
+  }
+
   private reconcile(): void {
+    if (WineEngineService.getInstance().getState() === EngineState.READY &&
+      WineEngineService.getInstance().getMode() === DisplayMode.DESKTOP) {
+      this.syncDesktopSessionFromNative();
+    }
     const processes = this.getNativeProcesses();
     const activePids: Set<number> = new Set<number>();
     processes.forEach((process: NativeProcessInfo) => activePids.add(process.pid));

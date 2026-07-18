@@ -22,12 +22,34 @@ const BOX64 = WINE_BIN + '/box64';
 const SOCK = FILES_BASE + '/.wine/wine-wayland';
 const PREFIX_MARKER = WINE_ROOT + '/share/wine/wine.inf';
 
+interface RuntimePathRequirement {
+  path: string;
+  label: string;
+  directory?: boolean;
+}
+
+const REQUIRED_RUNTIME_PATHS: RuntimePathRequirement[] = [
+  { path: PREFIX_MARKER, label: 'share/wine/wine.inf' },
+  { path: WINE_BIN + '/explorer.exe', label: 'bin/explorer.exe' },
+  { path: WINE_BIN + '/x86_64-windows', label: 'bin/x86_64-windows', directory: true },
+  { path: WINE_BIN + '/i386-windows', label: 'bin/i386-windows', directory: true }
+];
+
 export type EngineStateListener = (state: EngineState, message: string) => void;
 
 function pathExists(path: string): boolean {
   try {
-    fs.accessSync(path);
-    return true;
+    return !!fs.accessSync(path);
+  } catch (_) {
+    return false;
+  }
+}
+
+function pathMatchesRequirement(item: RuntimePathRequirement): boolean {
+  if (!pathExists(item.path)) return false;
+  if (!item.directory) return true;
+  try {
+    return fs.statSync(item.path).isDirectory();
   } catch (_) {
     return false;
   }
@@ -194,7 +216,12 @@ export class WineEngineService {
       this.setState(EngineState.ERROR, 'Wine 启动失败');
       this.finishWaiters(false);
     } else if (value === 'exited' && (testNapi.getProcessList() as NativeProcessInfo[]).length === 0) {
-      this.setState(EngineState.READY, 'Wine 引擎已就绪');
+      if (this.state === EngineState.PREPARING || this.state === EngineState.SWITCHING) {
+        this.setState(EngineState.ERROR, 'Wine 引擎启动失败');
+        this.finishWaiters(false);
+      } else if (this.state !== EngineState.STOPPED) {
+        this.setState(EngineState.STOPPED, 'Wine 引擎已停止');
+      }
     }
   }
 
@@ -207,9 +234,20 @@ export class WineEngineService {
     this.listeners.forEach((listener: EngineStateListener) => listener(state, message));
   }
 
+  private getMissingRuntimePaths(): string[] {
+    const missing: string[] = [];
+    REQUIRED_RUNTIME_PATHS.forEach((item: RuntimePathRequirement) => {
+      if (!pathMatchesRequirement(item)) missing.push(item.label);
+    });
+    return missing;
+  }
+
   private async ensureRuntimeInstalled(): Promise<void> {
-    if (pathExists(PREFIX_MARKER)) return;
+    const missingBefore = this.getMissingRuntimePaths();
+    if (missingBefore.length === 0) return;
     if (!this.context) throw new Error('Ability context unavailable');
+    hilog.warn(DOMAIN, TAG, 'runtime incomplete, extracting wine-data.zip, missing=%{public}s',
+      missingBefore.join(','));
     const rawFd = this.context.resourceManager.getRawFdSync('wine-data.zip');
     const temporaryZip = FILES_BASE + '/wine-data.zip';
     try {
@@ -226,9 +264,14 @@ export class WineEngineService {
         position += length;
       }
       fs.closeSync(output);
-      if (!pathExists(WINE_ROOT)) fs.mkdirSync(WINE_ROOT, true);
+      try {
+        fs.mkdirSync(WINE_ROOT, true);
+      } catch (_) {}
       await zlib.decompressFile(temporaryZip, WINE_ROOT, {});
-      if (!pathExists(PREFIX_MARKER)) throw new Error('Wine runtime marker missing');
+      const missingAfter = this.getMissingRuntimePaths();
+      if (missingAfter.length > 0) {
+        throw new Error('Wine runtime incomplete after extract: ' + missingAfter.join(', '));
+      }
     } finally {
       this.context.resourceManager.closeRawFdSync('wine-data.zip');
       try { fs.unlinkSync(temporaryZip); } catch (_) {}

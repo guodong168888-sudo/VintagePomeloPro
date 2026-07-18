@@ -27,6 +27,7 @@ std::string gBrokerHomeDir;
 #include <atomic>
 #include <utility>
 #include <vector>
+#include <memory>
 #include <AbilityKit/native_child_process.h>
 
 #undef LOG_DOMAIN
@@ -38,6 +39,31 @@ std::string gBrokerHomeDir;
 static const char* kBrokerSocketPath = WINE_BROKER_SOCKET;
 
 static std::atomic<bool> gBrokerRunning{false};
+
+static bool IsBrokerWineserverRequest(const char* entryParamsRaw)
+{
+    if (!entryParamsRaw || !entryParamsRaw[0]) return false;
+
+    std::unique_ptr<char, decltype(&free)> entryCopy(strdup(entryParamsRaw), &free);
+    if (!entryCopy) return false;
+
+    char* saveptr = nullptr;
+    char* token = strtok_r(entryCopy.get(), "|", &saveptr);  // skip binDir
+    if (!token) return false;
+
+    while ((token = strtok_r(nullptr, "|", &saveptr)) != nullptr) {
+        if (!strncmp(token, "__env__=", 8) || !strcmp(token, "__winehua_desktop__")) {
+            continue;
+        }
+        if (!strcasecmp(token, "wine")) {
+            char* next = strtok_r(nullptr, "|", &saveptr);
+            return next && !strcasecmp(next, "wineserver");
+        }
+        return !strcasecmp(token, "wineserver");
+    }
+
+    return false;
+}
 
 // 处理单个请求: recvmsg(entryParams + fd) → StartNativeChildProcess → sendmsg(childPid, status)
 static void HandleRequest(int conn_fd)
@@ -180,9 +206,13 @@ static void HandleRequest(int conn_fd)
     options.isolationMode = NCP_ISOLATION_MODE_NORMAL;
 
     // 5) 调用 StartNativeChildProcess (在主进程上下文，可以调用多次)
+    const char* childEntry = IsBrokerWineserverRequest(entryParamsRaw)
+        ? "libwine_child.so:WineserverMain"
+        : "libwine_child.so:Main";
+    OH_LOG_INFO(LOG_APP, "[Broker] child entry=%{public}s", childEntry);
     int32_t childPid = -1;
     int32_t ret = OH_Ability_StartNativeChildProcess(
-        const_cast<char*>("libwine_child.so:Main"), args, options, &childPid);
+        const_cast<char*>(childEntry), args, options, &childPid);
 
     OH_LOG_INFO(LOG_APP, "[Broker] StartNativeChildProcess ret=%{public}d childPid=%{public}d",
                 ret, childPid);

@@ -10,7 +10,7 @@
     },
     {
       "name": "sidebar_background",
-      "value": "#EAF0F5"
+      "value": "#E4EBF4"
     },
     {
       "name": "card_background",
@@ -18,11 +18,11 @@
     },
     {
       "name": "card_glass_background",
-      "value": "#E8FFFFFF"
+      "value": "#F0FFFFFF"
     },
     {
       "name": "search_background",
-      "value": "#BFFFFFFF"
+      "value": "#FFF9FBFF"
     },
     {
       "name": "text_primary",
@@ -38,7 +38,7 @@
     },
     {
       "name": "selected_background",
-      "value": "#205569D8"
+      "value": "#325569D8"
     }
   ]
 }

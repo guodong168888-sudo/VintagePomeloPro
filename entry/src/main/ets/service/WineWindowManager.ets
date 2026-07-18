@@ -8,6 +8,7 @@ import { ArgbWindowManager } from './ArgbWindowManager';
 
 const DOMAIN = 0x0000;
 const TAG = 'WineWM';
+const DESKTOP_SESSION_ID = 'desktop';
 export type SessionAssociationCallback = (sessionId: string, clientPid: number, toplevelId: number) => void;
 
 export class WineWindowManager {
@@ -362,6 +363,7 @@ export class WineWindowManager {
         // Tablet: C++ 识别到 explorer desktop → 打开 DesktopAbility
         hilog.info(DOMAIN, TAG, '[MW] desktop_root toplevel #%{public}d → start DesktopAbility', id);
         if (this.displayMode === DisplayMode.DESKTOP) {
+          if (this.sessionAssociationCallback) this.sessionAssociationCallback(DESKTOP_SESSION_ID, 0, id);
           this.desktopRootId = id;
           this.startDesktopAbility(id);
         } else if (this.singleAppRootId !== id) {

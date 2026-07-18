@@ -121,6 +121,14 @@ struct Index {
     });
   }
 
+  private builtinApps(): AppDescriptor[] {
+    return this.filteredApps().filter((app: AppDescriptor) => app.source === AppSource.BUILTIN);
+  }
+
+  private downloadApps(): AppDescriptor[] {
+    return this.filteredApps().filter((app: AppDescriptor) => app.source === AppSource.DOWNLOAD);
+  }
+
   private gridColumns(): string {
     if (this.settings.viewMode === ViewMode.COMPACT || this.breakpoint === 'sm') return '1fr';
     if (this.breakpoint === 'md') return '1fr 1fr';
@@ -306,6 +314,46 @@ struct Index {
   }
 
   @Builder
+  private SectionHeader(title: string, description: string) {
+    Column({ space: 4 }) {
+      Text(title)
+        .fontSize(19)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_primary'))
+        .width('100%')
+      Text(description)
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'))
+        .width('100%')
+    }
+    .width('100%')
+  }
+
+  @Builder
+  private AppGrid(items: AppDescriptor[]) {
+    Grid() {
+      ForEach(items, (app: AppDescriptor) => {
+        GridItem() {
+          AppCard({
+            app: app,
+            viewMode: this.settings.viewMode,
+            running: this.runningPaths.has(normalizeLaunchPath(app.launchTarget.executable)),
+            useGlassEffect: this.settings.useGlassEffect,
+            resolvedDisplayMode: AppSessionService.getInstance().resolveMode(app, this.settings),
+            onLaunch: (target: AppDescriptor): void => { this.launch(target); },
+            onSettings: (target: AppDescriptor): void => { this.openAppSettings(target); },
+            onLongPress: (target: AppDescriptor): void => { this.showAppLongPressMenu(target); }
+          })
+        }
+      }, (app: AppDescriptor) => app.id)
+    }
+    .columnsTemplate(this.gridColumns())
+    .columnsGap(16)
+    .rowsGap(16)
+    .width('100%')
+  }
+
+  @Builder
   private Library() {
     Column() {
       this.Header()
@@ -321,29 +369,40 @@ struct Index {
           Text('授权 Download/com.vintage.pomelopro/games 后重新扫描').fontSize(13).fontColor($r('app.color.text_secondary'))
           Button('授权目录').borderRadius(20).onClick(() => this.authorizeDirectory())
         }.layoutWeight(1).justifyContent(FlexAlign.Center)
-      } else {
-        Grid() {
-          ForEach(this.filteredApps(), (app: AppDescriptor) => {
-            GridItem() {
-              AppCard({
-                app: app,
-                viewMode: this.settings.viewMode,
-                running: this.runningPaths.has(normalizeLaunchPath(app.launchTarget.executable)),
-                useGlassEffect: this.settings.useGlassEffect,
-                resolvedDisplayMode: AppSessionService.getInstance().resolveMode(app, this.settings),
-                onLaunch: (target: AppDescriptor): void => { this.launch(target); },
-                onSettings: (target: AppDescriptor): void => { this.openAppSettings(target); },
-                onLongPress: (target: AppDescriptor): void => { this.showAppLongPressMenu(target); }
-              })
+      } else if (this.filter === 'all') {
+        Scroll() {
+          Column({ space: 26 }) {
+            if (this.builtinApps().length > 0) {
+              Column({ space: 16 }) {
+                this.SectionHeader('内建应用', 'Wine 桌面与系统工具')
+                this.AppGrid(this.builtinApps())
+              }
+              .width('100%')
             }
-          }, (app: AppDescriptor) => app.id)
+            if (this.downloadApps().length > 0) {
+              Column({ space: 16 }) {
+                this.SectionHeader('Download 程序', '来自 Download/com.vintage.pomelopro/games 的 Windows 程序')
+                this.AppGrid(this.downloadApps())
+              }
+              .width('100%')
+            }
+          }
+          .width('100%')
+          .padding({ top: 20, bottom: this.breakpoint === 'sm' || this.breakpoint === 'md' ? 76 : 20 })
         }
-        .columnsTemplate(this.gridColumns())
-        .columnsGap(16)
-        .rowsGap(16)
         .layoutWeight(1)
         .width('100%')
-        .padding({ top: 20, bottom: this.breakpoint === 'sm' || this.breakpoint === 'md' ? 76 : 20 })
+        .scrollBar(BarState.Auto)
+      } else {
+        Scroll() {
+          Column() {
+            this.AppGrid(this.filteredApps())
+          }
+          .width('100%')
+          .padding({ top: 20, bottom: this.breakpoint === 'sm' || this.breakpoint === 'md' ? 76 : 20 })
+        }
+        .layoutWeight(1)
+        .width('100%')
         .scrollBar(BarState.Auto)
       }
     }

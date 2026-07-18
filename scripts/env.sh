@@ -107,7 +107,19 @@ if [ "$HOST_OS" = "Darwin" ]; then
     [ -n "${PKG_CONFIG_BIN:-}" ] || err "pkg-config not found in PATH; run: brew install pkg-config"
 else
     export PKG_CONFIG_BIN="${PKG_CONFIG_BIN:-/usr/bin/pkg-config}"
-    export WAYLAND_SCANNER="${WAYLAND_SCANNER:-/usr/local/bin/wayland-scanner}"
+    if [ -z "${WAYLAND_SCANNER:-}" ]; then
+        if [ -x "$BUILD_DIR/host-tools/bin/wayland-scanner" ]; then
+            export WAYLAND_SCANNER="$BUILD_DIR/host-tools/bin/wayland-scanner"
+        elif [ -x /usr/local/bin/wayland-scanner ]; then
+            export WAYLAND_SCANNER=/usr/local/bin/wayland-scanner
+        elif [ -x /usr/bin/wayland-scanner ]; then
+            export WAYLAND_SCANNER=/usr/bin/wayland-scanner
+        else
+            echo "ERROR: wayland-scanner not found; install libwayland-bin or set WAYLAND_SCANNER." >&2
+            return 1 2>/dev/null || exit 1
+        fi
+    fi
+    [ -n "${WAYLAND_SCANNER:-}" ] || err "wayland-scanner not found in PATH; install libwayland-bin or set WAYLAND_SCANNER"
 fi
 
 # HAP 项目

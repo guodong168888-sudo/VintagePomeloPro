@@ -91,6 +91,44 @@ copy_soname_with_linker_alias() {
     fi
 }
 
+find_first_matching_file() {
+    local search_root="$1"
+    shift
+
+    local pattern=""
+    for pattern in "$@"; do
+        local match=""
+        match="$(find "$search_root" -maxdepth 3 -type f -name "$pattern" | sort | head -n 1)"
+        if [ -n "$match" ]; then
+            printf '%s\n' "$match"
+            return 0
+        fi
+    done
+    return 1
+}
+
+ensure_host_wayland_scanner_pkgconfig() {
+    local scanner_bin="$BUILD_DIR/host-tools/bin/wayland-scanner"
+    local pc_dir="$BUILD_DIR/host-tools/lib/pkgconfig"
+    local pc_file="$pc_dir/wayland-scanner.pc"
+
+    [ -x "$scanner_bin" ] || err "host wayland-scanner missing: $scanner_bin"
+
+    mkdir -p "$pc_dir"
+    cat > "$pc_file" << EOF
+prefix=$BUILD_DIR/host-tools
+exec_prefix=\${prefix}
+bindir=\${exec_prefix}/bin
+datarootdir=\${prefix}/share
+pkgdatadir=\${datarootdir}/wayland
+wayland_scanner=\${bindir}/wayland-scanner
+
+Name: Wayland Scanner
+Description: Wayland scanner
+Version: 1.22.0
+EOF
+}
+
 # ── 2. ARM64 bridge libs used by Box64 wrapped native libraries ──
 remove_native_egl_linker_stubs() {
     # The Native SDK files are link-time stubs. OHOS host processes must load
@@ -127,7 +165,10 @@ build_native_freetype() {
         -DBUILD_SHARED_LIBS=ON
     ninja -C "$build"
 
-    copy_soname_with_linker_alias "$build/libfreetype.so.6.20.2" "libfreetype.so.6" "libfreetype.so"
+    local freetype_so=""
+    freetype_so="$(find_first_matching_file "$build" 'libfreetype.so.*' 'libfreetype.so')"
+    [ -n "$freetype_so" ] || err "freetype shared library not found under $build"
+    copy_soname_with_linker_alias "$freetype_so" "libfreetype.so.6" "libfreetype.so"
     log "freetype ($NATIVE_ARCH) → $NATIVE_LIBS"
 }
 
@@ -156,7 +197,10 @@ build_native_libxml2() {
     cmake --build "$build"
     cmake --install "$build"
 
-    copy_soname_with_linker_alias "$build/libxml2.so.2.12.0" "libxml2.so.2" "libxml2.so"
+    local libxml2_so=""
+    libxml2_so="$(find_first_matching_file "$build" 'libxml2.so.*' 'libxml2.so')"
+    [ -n "$libxml2_so" ] || err "libxml2 shared library not found under $build"
+    copy_soname_with_linker_alias "$libxml2_so" "libxml2.so.2" "libxml2.so"
     log "libxml2 ($NATIVE_ARCH) → $NATIVE_LIBS"
 }
 
@@ -208,7 +252,10 @@ build_wayland() {
     cross="$(gen_native_cross)"
 
     # libffi 头文件/库已在 cross file 的 c_args/c_link_args 中
-    export PKG_CONFIG_PATH="$NATIVE_BUILD/libffi/install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    ensure_host_wayland_scanner_pkgconfig
+    export PATH="$BUILD_DIR/host-tools/bin:$PATH"
+    export PKG_CONFIG_PATH="$BUILD_DIR/host-tools/lib/pkgconfig:$NATIVE_BUILD/libffi/install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    export PKG_CONFIG_PATH_FOR_BUILD="$BUILD_DIR/host-tools/lib/pkgconfig${PKG_CONFIG_PATH_FOR_BUILD:+:$PKG_CONFIG_PATH_FOR_BUILD}"
     meson setup "$build" "$src" \
         --cross-file "$cross" \
         -Ddocumentation=false -Dtests=false -Dscanner=false

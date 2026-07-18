@@ -51,7 +51,7 @@ export struct AppCard {
             .fontSize(this.app.source === AppSource.BUILTIN ? 46 : 24)
             .fontWeight(FontWeight.Bold)
             .fontColor('#FFFFFFFF')
-          Text(this.app.source === AppSource.BUILTIN ? 'Vintage Pomelo Wine' : 'Windows Program')
+          Text(this.app.source === AppSource.BUILTIN ? '内建系统工具' : 'Download 程序')
             .fontSize(11)
             .fontColor('#DFFFFFFF')
         }
@@ -62,7 +62,7 @@ export struct AppCard {
       }
 
       Row({ space: 5 }) {
-        this.Badge(this.app.source === AppSource.BUILTIN ? '内建' : 'Wine', '#CC343B4D')
+        this.Badge(this.app.source === AppSource.BUILTIN ? '内建' : 'Download', '#CC343B4D')
         this.Badge(this.modeText(), '#CC4E68D8')
         if (this.running) {
           this.Badge('运行中', '#CC22A06B')
