@@ -1,592 +1,385 @@
-import { hilog } from '@kit.PerformanceAnalysisKit';
-import testNapi from 'libentry.so';
-import { fileIo as fs, fileUri, picker } from '@kit.CoreFileKit';
-import { zlib } from '@kit.BasicServicesKit';
+import { common } from '@kit.AbilityKit';
+import router from '@ohos.router';
+import promptAction from '@ohos.promptAction';
+import { AppSearchBar } from '../components/SearchBar';
+import { AppCard } from '../components/AppCard';
+import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
+import {
+  AppDescriptor,
+  AppSource,
+  EngineState,
+  GlobalSettings,
+  LaunchKind,
+  RuntimeSession,
+  ViewMode,
+  normalizeLaunchPath
+} from '../model/AppModels';
+import { AppCatalogService } from '../service/AppCatalogService';
+import { AppSessionService, LaunchConflictKind } from '../service/AppSessionService';
+import { AppSettingsStore } from '../service/AppSettingsStore';
+import { LauncherAdapterRegistry } from '../service/LauncherAdapterRegistry';
+import { ThemeSettingsListener, ThemeSettingsService } from '../service/ThemeSettingsService';
+import { WineEngineService } from '../service/WineEngineService';
+import { WineWindowManager } from '../service/WineWindowManager';
+import { GamepadManager } from '../service/GamepadManager';
+import { InputProfileService } from '../service/InputProfileService';
 
-const DOMAIN = 0x0000;
-const SOCK = '/data/storage/el2/base/files/.wine/wine-wayland';
-const FILES_BASE = '/data/storage/el2/base/files';
-
-// Wine 运行时从 rawfile 解压到 files/
-const WINE_ROOT = `${FILES_BASE}/wine`;
-const WINE_BIN = `${WINE_ROOT}/bin`;
-const WINE_LIB = `${WINE_BIN}/x86_64-unix`;
-const BIN_DIR = WINE_BIN;
-const BOX64 = `${WINE_BIN}/box64`;
-
-const DRIVE_C = '/data/storage/el2/base/files/.wine/drive_c';
-
-function pathExists(path: string): boolean {
-  try {
-    fs.accessSync(path);
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-
-function readTextIfExists(path: string): string {
-  try {
-    return fs.readTextSync(path, { encoding: 'utf-8' }).trim();
-  } catch (_) {
-    return '';
-  }
-}
-
-function writeTextFile(path: string, text: string): void {
-  const file = fs.openSync(path, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC);
-  try {
-    fs.writeSync(file.fd, text);
-  } finally {
-    fs.closeSync(file);
-  }
-}
-
-function ensureDirectory(path: string): boolean {
-  try {
-    if (!pathExists(path)) {
-      fs.mkdirSync(path, true);
-    }
-    return pathExists(path);
-  } catch (e) {
-    hilog.warn(DOMAIN, 'wine', 'mkdir failed path=%{public}s err=%{public}s', path, JSON.stringify(e));
-    return false;
-  }
-}
-
-function removePathRecursive(path: string): void {
-  let st: fs.Stat;
-  try {
-    st = fs.lstatSync(path);
-  } catch (e) {
-    hilog.warn(DOMAIN, 'wine', 'removePath: skip missing path=%{public}s err=%{public}s', path, JSON.stringify(e));
-    return;
-  }
-
-  if (st.isSymbolicLink() || !st.isDirectory()) {
-    fs.unlinkSync(path);
-    return;
-  }
-
-  const names = fs.listFileSync(path);
-  for (const name of names) {
-    removePathRecursive(`${path}/${name}`);
-  }
-  fs.rmdirSync(path);
-}
-
-interface ProcessInfo {
-  pid: number;
-  name: string;
-  path: string;
-  state: string;
-}
+type CatalogFilter = 'all' | 'builtin' | 'windows' | 'running';
 
 @Entry
 @Component
 struct Index {
-  @State state: string = 'idle';
-  @State prefixReady: boolean = false;
-  @State statusText: string = '检测中...';
-  @State curDir: string = DRIVE_C;
-  @State entries: string[] = [];
-  @State dirStack: string[] = [];
-  @State processList: ProcessInfo[] = [];
-  @State initOverlayVisible: boolean = false;
-  @State initOverlayText: string = '';
-  private hasRawfileWineData: boolean = false;
-  private zHome: string = '/storage/Users/currentUser/Download';
+  @State private apps: AppDescriptor[] = [];
+  @State private searchQuery: string = '';
+  @State private filter: CatalogFilter = 'all';
+  @State private breakpoint: BreakpointType = 'lg';
+  @State private sidebarCollapsed: boolean = false;
+  @State private settings: GlobalSettings = AppSettingsStore.getInstance().getGlobalSettings();
+  @State private engineState: EngineState = EngineState.STOPPED;
+  @State private engineMessage: string = 'Wine 引擎未启动';
+  @State private scanning: boolean = false;
+  @State private runningPaths: Set<string> = new Set<string>();
+  private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+  private breakpointCallback: ((value: BreakpointType) => void) | null = null;
+  private engineCallback: ((state: EngineState, message: string) => void) | null = null;
+  private settingsCallback: ThemeSettingsListener | null = null;
+  private refreshTimer: number = -1;
 
   aboutToAppear(): void {
-    this.hasRawfileWineData = this.detectRawfileWineData();
-
-    testNapi.setStateCallback((s: string) => {
-      hilog.info(DOMAIN, 'wine', 'state: %{public}s', s);
-      this.state = s;
-
-      const colonIdx = s.indexOf(':');
-      const pid = colonIdx >= 0 ? parseInt(s.substring(0, colonIdx)) : -1;
-      const stateMsg = colonIdx >= 0 ? s.substring(colonIdx + 1) : s;
-
-      if (stateMsg == 'wineserver-starting' || stateMsg == 'wineboot-starting') {
-        this.setInitStatus('Wine 正在初始化...', true);
-      } else if (stateMsg == 'wine-ready') {
-        this.setInitStatus('已就绪', false);
-        // wineboot 可能还在后台初始化 prefix，轮询等待 drive_c 就绪
-        this.waitForPrefix();
-      } else if (stateMsg == 'wine-running') {
-        this.setInitStatus('运行中', false);
-        this.refreshProcessList();
-      } else if (stateMsg == 'exited') {
-        this.refreshProcessList();
-        const running = this.processList.filter(p => p.state === 'running');
-        if (running.length === 0) {
-          this.setInitStatus('已就绪', false);
-        }
-      } else if (stateMsg == 'wine-failed') {
-        this.setInitStatus('启动失败', false);
-        this.refreshProcessList();
-      }
-    });
-    this.refreshPrefix();
-    // 下一帧自动初始化 (避免阻塞 UI 首次渲染)
-    setTimeout(() => this.doInit(), 0);
+    this.initialize();
+    BreakpointSystem.initialize();
+    this.breakpointCallback = (value: BreakpointType): void => {
+      this.breakpoint = value;
+    };
+    BreakpointSystem.subscribe(this.breakpointCallback);
+    this.engineCallback = (state: EngineState, message: string): void => {
+      this.engineState = state;
+      this.engineMessage = message;
+      this.refreshRunningState();
+    };
+    WineEngineService.getInstance().subscribe(this.engineCallback);
+    this.refreshTimer = setInterval(() => this.refreshRunningState(), 1500);
   }
 
-  private detectRawfileWineData(): boolean {
-    const ctx = getContext(this);
-    const rm = ctx.resourceManager;
+  aboutToDisappear(): void {
+    if (this.breakpointCallback) BreakpointSystem.unsubscribe(this.breakpointCallback);
+    if (this.engineCallback) WineEngineService.getInstance().unsubscribe(this.engineCallback);
+    if (this.settingsCallback) ThemeSettingsService.getInstance().unsubscribe(this.settingsCallback);
+    if (this.refreshTimer >= 0) clearInterval(this.refreshTimer);
+  }
+
+  private async initialize(): Promise<void> {
+    await ThemeSettingsService.getInstance().initialize(this.context);
+    this.settings = ThemeSettingsService.getInstance().getSettings();
+    WineWindowManager.getInstance().setOutputScalePercent(this.settings.outputScale);
+    this.settingsCallback = (settings: GlobalSettings): void => {
+      this.settings = settings;
+      WineWindowManager.getInstance().setOutputScalePercent(settings.outputScale);
+    };
+    ThemeSettingsService.getInstance().subscribe(this.settingsCallback);
+    AppCatalogService.getInstance().initialize(this.context);
+    AppSessionService.getInstance().initialize(this.context);
+    LauncherAdapterRegistry.getInstance().initialize(this.context);
+    WineEngineService.getInstance().initialize(this.context);
+    await InputProfileService.getInstance().initialize(this.context);
+    GamepadManager.getInstance().initialize(this.settings.gamepadDeadzone);
+    await this.rescan();
+  }
+
+  private async rescan(): Promise<void> {
+    this.scanning = true;
+    this.apps = await AppCatalogService.getInstance().scan();
+    this.refreshRunningState();
+    this.scanning = false;
+  }
+
+  private async authorizeDirectory(): Promise<void> {
     try {
-      const rawFd = rm.getRawFdSync('wine-data.zip');
-      hilog.info(DOMAIN, 'wine', 'rawfile: wine-data.zip exists len=%{public}d', rawFd.length);
-      rm.closeRawFdSync('wine-data.zip');
-      return true;
+      const root = await AppCatalogService.getInstance().authorizeLibrary();
+      if (root.length > 0) {
+        promptAction.showToast({ message: '已授权专用 games 目录' });
+        await this.rescan();
+      }
     } catch (_) {
-      hilog.info(DOMAIN, 'wine', 'rawfile: wine-data.zip not packaged');
-      return false;
+      promptAction.showToast({ message: '目录授权未完成' });
     }
   }
 
-  private setInitStatus(text: string, visible: boolean): void {
-    this.statusText = text;
-    this.initOverlayText = text;
-    this.initOverlayVisible = visible;
+  private refreshRunningState(): void {
+    this.runningPaths = AppSessionService.getInstance().getRunningPaths();
   }
 
-  // Pad: 从 rawfile 取出 wine-data.zip → zlib.decompressFile 解压到 files/wine/
-  // 使用 getRawFdSync 流式读取，避免 249MB 一次加载到内存导致 OOM
-  private async extractWineData(): Promise<void> {
-    const marker = `${WINE_ROOT}/share/wine/wine.inf`;
-    hilog.info(DOMAIN, 'wine', 'extract: check marker=%{public}s', marker);
-    try {
-      if (fs.accessSync(marker)) {
-        hilog.info(DOMAIN, 'wine', 'extract: already done (marker exists)');
-        return;
-      }
-    } catch (_) {}
-    hilog.info(DOMAIN, 'wine', 'extract: marker not found, start extracting');
+  private filteredApps(): AppDescriptor[] {
+    const query = this.searchQuery.trim().toLowerCase();
+    return this.apps.filter((app: AppDescriptor) => {
+      const normalized = normalizeLaunchPath(app.launchTarget.executable);
+      if (this.filter === 'builtin' && app.source !== AppSource.BUILTIN) return false;
+      if (this.filter === 'windows' && app.source !== AppSource.DOWNLOAD) return false;
+      if (this.filter === 'running' && !this.runningPaths.has(normalized)) return false;
+      if (!query) return true;
+      return app.title.toLowerCase().includes(query) || normalized.includes(query);
+    });
+  }
 
-    const ctx = getContext(this);
-    const rm = ctx.resourceManager;
-    const rawFd = rm.getRawFdSync('wine-data.zip');
+  private gridColumns(): string {
+    if (this.settings.viewMode === ViewMode.COMPACT || this.breakpoint === 'sm') return '1fr';
+    if (this.breakpoint === 'md') return '1fr 1fr';
+    if (this.breakpoint === 'xl') return this.settings.viewMode === ViewMode.LARGE ? '1fr 1fr 1fr' : '1fr 1fr 1fr 1fr';
+    return this.settings.viewMode === ViewMode.LARGE ? '1fr 1fr' : '1fr 1fr 1fr';
+  }
 
-    try {
-      // 流式拷贝: getRawFdSync 获取 fd → 分块读取 → 写入临时文件
-      hilog.info(DOMAIN, 'wine', 'extract: rawFd fd=%{public}d offset=%{public}d length=%{public}d',
-        rawFd.fd, rawFd.offset, rawFd.length);
-
-      const tmpZip = `${FILES_BASE}/wine-data.zip`;
-      hilog.info(DOMAIN, 'wine', 'extract: writing tmpZip=%{public}s (stream)', tmpZip);
-      const dst = fs.openSync(tmpZip, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC);
-
-      const CHUNK = 4 * 1024 * 1024; // 4MB 分块
-      const buf = new ArrayBuffer(CHUNK);
-      let pos = rawFd.offset;
-      const end = rawFd.offset + rawFd.length;
-      let totalWritten = 0;
-
-      while (pos < end) {
-        const toRead = Math.min(CHUNK, end - pos);
-        const n = fs.readSync(rawFd.fd, buf, { offset: pos, length: toRead });
-        if (n <= 0) break;
-        fs.writeSync(dst.fd, buf, { length: n });
-        pos += n;
-        totalWritten += n;
-      }
-      fs.closeSync(dst);
-      hilog.info(DOMAIN, 'wine', 'extract: stream copy ok, totalWritten=%{public}d', totalWritten);
-
-      // 确保目标目录存在
-      fs.mkdirSync(WINE_ROOT, true);
-      hilog.info(DOMAIN, 'wine', 'extract: calling decompressFile → %{public}s', WINE_ROOT);
-      await zlib.decompressFile(tmpZip, WINE_ROOT, {});
-      hilog.info(DOMAIN, 'wine', 'extract: decompress ok');
-
-      // 验证
-      if (fs.accessSync(marker)) {
-        hilog.info(DOMAIN, 'wine', 'extract: verified, marker exists');
-      } else {
-        hilog.warn(DOMAIN, 'wine', 'extract: marker still missing after decompress!');
-      }
-      this.statusText = '已解压';
-    } catch (e) {
-      hilog.error(DOMAIN, 'wine', 'extract FAIL: %{public}s', JSON.stringify(e));
-      this.statusText = '解压失败';
-    } finally {
-      rm.closeRawFdSync('wine-data.zip');
+  private async launch(app: AppDescriptor): Promise<void> {
+    if (!app.available) {
+      promptAction.showToast({ message: '程序不可用，请重新关联可执行文件' });
+      return;
     }
-  }
-
-  private refreshPrefix = (): void => {
-    try {
-      this.prefixReady = testNapi.checkWinePrefix();
-      if (this.prefixReady) {
-        this.curDir = DRIVE_C;
-        this.dirStack = [];
-        this.listDir(DRIVE_C);
-      } else {
-        this.entries = [];
-      }
-    } catch (e) {
-      this.prefixReady = false;
-      this.entries = [];
-    }
-  }
-
-  // wineboot 后台异步初始化 prefix，轮询直到 registry 和核心目录完整
-  private waitForPrefix = async (): Promise<void> => {
-    for (let i = 0; i < 90; i++) {
-      try {
-        if (testNapi.checkWinePrefix()) {
-          this.prefixReady = true;
-          this.initOverlayVisible = false;
-          this.curDir = DRIVE_C;
-          this.dirStack = [];
-          this.listDir(DRIVE_C);
-          return;
+    const conflict = AppSessionService.getInstance().getLaunchConflict(app, this.settings);
+    if (conflict !== LaunchConflictKind.NONE) {
+      AlertDialog.show({
+        title: conflict === LaunchConflictKind.DISPLAY_MODE ? '切换显示模式' : '启动另一个应用',
+        message: conflict === LaunchConflictKind.DISPLAY_MODE ?
+          '当前 Windows 会话使用另一种显示模式。继续将关闭当前会话并重建 Wayland 显示，Wine prefix 不会重置。' :
+          '单应用模式同时只运行一个 Windows 程序。继续将关闭当前程序并启动所选应用。',
+        primaryButton: { value: '取消', action: (): void => {} },
+        secondaryButton: {
+          value: '关闭并切换',
+          fontColor: '#D94848',
+          action: (): void => { this.switchAndLaunch(app); }
         }
-      } catch (e) { /* prefix 还没初始化完成 */ }
-      await new Promise<void>(r => setTimeout(r, 1000));
-    }
-    // 超时，仍然尝试刷新一次
-    this.refreshPrefix();
-  }
-
-  private refreshProcessList = (): void => {
-    try {
-      this.processList = testNapi.getProcessList() as ProcessInfo[];
-    } catch (e) {
-      this.processList = [];
-    }
-  }
-
-  private doKillProcess = (pid: number): void => {
-    try {
-      testNapi.killProcess(pid);
-      setTimeout(() => this.refreshProcessList(), 500);
-    } catch (e) {
-      hilog.error(DOMAIN, 'wine', 'killProcess error: %{public}s', JSON.stringify(e));
-    }
-  }
-
-  private listDir = (path: string): void => {
-    try {
-      hilog.info(DOMAIN, 'wine', 'listDir: path=%{public}s', path);
-      let names = fs.listFileSync(path);
-      hilog.info(DOMAIN, 'wine', 'listDir: got %{public}d entries', names.length);
-      names.sort((a, b) => {
-        let aIsDir = this.isDir(path + '/' + a);
-        let bIsDir = this.isDir(path + '/' + b);
-        if (aIsDir && !bIsDir) return -1;
-        if (!aIsDir && bIsDir) return 1;
-        if (!aIsDir && !bIsDir) {
-          let aExe = a.toLowerCase().endsWith('.exe') ? 0 : 1;
-          let bExe = b.toLowerCase().endsWith('.exe') ? 0 : 1;
-          return aExe - bExe || a.localeCompare(b);
-        }
-        return a.localeCompare(b);
       });
-      this.entries = names;
-    } catch (e) {
-      this.entries = [];
-    }
-  }
-
-  private isDir = (path: string): boolean => {
-    try { return fs.statSync(path).isDirectory(); } catch (_) { return false; }
-  }
-
-  private isExe = (name: string): boolean => {
-    return name.toLowerCase().endsWith('.exe');
-  }
-
-  private enterDir = (name: string): void => {
-    let newPath = this.curDir + '/' + name;
-    this.dirStack.push(this.curDir);
-    this.curDir = newPath;
-    this.listDir(newPath);
-  }
-
-  private goUp = (): void => {
-    let parent = this.dirStack.pop();
-    if (parent) {
-      this.curDir = parent;
-      this.listDir(parent);
-    }
-  }
-
-  private doInit = async (): Promise<void> => {
-    // HOME 目录 (Z: 映射目标), 通过 DocumentViewPicker 获取 Download 路径
-    const documentViewPicker = new picker.DocumentViewPicker();
-    let documentSaveResult = await documentViewPicker.save({ pickerMode: picker.DocumentPickerMode.DOWNLOAD });
-    const pickerHome = new fileUri.FileUri(documentSaveResult[0]).path;
-    this.zHome = pickerHome.endsWith('/') ? pickerHome : `${pickerHome}/`;
-    hilog.info(DOMAIN, 'wine', 'auto-init: Z home=%{public}s', this.zHome);
-    const gamesDir = `${this.zHome}games`;
-    if (!ensureDirectory(gamesDir)) {
-      this.setInitStatus('创建 games 目录失败', false);
       return;
     }
-    hilog.info(DOMAIN, 'wine', 'auto-init: games directory=%{public}s', gamesDir);
-    // 检查是否需要解压 wine 数据文件
-    hilog.info(DOMAIN, 'wine', 'auto-init: check marker=%{public}s', `${WINE_ROOT}/share/wine/wine.inf`);
-    let needExtract = true;
-    try { needExtract = !fs.accessSync(`${WINE_ROOT}/share/wine/wine.inf`); } catch (_) {}
-    if (needExtract) {
-      this.setInitStatus('解压数据...', true);
-      hilog.info(DOMAIN, 'wine', 'auto-init: extracting wine data...');
-      await this.extractWineData();
-    }
-    hilog.info(DOMAIN, 'wine', 'auto-init: starting Wine...');
-    this.setInitStatus('启动服务...', true);
-    const ok: boolean = testNapi.startServer(SOCK);
-    if (!ok) {
-      this.setInitStatus('启动服务失败', false);
-      return;
-    }
-    testNapi.launchClient(BOX64, [], SOCK, `${BIN_DIR}:${WINE_LIB}`, this.zHome);
+    await this.doLaunch(app, false);
   }
 
-  private doReset = (): void => {
-    this.setInitStatus('正在清空...', true);
-    try {
-      testNapi.resetWinePrefix();
-      this.state = 'idle';
-      this.prefixReady = false;
-      this.processList = [];
-      this.entries = [];
-      this.setInitStatus('已清空', false);
-      setTimeout(() => this.doInit(), 500);
-    } catch (e) {
-      hilog.error(DOMAIN, 'wine', 'reset error: %{public}s', JSON.stringify(e));
-      this.setInitStatus('清空失败', false);
+  private async switchAndLaunch(app: AppDescriptor): Promise<void> {
+    await this.doLaunch(app, true);
+  }
+
+  private async doLaunch(app: AppDescriptor, switchMode: boolean): Promise<void> {
+    const root = AppCatalogService.getInstance().getWineHomeDirectory();
+    let session: RuntimeSession | null = null;
+    if (switchMode) {
+      session = await AppSessionService.getInstance().switchModeAndLaunch(app, this.settings, root);
+    } else {
+      session = await LauncherAdapterRegistry.getInstance().launch(app, this.settings, root);
     }
+    if (!session && (app.launchTarget.kind === LaunchKind.WINE_EXE ||
+      app.launchTarget.kind === LaunchKind.WINE_SYSTEM ||
+      app.launchTarget.kind === LaunchKind.WINE_DESKTOP)) {
+      promptAction.showToast({ message: WineEngineService.getInstance().getMessage() });
+    }
+    this.refreshRunningState();
   }
 
-  private doRun = (name: string): void => {
-    this.statusText = '启动中...';
-    let exePath = this.curDir + '/' + name;
-    testNapi.runWineExe(BIN_DIR, SOCK, `${WINE_BIN}:${WINE_LIB}`, exePath, this.zHome);
+  private openAppSettings(app: AppDescriptor): void {
+    router.pushUrl({ url: 'pages/AppSettings', params: { appId: app.id } });
   }
 
-  private relPath = (): string => {
-    if (this.curDir == DRIVE_C) return 'C:\\';
-    return 'C:\\' + this.curDir.substring(DRIVE_C.length + 1).replace(/\//g, '\\');
+  private showAppLongPressMenu(app: AppDescriptor): void {
+    promptAction.showDialog({
+      title: app.title,
+      message: '请选择操作',
+      buttons: [
+        { text: app.available ? '启动或恢复' : '重新关联', color: '#5569D8' },
+        { text: '应用设置', color: $r('sys.color.ohos_id_color_text_primary') },
+        { text: '取消', color: $r('sys.color.ohos_id_color_text_secondary') }
+      ]
+    }).then((result) => {
+      if (result.index === 0) {
+        if (app.available) this.launch(app); else this.openAppSettings(app);
+      } else if (result.index === 1) {
+        this.openAppSettings(app);
+      }
+    }).catch((_error: Error) => {});
+  }
+
+  private async setViewMode(mode: ViewMode): Promise<void> {
+    await AppSettingsStore.getInstance().setViewMode(mode);
+    this.settings = AppSettingsStore.getInstance().getGlobalSettings();
+  }
+
+  @Builder
+  private NavItem(label: string, value: CatalogFilter, icon: string) {
+    Row({ space: 12 }) {
+      Text(icon).fontSize(19).fontColor($r('app.color.text_primary'))
+      if (!this.sidebarCollapsed) {
+        Text(label).fontSize(14).fontColor($r('app.color.text_primary'))
+          .fontWeight(this.filter === value ? FontWeight.Medium : FontWeight.Normal)
+      }
+    }
+    .width('100%')
+    .height(44)
+    .padding({ left: 15, right: 12 })
+    .borderRadius(12)
+    .backgroundColor(this.filter === value ? $r('app.color.selected_background') : '#00000000')
+    .onClick(() => this.filter = value)
+  }
+
+  @Builder
+  private SideBar() {
+    Column() {
+      Row() {
+        if (!this.sidebarCollapsed) {
+          Column({ space: 3 }) {
+            Text('Vintage Pomelo Pro').fontSize(20).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+            Text(this.apps.length + ' 个程序').fontSize(11).fontColor($r('app.color.text_secondary'))
+          }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        }
+        Button(this.sidebarCollapsed ? '›' : '‹').type(ButtonType.Circle).width(34).height(34)
+          .backgroundColor($r('app.color.search_background')).fontColor($r('app.color.text_primary'))
+          .onClick(() => this.sidebarCollapsed = !this.sidebarCollapsed)
+      }.width('100%').height(58)
+
+      if (!this.sidebarCollapsed) {
+        AppSearchBar({
+          value: this.searchQuery,
+          onValueChange: (value: string): void => { this.searchQuery = value; }
+        })
+        Row({ space: 8 }) {
+          Button('重新扫描').layoutWeight(1).height(36).fontSize(12).borderRadius(18)
+            .onClick(() => this.rescan())
+          Button('目录授权').layoutWeight(1).height(36).fontSize(12).borderRadius(18)
+            .onClick(() => this.authorizeDirectory())
+        }.margin({ top: 10, bottom: 16 })
+      }
+
+      Column({ space: 4 }) {
+        this.NavItem('全部应用', 'all', '▦')
+        this.NavItem('内建应用', 'builtin', '◆')
+        this.NavItem('Windows 程序', 'windows', '⊞')
+        this.NavItem('运行中', 'running', '▶')
+      }.width('100%')
+
+      Blank()
+      Row({ space: 12 }) {
+        Text('⚙').fontSize(19).fontColor($r('app.color.text_primary'))
+        if (!this.sidebarCollapsed) {
+          Text('系统设置').fontSize(14).fontColor($r('app.color.text_primary'))
+        }
+      }
+      .width('100%').height(44).padding({ left: 15 }).borderRadius(12)
+      .onClick(() => router.pushUrl({ url: 'pages/SystemSettings' }))
+      Row({ space: 12 }) {
+        Text('?').fontSize(19).fontColor($r('app.color.text_primary'))
+        if (!this.sidebarCollapsed) {
+          Text('帮助').fontSize(14).fontColor($r('app.color.text_primary'))
+        }
+      }.width('100%').height(44).padding({ left: 15 })
+        .onClick((): void => {
+          AlertDialog.show({
+          title: '帮助',
+          message: '将 Windows 程序放入 Download/com.vintage.pomelopro/games。每个一级目录会生成一张卡，目录内存在多个候选 EXE 时可在卡片设置中关联。',
+          confirm: { value: '知道了', action: (): void => {} }
+          });
+        })
+    }
+    .width(this.sidebarCollapsed ? 86 : 278)
+    .height('100%')
+    .padding(16)
+    .backgroundColor($r('app.color.sidebar_background'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+  }
+
+  @Builder
+  private Header() {
+    Column({ space: 12 }) {
+      Row() {
+        Column({ space: 3 }) {
+          Text(this.filter === 'running' ? '运行中的应用' : 'Windows 应用库')
+            .fontSize(26).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+          Text(this.engineMessage).fontSize(11).fontColor(this.engineState === EngineState.ERROR ? '#D94848' : $r('app.color.text_secondary'))
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        Row({ space: 4 }) {
+          Button('▦').type(ButtonType.Circle).width(36).height(36).backgroundColor(this.settings.viewMode === ViewMode.GRID ? $r('app.color.selected_background') : '#00000000').onClick(() => this.setViewMode(ViewMode.GRID))
+          Button('☷').type(ButtonType.Circle).width(36).height(36).backgroundColor(this.settings.viewMode === ViewMode.COMPACT ? $r('app.color.selected_background') : '#00000000').onClick(() => this.setViewMode(ViewMode.COMPACT))
+          Button('▣').type(ButtonType.Circle).width(36).height(36).backgroundColor(this.settings.viewMode === ViewMode.LARGE ? $r('app.color.selected_background') : '#00000000').onClick(() => this.setViewMode(ViewMode.LARGE))
+        }
+      }.width('100%')
+      if (this.breakpoint === 'sm' || this.breakpoint === 'md') {
+        AppSearchBar({
+          value: this.searchQuery,
+          onValueChange: (value: string): void => { this.searchQuery = value; }
+        })
+      }
+    }.width('100%')
+  }
+
+  @Builder
+  private Library() {
+    Column() {
+      this.Header()
+      if (this.scanning) {
+        Row({ space: 10 }) {
+          LoadingProgress().width(20).height(20)
+          Text('正在扫描应用目录…').fontColor($r('app.color.text_secondary'))
+        }.margin({ top: 22 })
+      } else if (this.filteredApps().length === 0) {
+        Column({ space: 12 }) {
+          Text('▦').fontSize(52).fontColor($r('app.color.text_secondary'))
+          Text('这里还没有应用').fontSize(20).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+          Text('授权 Download/com.vintage.pomelopro/games 后重新扫描').fontSize(13).fontColor($r('app.color.text_secondary'))
+          Button('授权目录').borderRadius(20).onClick(() => this.authorizeDirectory())
+        }.layoutWeight(1).justifyContent(FlexAlign.Center)
+      } else {
+        Grid() {
+          ForEach(this.filteredApps(), (app: AppDescriptor) => {
+            GridItem() {
+              AppCard({
+                app: app,
+                viewMode: this.settings.viewMode,
+                running: this.runningPaths.has(normalizeLaunchPath(app.launchTarget.executable)),
+                useGlassEffect: this.settings.useGlassEffect,
+                resolvedDisplayMode: AppSessionService.getInstance().resolveMode(app, this.settings),
+                onLaunch: (target: AppDescriptor): void => { this.launch(target); },
+                onSettings: (target: AppDescriptor): void => { this.openAppSettings(target); },
+                onLongPress: (target: AppDescriptor): void => { this.showAppLongPressMenu(target); }
+              })
+            }
+          }, (app: AppDescriptor) => app.id)
+        }
+        .columnsTemplate(this.gridColumns())
+        .columnsGap(16)
+        .rowsGap(16)
+        .layoutWeight(1)
+        .width('100%')
+        .padding({ top: 20, bottom: this.breakpoint === 'sm' || this.breakpoint === 'md' ? 76 : 20 })
+        .scrollBar(BarState.Auto)
+      }
+    }
+    .layoutWeight(1)
+    .height('100%')
+    .padding({ left: 24, right: 24, top: 22 })
+  }
+
+  @Builder
+  private BottomBar() {
+    Row() {
+      Button('全部').layoutWeight(1).backgroundColor(this.filter === 'all' ? $r('app.color.selected_background') : '#00000000').onClick(() => this.filter = 'all')
+      Button('内建').layoutWeight(1).backgroundColor(this.filter === 'builtin' ? $r('app.color.selected_background') : '#00000000').onClick(() => this.filter = 'builtin')
+      Button('Windows').layoutWeight(1).backgroundColor(this.filter === 'windows' ? $r('app.color.selected_background') : '#00000000').onClick(() => this.filter = 'windows')
+      Button('运行中').layoutWeight(1).backgroundColor(this.filter === 'running' ? $r('app.color.selected_background') : '#00000000').onClick(() => this.filter = 'running')
+      Button('设置').layoutWeight(1).backgroundColor('#00000000').onClick(() => router.pushUrl({ url: 'pages/SystemSettings' }))
+    }
+    .height(64).width('100%').padding({ left: 8, right: 8 })
+    .backgroundColor($r('app.color.card_glass_background'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+    .align(Alignment.Bottom)
   }
 
   build() {
     Stack() {
-    Row() {
-      // ============================================================
-      //  侧边栏
-      // ============================================================
-      Column() {
-        // -- Wine 环境状态 --
-        Text('Wine 环境')
-          .fontWeight(FontWeight.Bold).fontColor('#999')
-          .width('100%').padding({ top: 12, bottom: 6 })
-
-        Row() {
-          Circle({ width: 8, height: 8 })
-            .fill(this.prefixReady ? '#4f4' : '#f84')
-            .margin({ right: 6 })
-          Text(this.statusText)
-            .fontColor(this.state == 'wine-running' ? '#4f4' :
-                       this.state == 'exited' ? '#f84' :
-                       this.prefixReady ? '#8cf' : '#888')
-            .layoutWeight(1)
-            .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+      Row() {
+        if (this.breakpoint === 'lg' || this.breakpoint === 'xl') {
+          this.SideBar()
         }
-        .width('100%').padding({ bottom: 12 })
-        .alignItems(VerticalAlign.Center)
-
-        Divider().color('#2a2a2a').width('100%')
-
-        // -- 快速操作 --
-        Text('快速操作')
-          .fontWeight(FontWeight.Bold).fontColor('#999')
-          .width('100%').padding({ top: 12, bottom: 8 })
-
-        if (!this.prefixReady) {
-          Button('初始化 Wine')
-            .width('100%').backgroundColor('#285')
-            .enabled(this.state != 'wineserver-starting' && this.state != 'wineboot-starting')
-            .onClick(this.doInit)
-            .margin({ bottom: 8 })
-        } else {
-          Button('重置 Wine')
-            .width('100%').backgroundColor('#633')
-            .enabled(this.state != 'wineserver-starting' && this.state != 'wineboot-starting' && this.state != 'wine-running')
-            .onClick(this.doReset)
-            .margin({ bottom: 8 })
-          Button('重启 Wine')
-            .width('100%').backgroundColor('#652')
-            .enabled(this.state != 'wineserver-starting' && this.state != 'wineboot-starting' && this.state != 'wine-running')
-            .onClick(this.doInit)
-            .margin({ bottom: 8 })
-        }
-
-        Divider().color('#2a2a2a').width('100%')
-
-        // -- 运行中进程 --
-        Row() {
-          Text('运行中进程')
-            .fontWeight(FontWeight.Bold).fontColor('#999')
-            .layoutWeight(1)
-          Button({ type: ButtonType.Circle, stateEffect: true }) {
-            Text('↻')
-          }
-          .width(28).height(28).backgroundColor('#333')
-          .onClick(this.refreshProcessList)
-        }
-        .width('100%').padding({ top: 12, bottom: 8 })
-        .alignItems(VerticalAlign.Center)
-
-        if (this.processList.length > 0) {
-          List({ space: 1 }) {
-            ForEach(this.processList, (proc: ProcessInfo) => {
-              ListItem() {
-                Row() {
-                  Column() {
-                    Text(proc.name)
-                      .fontColor('#dfd')
-                      .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                  }
-                  .layoutWeight(1).alignItems(HorizontalAlign.Start)
-
-                  if (proc.state === 'running') {
-                    Circle({ width: 6, height: 6 }).fill('#4f4').margin({ right: 10 })
-                  }
-                  Text('✕')
-                    .fontColor('#f55')
-                    .onClick(() => this.doKillProcess(proc.pid))
-                }
-                .width('100%').padding({ left: 14, right: 14, top: 10, bottom: 10 })
-                .alignItems(VerticalAlign.Center)
-              }
-              .backgroundColor('#1e1e1e')
-            })
-          }
-          .width('100%').layoutWeight(1)
-          .margin({ left: -14, right: -14 })
-          .scrollBar(BarState.Off)
-        } else {
-          Text(this.prefixReady ? '无运行中进程' : 'Wine 未初始化')
-            .fontColor('#555')
-            .width('100%').padding({ top: 8 })
-        }
+        this.Library()
+      }.width('100%').height('100%')
+      if (this.breakpoint === 'sm' || this.breakpoint === 'md') {
+        this.BottomBar()
       }
-      .width(300).height('100%')
-      .backgroundColor('#141414')
-      .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-
-      // -- 侧边栏分隔线 --
-      Divider().vertical(true).color('#2a2a2a').height('100%')
-
-      // ============================================================
-      //  右侧主内容区
-      // ============================================================
-      Column() {
-        // -- 标题栏 --
-        Row() {
-          Text($r('app.string.app_name'))
-            .fontWeight(FontWeight.Bold).fontColor('#fff')
-
-          Text(this.statusText)
-            .fontColor(this.state == 'wine-running' ? '#4f4' :
-                       this.state == 'exited' ? '#f84' :
-                       this.prefixReady ? '#8cf' : '#888')
-            .margin({ left: 12 }).layoutWeight(1)
-            .maxLines(1)
-        }
-        .width('100%')
-        .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-        .backgroundColor('#1a1a1a')
-        .alignItems(VerticalAlign.Center)
-
-        // -- 文件浏览器 --
-        if (this.prefixReady) {
-          Row() {
-            if (this.curDir != DRIVE_C) {
-              Button('← 上级目录')
-                .backgroundColor('#333')
-                .onClick(this.goUp)
-            }
-            Text(this.relPath())
-              .fontColor('#888')
-              .margin({ left: 10 }).layoutWeight(1)
-              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          }
-          .width('100%').padding({ left: 14, right: 14, top: 10, bottom: 6 })
-
-          List({ space: 1 }) {
-            ForEach(this.entries, (name: string) => {
-              ListItem() {
-                Row() {
-                  Text(this.isDir(this.curDir + '/' + name) ? '📁' : (this.isExe(name) ? '▶' : '  '))
-                    .width(28)
-                  Text(name)
-                    .fontColor(this.isExe(name) ? '#dfd' :
-                               this.isDir(this.curDir + '/' + name) ? '#8cf' : '#888')
-                    .layoutWeight(1)
-                    .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                  if (this.isExe(name)) {
-                    Button('启动')
-                      .height(32)
-                      .enabled(this.state != 'wineserver-starting' && this.state != 'wineboot-starting')
-                      .onClick(() => this.doRun(name))
-                  }
-                }
-                .width('100%').height(44).padding({ left: 14, right: 14 })
-                .alignItems(VerticalAlign.Center)
-                .onClick(() => {
-                  if (this.isDir(this.curDir + '/' + name)) {
-                    this.enterDir(name);
-                  }
-                })
-              }
-              .backgroundColor('#1e1e1e')
-            })
-          }
-          .width('100%').layoutWeight(1)
-        } else {
-          Column() {
-            Text('需要先初始化 Wine 环境')
-              .fontColor('#555')
-          }
-          .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
-        }
-      }
-      .layoutWeight(1).height('100%')
-      .backgroundColor('#111')
     }
     .width('100%').height('100%')
-    if (this.initOverlayVisible && !this.prefixReady) {
-      Column() {
-        LoadingProgress()
-          .width(42)
-          .height(42)
-          .color('#7db8ff')
-          .margin({ bottom: 18 })
-        Text('正在准备 Wine')
-          .fontSize(20)
-          .fontWeight(FontWeight.Medium)
-          .fontColor('#f4f7fb')
-          .margin({ bottom: 8 })
-        Text(this.initOverlayText)
-          .fontSize(15)
-          .fontColor('#aeb8c6')
-          .maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-      }
-      .width(360)
-      .padding({ left: 28, right: 28, top: 26, bottom: 26 })
-      .backgroundColor('#20242b')
-      .borderRadius(8)
-      .alignItems(HorizontalAlign.Center)
-      .shadow({ radius: 18, color: '#66000000', offsetX: 0, offsetY: 8 })
-    }
-    }
-    .width('100%').height('100%')
+    .backgroundColor($r('app.color.page_background'))
   }
 }

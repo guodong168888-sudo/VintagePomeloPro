@@ -1,33 +1,64 @@
-import { describe, beforeAll, beforeEach, afterEach, afterAll, it, expect } from '@ohos/hypium';
+import { describe, it, expect } from '@ohos/hypium';
+import { chooseCoverFileName, chooseExecutablePath } from '../main/ets/model/AppCatalogRules';
+import {
+  AppSource,
+  DisplayMode,
+  EngineState,
+  canTransitionEngineState,
+  normalizeLaunchPath,
+  resolveDisplayMode,
+  stableAppId
+} from '../main/ets/model/AppModels';
 
 export default function localUnitTest() {
-  describe('localUnitTest', () => {
-    // Defines a test suite. Two parameters are supported: test suite name and test suite function.
-    beforeAll(() => {
-      // Presets an action, which is performed only once before all test cases of the test suite start.
-      // This API supports only one parameter: preset action function.
+  describe('WineEngineApplicationArchitecture', () => {
+    it('selectsDirectoryNamedExecutableFirst', 0, () => {
+      const chosen = chooseExecutablePath('/games/Foo Game', [
+        '/games/Foo Game/setup.exe',
+        '/games/Foo Game/FooGame.exe',
+        '/games/Foo Game/tools.exe'
+      ]);
+      expect(chosen).assertEqual('/games/Foo Game/FooGame.exe');
     });
-    beforeEach(() => {
-      // Presets an action, which is performed before each unit test case starts.
-      // The number of execution times is the same as the number of test cases defined by **it**.
-      // This API supports only one parameter: preset action function.
+
+    it('rejectsAmbiguousExecutableSelection', 0, () => {
+      const chosen = chooseExecutablePath('/games/Unknown', [
+        '/games/Unknown/client.exe', '/games/Unknown/launcher.exe'
+      ]);
+      expect(chosen).assertEqual('');
     });
-    afterEach(() => {
-      // Presets a clear action, which is performed after each unit test case ends.
-      // The number of execution times is the same as the number of test cases defined by **it**.
-      // This API supports only one parameter: clear action function.
+
+    it('excludesInstallerWhenOnlyOneRunnableCandidateRemains', 0, () => {
+      const chosen = chooseExecutablePath('/games/Unknown', [
+        '/games/Unknown/setup.exe', '/games/Unknown/play.exe'
+      ]);
+      expect(chosen).assertEqual('/games/Unknown/play.exe');
     });
-    afterAll(() => {
-      // Presets a clear action, which is performed after all test cases of the test suite end.
-      // This API supports only one parameter: clear action function.
+
+    it('doesNotSelectInstallerAsTheMainExecutable', 0, () => {
+      expect(chooseExecutablePath('/games/SetupOnly', ['/games/SetupOnly/setup.exe'])).assertEqual('');
     });
-    it('assertContain', 0, () => {
-      // Defines a test case. This API supports three parameters: test case name, filter parameter, and test case function.
-      let a = 'abc';
-      let b = 'b';
-      // Defines a variety of assertion methods, which are used to declare expected boolean conditions.
-      expect(a).assertContain(b);
-      expect(a).assertEqual(a);
+
+    it('usesCoverBeforeFolderArt', 0, () => {
+      expect(chooseCoverFileName(['folder.png', 'Cover.JPG'])).assertEqual('Cover.JPG');
+    });
+
+    it('normalizesPathForSingletonAndStableId', 0, () => {
+      expect(normalizeLaunchPath(' C:\\Games\\Foo\\FOO.EXE ')).assertEqual('c:/games/foo/foo.exe');
+      expect(stableAppId(AppSource.DOWNLOAD, 'C:\\Games\\Foo.exe'))
+        .assertEqual(stableAppId(AppSource.DOWNLOAD, 'c:/games/foo.exe'));
+    });
+
+    it('resolvesPerAppDisplayModeOverride', 0, () => {
+      expect(resolveDisplayMode(null, DisplayMode.DESKTOP)).assertEqual(DisplayMode.DESKTOP);
+      expect(resolveDisplayMode(DisplayMode.SINGLE_APP, DisplayMode.DESKTOP)).assertEqual(DisplayMode.SINGLE_APP);
+    });
+
+    it('validatesEngineStateMachine', 0, () => {
+      expect(canTransitionEngineState(EngineState.STOPPED, EngineState.PREPARING)).assertTrue();
+      expect(canTransitionEngineState(EngineState.PREPARING, EngineState.READY)).assertTrue();
+      expect(canTransitionEngineState(EngineState.PREPARING, EngineState.SWITCHING)).assertTrue();
+      expect(canTransitionEngineState(EngineState.STOPPED, EngineState.READY)).assertFalse();
     });
   });
 }

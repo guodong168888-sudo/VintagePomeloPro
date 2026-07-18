@@ -2,7 +2,43 @@
   "color": [
     {
       "name": "start_window_background",
-      "value": "#000000"
+      "value": "#1C1C1E"
+    },
+    {
+      "name": "page_background",
+      "value": "#1C1C1E"
+    },
+    {
+      "name": "sidebar_background",
+      "value": "#24262A"
+    },
+    {
+      "name": "card_background",
+      "value": "#FF2C2C2E"
+    },
+    {
+      "name": "card_glass_background",
+      "value": "#E8333438"
+    },
+    {
+      "name": "search_background",
+      "value": "#B8333438"
+    },
+    {
+      "name": "text_primary",
+      "value": "#FFF5F7FA"
+    },
+    {
+      "name": "text_secondary",
+      "value": "#AEB3BAC5"
+    },
+    {
+      "name": "accent",
+      "value": "#FF7D8DFF"
+    },
+    {
+      "name": "selected_background",
+      "value": "#407D8DFF"
     }
   ]
 }
