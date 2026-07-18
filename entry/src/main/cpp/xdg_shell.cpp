@@ -2,6 +2,7 @@
 #include "include/xdg-shell-server-protocol.h"
 #include "wayland_server.h"
 #include "xdg_shell.h"
+#include "wine_process.h"
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -13,6 +14,27 @@
 
 namespace {
 
+static std::string JsonEscape(const std::string& value)
+{
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (const unsigned char character : value)
+    {
+        switch (character)
+        {
+            case '\\': escaped += "\\\\"; break;
+            case '"': escaped += "\\\""; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default:
+                if (character >= 0x20) escaped += static_cast<char>(character);
+                break;
+        }
+    }
+    return escaped;
+}
+
 // -- xdg_toplevel 实现 (最小: 记录 title, 其余空) --
 static void tl_destroy(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
 static void tl_resource_destroy(wl_resource* r) {
@@ -20,6 +42,7 @@ static void tl_resource_destroy(wl_resource* r) {
     // 避免 wl_client_destroy 时 xs_resource_destroy 先释放 XdgSurface 导致野指针
     auto* td = static_cast<ToplevelData*>(wl_resource_get_user_data(r));
     if (td && td->toplevelId) {
+        RemoveToplevelAssociation(td->toplevelId);
         WaylandServer::GetInstance()->UnregisterToplevelResource(td->toplevelId);
     }
     delete td;
@@ -34,9 +57,8 @@ static void tl_set_title(wl_client*, wl_resource* tlRes, const char* title) {
     auto* sd = static_cast<SurfaceData*>(wl_resource_get_user_data(xdg->wlSurface));
     if (!sd) return;
     sd->title = title ? title : "";
-    char json[512];
-    snprintf(json, sizeof(json), "{\"title\":\"%s\"}", sd->title.c_str());
-    WaylandServer::GetInstance()->FireToplevelEvent(sd->toplevelId, "title", json);
+    const std::string json = "{\"title\":\"" + JsonEscape(sd->title) + "\"}";
+    WaylandServer::GetInstance()->FireToplevelEvent(sd->toplevelId, "title", json.c_str());
 }
 static void tl_set_app_id(wl_client*, wl_resource* tlRes, const char* appId) {
     OH_LOG_INFO(LOG_APP, "[XDG] app_id=%{public}s", appId ? appId : "(null)");
@@ -251,8 +273,13 @@ static void xs_get_toplevel(wl_client* client, wl_resource* xsRes, uint32_t id) 
             d->toplevelId = sd->toplevelId;
             td->toplevelId = sd->toplevelId;
             WaylandServer::GetInstance()->RegisterToplevelResource(sd->toplevelId, tl);
-            WaylandServer::GetInstance()->FireToplevelEvent(sd->toplevelId, "created",
-                "{\"w\":640,\"h\":480}");
+            const std::string sessionId = FindSessionIdForClientPid(sd->clientPid);
+            AssociateToplevelWithSession(sessionId, sd->clientPid, sd->toplevelId);
+            const std::string initialJson =
+                "{\"w\":640,\"h\":480,\"clientPid\":" + std::to_string(sd->clientPid) +
+                ",\"sessionId\":\"" + JsonEscape(sessionId) +
+                "\",\"title\":\"" + JsonEscape(sd->title) + "\"}";
+            WaylandServer::GetInstance()->FireToplevelEvent(sd->toplevelId, "created", initialJson.c_str());
         }
     }
 

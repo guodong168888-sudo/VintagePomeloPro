@@ -244,6 +244,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd, const std::stri
             return false;
         }
         OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver pid=%{public}d (via appspawn)", wsChildPid);
+        AddProcess(wsChildPid, "@engine/wineserver", -1, "engine");
         if (!WaitFor("wineserver socket", IsWineserverSocketReady, 5000, 100)) {
             OH_LOG_WARN(LOG_APP, "[Launch-Async] wineserver socket not detected, "
                         "wineboot will recover via server_connect retry+start_server");
@@ -286,6 +287,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd, const std::stri
             return false;
         }
         OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot started, pid=%{public}d", childPid);
+        AddProcess(childPid, "@engine/wineboot", -1, "engine");
         if (!WaitFor("wine prefix", IsWinePrefixInitialized, 30000, 200)) {
             OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineboot drive_c timeout, abort");
             if (gStateTsfn)
@@ -305,7 +307,8 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd, const std::stri
         OH_LOG_INFO(LOG_APP, "[Launch-Async] prefix already initialized, skipping wineboot");
     }
 
-    // -- explorer (Desktop 或 Pad 模式均启动) --
+    // Explorer is a desktop-session component. Single-app mode remains idle
+    // until AppSessionService explicitly launches the selected executable.
     if (WaylandServer::GetInstance()->IsDesktopMode())
     {
         auto* ws = WaylandServer::GetInstance();
@@ -331,25 +334,14 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd, const std::stri
             "libwine_child.so:Main", exArgs, exOpts, &exPid);
         OH_LOG_INFO(LOG_APP, "[Launch-Async] explorer desktop pid=%{public}d ret=%{public}d",
                     exPid, (int)exRet);
+        if (exRet == NCP_NO_ERROR && exPid > 0) {
+            AddProcess(exPid, "@engine/explorer", -1, "desktop");
+        }
         ws->PromotePendingDesktopRoot();
     }
     else
     {
-        // 非桌面模式: 启动 explorer 文件管理器窗口
-#ifdef __aarch64__
-        std::string exEntry = p->homeDir + "|" + p->winehuaBin + serializedEnv + "|explorer";
-#else
-        std::string exEntry = p->homeDir + "|" + p->winehuaBin + serializedEnv + "|wine|explorer";
-#endif
-        NativeChildProcess_Args exArgs = {};
-        exArgs.entryParams = const_cast<char*>(exEntry.c_str());
-        NativeChildProcess_Options exOpts = {};
-        exOpts.isolationMode = NCP_ISOLATION_MODE_NORMAL;
-        int32_t exPid = -1;
-        auto exRet = OH_Ability_StartNativeChildProcess(
-            "libwine_child.so:Main", exArgs, exOpts, &exPid);
-        OH_LOG_INFO(LOG_APP, "[Launch-Async] explorer window pid=%{public}d ret=%{public}d",
-                    exPid, (int)exRet);
+        OH_LOG_INFO(LOG_APP, "[Launch-Async] single-app engine ready; explorer intentionally not started");
     }
     return true;
 }

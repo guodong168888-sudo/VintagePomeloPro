@@ -1,0 +1,268 @@
+import { common, Want } from '@kit.AbilityKit';
+import testNapi from 'libentry.so';
+import {
+  AppDescriptor,
+  DisplayMode,
+  EngineState,
+  GlobalSettings,
+  LaunchKind,
+  NativeLaunchResult,
+  NativeProcessInfo,
+  NativeWineSessionInfo,
+  RuntimeSession,
+  SessionState,
+  normalizeLaunchPath,
+  resolveDisplayMode
+} from '../model/AppModels';
+import { WineEngineService } from './WineEngineService';
+import { WineWindowManager } from './WineWindowManager';
+
+export enum LaunchConflictKind {
+  NONE = 'none',
+  DISPLAY_MODE = 'display-mode',
+  SINGLE_APP = 'single-app'
+}
+
+interface PendingToplevelAssociation {
+  sessionId: string;
+  clientPid: number;
+  toplevelId: number;
+}
+
+export class AppSessionService {
+  private static instance: AppSessionService | null = null;
+  private context: common.UIAbilityContext | null = null;
+  private sessions: Map<string, RuntimeSession> = new Map<string, RuntimeSession>();
+  private pendingToplevels: PendingToplevelAssociation[] = [];
+
+  static getInstance(): AppSessionService {
+    if (!AppSessionService.instance) AppSessionService.instance = new AppSessionService();
+    return AppSessionService.instance;
+  }
+
+  initialize(context: common.UIAbilityContext): void {
+    this.context = context;
+    WineWindowManager.getInstance().setSessionAssociationCallback(
+      (sessionId: string, clientPid: number, toplevelId: number): void => {
+        this.associateToplevel(sessionId, clientPid, toplevelId);
+      });
+  }
+
+  resolveMode(app: AppDescriptor, settings: GlobalSettings): DisplayMode {
+    return resolveDisplayMode(app.displayModeOverride, settings.defaultDisplayMode);
+  }
+
+  hasModeConflict(app: AppDescriptor, settings: GlobalSettings): boolean {
+    return this.getLaunchConflict(app, settings) === LaunchConflictKind.DISPLAY_MODE;
+  }
+
+  getLaunchConflict(app: AppDescriptor, settings: GlobalSettings): LaunchConflictKind {
+    if (app.launchTarget.kind !== LaunchKind.WINE_EXE &&
+      app.launchTarget.kind !== LaunchKind.WINE_SYSTEM &&
+      app.launchTarget.kind !== LaunchKind.WINE_DESKTOP) {
+      return LaunchConflictKind.NONE;
+    }
+    const engine = WineEngineService.getInstance();
+    const currentMode = engine.getMode();
+    if (!currentMode || engine.getState() === EngineState.STOPPED) return LaunchConflictKind.NONE;
+    const requestedMode = this.resolveMode(app, settings);
+    if (currentMode !== requestedMode && engine.getState() !== EngineState.STOPPED) {
+      return LaunchConflictKind.DISPLAY_MODE;
+    }
+    if (requestedMode === DisplayMode.SINGLE_APP && engine.isReady()) {
+      const requestedPath = normalizeLaunchPath(app.launchTarget.executable);
+      const running = this.getRunningPaths();
+      let hasDifferentPath = false;
+      running.forEach((path: string) => {
+        if (path !== requestedPath) hasDifferentPath = true;
+      });
+      if (hasDifferentPath) return LaunchConflictKind.SINGLE_APP;
+    }
+    return LaunchConflictKind.NONE;
+  }
+
+  async launch(app: AppDescriptor, settings: GlobalSettings, homeDirectory: string): Promise<RuntimeSession | null> {
+    if (!app.available) return null;
+    const mode = this.resolveMode(app, settings);
+    const existing = this.findByExecutable(app.launchTarget.executable);
+    if (existing) {
+      await this.resume(existing);
+      return existing;
+    }
+
+    const ready = await WineEngineService.getInstance().ensureReady(mode, homeDirectory);
+    if (!ready) return null;
+
+    if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP) {
+      const desktopSession: RuntimeSession = {
+        sessionId: 'desktop',
+        appId: app.id,
+        executable: app.launchTarget.executable,
+        pid: 0,
+        displayMode: DisplayMode.DESKTOP,
+        state: SessionState.RUNNING,
+        toplevelId: 0,
+        startedAt: Date.now()
+      };
+      this.sessions.set(desktopSession.sessionId, desktopSession);
+      return desktopSession;
+    }
+
+    const result = WineEngineService.getInstance().launchExecutable(
+      app.launchTarget.executable, app.launchTarget.arguments) as NativeLaunchResult;
+    if (!result || result.pid <= 0) return null;
+    const session: RuntimeSession = {
+      sessionId: result.sessionId || 'wine-' + result.pid,
+      appId: app.id,
+      executable: app.launchTarget.executable,
+      pid: result.pid,
+      displayMode: mode,
+      state: SessionState.RUNNING,
+      toplevelId: 0,
+      startedAt: Date.now()
+    };
+    if (result.reused) {
+      const nativeSession = testNapi.getWineSession(result.sessionId) as NativeWineSessionInfo | null;
+      if (nativeSession) session.toplevelId = nativeSession.toplevelId;
+      testNapi.activateWineSession(result.sessionId);
+    }
+    this.sessions.set(session.sessionId, session);
+    this.resolvePendingToplevel(session);
+    return session;
+  }
+
+  async switchModeAndLaunch(app: AppDescriptor, settings: GlobalSettings, homeDirectory: string): Promise<RuntimeSession | null> {
+    this.sessions.clear();
+    this.pendingToplevels = [];
+    await WineEngineService.getInstance().switchDisplaySession();
+    return this.launch(app, settings, homeDirectory);
+  }
+
+  async resume(session: RuntimeSession): Promise<void> {
+    if (!this.context) return;
+    try { testNapi.activateWineSession(session.sessionId); } catch (_) {}
+    if (session.toplevelId > 0) {
+      try { testNapi.raiseToplevel(session.toplevelId); } catch (_) {}
+    }
+    if (session.displayMode === DisplayMode.DESKTOP) {
+      const want: Want = {
+        bundleName: 'com.vintage.pomelopro',
+        abilityName: 'DesktopAbility'
+      };
+      await this.context.startAbility(want);
+    } else {
+      const want: Want = {
+        bundleName: 'com.vintage.pomelopro',
+        abilityName: 'SingleAppAbility',
+        parameters: { toplevelId: session.toplevelId, sessionId: session.sessionId }
+      };
+      await this.context.startAbility(want);
+    }
+  }
+
+  stop(session: RuntimeSession): void {
+    if (session.pid > 0 && !testNapi.stopWineSession(session.sessionId)) testNapi.killProcess(session.pid);
+    session.state = SessionState.STOPPED;
+    this.sessions.delete(session.sessionId);
+  }
+
+  async stopAll(): Promise<void> {
+    this.sessions.clear();
+    this.pendingToplevels = [];
+    await WineEngineService.getInstance().stopAll();
+  }
+
+  async resetPrefix(): Promise<void> {
+    this.sessions.clear();
+    this.pendingToplevels = [];
+    await WineEngineService.getInstance().resetPrefix();
+  }
+
+  getSessions(): RuntimeSession[] {
+    this.reconcile();
+    const result: RuntimeSession[] = [];
+    this.sessions.forEach((session: RuntimeSession) => result.push(session));
+    return result;
+  }
+
+  getSession(sessionId: string): RuntimeSession | null {
+    this.reconcile();
+    return this.sessions.get(sessionId) ?? null;
+  }
+
+  getRunningPaths(): Set<string> {
+    const result: Set<string> = new Set<string>();
+    this.reconcile();
+    this.sessions.forEach((session: RuntimeSession) => {
+      if (session.state !== SessionState.STOPPED && session.state !== SessionState.ERROR) {
+        result.add(normalizeLaunchPath(session.executable));
+      }
+    });
+    this.getNativeProcesses().forEach((process: NativeProcessInfo) => {
+      if (process.state === 'running' && !process.path.startsWith('@engine/')) {
+        result.add(normalizeLaunchPath(process.path));
+      }
+    });
+    return result;
+  }
+
+  findByExecutable(path: string): RuntimeSession | null {
+    const normalized = normalizeLaunchPath(path);
+    this.reconcile();
+    let found: RuntimeSession | null = null;
+    this.sessions.forEach((session: RuntimeSession) => {
+      if (normalizeLaunchPath(session.executable) === normalized && session.state !== SessionState.STOPPED) found = session;
+    });
+    return found;
+  }
+
+  associateToplevel(sessionId: string, clientPid: number, toplevelId: number): void {
+    let matched: RuntimeSession | null = sessionId ? this.sessions.get(sessionId) ?? null : null;
+    if (!matched && clientPid > 0) {
+      this.sessions.forEach((session: RuntimeSession) => {
+        if (session.pid === clientPid) matched = session;
+      });
+    }
+    if (matched) {
+      if (matched.toplevelId === 0) matched.toplevelId = toplevelId;
+      matched.state = SessionState.RUNNING;
+    } else if (toplevelId > 0) {
+      this.pendingToplevels.push({ sessionId: sessionId, clientPid: clientPid, toplevelId: toplevelId });
+      if (this.pendingToplevels.length > 16) this.pendingToplevels.shift();
+    }
+  }
+
+  private resolvePendingToplevel(session: RuntimeSession): void {
+    let matchIndex = -1;
+    for (let index = 0; index < this.pendingToplevels.length; index++) {
+      const pending = this.pendingToplevels[index];
+      if ((pending.sessionId && pending.sessionId === session.sessionId) ||
+        (pending.clientPid > 0 && pending.clientPid === session.pid)) {
+        session.toplevelId = pending.toplevelId;
+        matchIndex = index;
+        break;
+      }
+    }
+    if (matchIndex >= 0) this.pendingToplevels.splice(matchIndex, 1);
+  }
+
+  private getNativeProcesses(): NativeProcessInfo[] {
+    try {
+      return testNapi.getProcessList() as NativeProcessInfo[];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  private reconcile(): void {
+    const processes = this.getNativeProcesses();
+    const activePids: Set<number> = new Set<number>();
+    processes.forEach((process: NativeProcessInfo) => activePids.add(process.pid));
+    const removed: string[] = [];
+    this.sessions.forEach((session: RuntimeSession, id: string) => {
+      if (session.pid > 0 && !activePids.has(session.pid)) removed.push(id);
+      if (session.pid === 0 && WineEngineService.getInstance().getState() !== EngineState.READY) removed.push(id);
+    });
+    removed.forEach((id: string) => this.sessions.delete(id));
+  }
+}

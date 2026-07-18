@@ -24,6 +24,7 @@ add_library(entry SHARED
     audio_ipc_server.cpp
     audio_stream.cpp
     graphics_broker.cpp
+    game_controller_bridge.cpp
     napi_init.cpp
     wine_process.cpp
     wine_env.cpp
@@ -54,6 +55,7 @@ target_link_libraries(entry PUBLIC
     libchild_process.so
     libipc_capi.so
     libohaudio.so
+    dl
     ${WAYLAND_LIBS_DIR}/libwayland-server.so.0
 )
 

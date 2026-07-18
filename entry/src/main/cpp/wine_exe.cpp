@@ -16,6 +16,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <cctype>
 
 #undef LOG_TAG
 #define LOG_TAG "WL_NAPI"
@@ -23,11 +24,24 @@
 
 extern napi_threadsafe_function gStateTsfn;
 
+static napi_value MakeLaunchResult(napi_env env, int32_t pid,
+                                   const std::string& sessionId, bool reused) {
+    napi_value result, pidValue, sessionValue, reusedValue;
+    napi_create_object(env, &result);
+    napi_create_int32(env, pid, &pidValue);
+    napi_create_string_utf8(env, sessionId.c_str(), NAPI_AUTO_LENGTH, &sessionValue);
+    napi_get_boolean(env, reused, &reusedValue);
+    napi_set_named_property(env, result, "pid", pidValue);
+    napi_set_named_property(env, result, "sessionId", sessionValue);
+    napi_set_named_property(env, result, "reused", reusedValue);
+    return result;
+}
+
 napi_value RunWineExe(napi_env env, napi_callback_info info) {
-    size_t argc = 5;
-    napi_value args[5] = {};
+    size_t argc = 7;
+    napi_value args[7] = {};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    if (argc < 4) return nullptr;
+    if (argc < 4) return MakeLaunchResult(env, -1, "", false);
 
     char binDir[512] = {}, sockPath[512] = {}, libPath[2048] = {}, wineExe[1024] = {}, homePath[1024] = {};
     napi_get_value_string_utf8(env, args[0], binDir, sizeof(binDir), nullptr);
@@ -37,6 +51,25 @@ napi_value RunWineExe(napi_env env, napi_callback_info info) {
     if (argc >= 5) {
         napi_get_value_string_utf8(env, args[4], homePath, sizeof(homePath), nullptr);
     }
+    std::vector<std::string> launchArguments;
+    bool argumentArray = false;
+    if (argc >= 6) napi_is_array(env, args[5], &argumentArray);
+    if (argumentArray) {
+        uint32_t length = 0;
+        napi_get_array_length(env, args[5], &length);
+        for (uint32_t index = 0; index < length; index++) {
+            napi_value item;
+            napi_get_element(env, args[5], index, &item);
+            size_t size = 0;
+            napi_get_value_string_utf8(env, item, nullptr, 0, &size);
+            std::string value(size + 1, '\0');
+            napi_get_value_string_utf8(env, item, value.data(), value.size(), &size);
+            value.resize(size);
+            launchArguments.push_back(value);
+        }
+    }
+    bool singleAppRoot = false;
+    if (argc >= 7) napi_get_value_bool(env, args[6], &singleAppRoot);
 
     std::string homeDir(homePath);
     if (homeDir.empty()) homeDir = gBrokerHomeDir;
@@ -50,6 +83,14 @@ napi_value RunWineExe(napi_env env, napi_callback_info info) {
             auto slash = exePath.find_last_of('/');
             if (slash != std::string::npos) exePath = exePath.substr(slash + 1);
         }
+    }
+
+    const pid_t existingPid = FindRunningProcessByPath(wineExe);
+    if (existingPid > 0) {
+        const std::string existingSession = FindSessionIdForClientPid(existingPid);
+        OH_LOG_INFO(LOG_APP, "[Wine] singleton reuse pid=%{public}d exe=%{public}s",
+                    existingPid, wineExe);
+        return MakeLaunchResult(env, existingPid, existingSession, true);
     }
 
     OH_LOG_INFO(LOG_APP, "[Wine] runWineExe bin=%{public}s exe=%{public}s (final=%{public}s) home=%{public}s",
@@ -66,10 +107,13 @@ napi_value RunWineExe(napi_env env, napi_callback_info info) {
 
     {
 #ifdef __aarch64__
-        std::string entryParams = std::string(binDir) + "|" + exePath;
+        std::string entryParams = std::string(binDir) + "|" +
+            (singleAppRoot ? "__winehua_desktop__|" : "") + exePath;
 #else
-        std::string entryParams = std::string(binDir) + "|wine|" + exePath;
+        std::string entryParams = std::string(binDir) + "|" +
+            (singleAppRoot ? "__winehua_desktop__|" : "") + "wine|" + exePath;
 #endif
+        for (const auto& argument : launchArguments) entryParams += "|" + argument;
         entryParams += SerializeEnvToEntryParams(wineEnv);
         OH_LOG_INFO(LOG_APP, "[Wine] runWineExe via broker: %{public}s", entryParams.c_str());
 
@@ -77,7 +121,7 @@ napi_value RunWineExe(napi_env env, napi_callback_info info) {
         if (broker_fd < 0) {
             OH_LOG_ERROR(LOG_APP, "[Wine] broker socket failed: %{public}s", strerror(errno));
             if (gStateTsfn) napi_call_threadsafe_function(gStateTsfn, strdup("-1:wine-failed"), napi_tsfn_blocking);
-            return nullptr;
+            return MakeLaunchResult(env, -1, "", false);
         }
         struct sockaddr_un addr;
         memset(&addr, 0, sizeof(addr));
@@ -87,7 +131,7 @@ napi_value RunWineExe(napi_env env, napi_callback_info info) {
             OH_LOG_ERROR(LOG_APP, "[Wine] broker connect failed: %{public}s", strerror(errno));
             close(broker_fd);
             if (gStateTsfn) napi_call_threadsafe_function(gStateTsfn, strdup("-1:wine-failed"), napi_tsfn_blocking);
-            return nullptr;
+            return MakeLaunchResult(env, -1, "", false);
         }
 
         char req_hdr[32];
@@ -106,7 +150,7 @@ napi_value RunWineExe(napi_env env, napi_callback_info info) {
             OH_LOG_ERROR(LOG_APP, "[Wine] broker sendmsg failed: %{public}s", strerror(errno));
             close(broker_fd);
             if (gStateTsfn) napi_call_threadsafe_function(gStateTsfn, strdup("-1:wine-failed"), napi_tsfn_blocking);
-            return nullptr;
+            return MakeLaunchResult(env, -1, "", false);
         }
 
         int32_t response[2] = {-1, -1};
@@ -115,17 +159,27 @@ napi_value RunWineExe(napi_env env, napi_callback_info info) {
         if (n != sizeof(response) || response[1] != 0 || response[0] <= 0) {
             OH_LOG_ERROR(LOG_APP, "[Wine] broker spawn failed pid=%{public}d status=%{public}d", response[0], response[1]);
             if (gStateTsfn) napi_call_threadsafe_function(gStateTsfn, strdup("-1:wine-failed"), napi_tsfn_blocking);
-            return nullptr;
+            return MakeLaunchResult(env, -1, "", false);
         }
 
         pid_t pid = response[0];
-        AddProcess(pid, wineExe, -1);
+        const std::string sessionId = "wine-" + std::to_string(pid);
+        AddProcess(pid, wineExe, -1, sessionId);
         OH_LOG_INFO(LOG_APP, "[Wine] wine pid=%{public}d exe=%{public}s (via broker)", pid, wineExe);
         if (gStateTsfn) {
             char msg[64];
             snprintf(msg, sizeof(msg), "%d:wine-running", pid);
             napi_call_threadsafe_function(gStateTsfn, strdup(msg), napi_tsfn_blocking);
         }
+        return MakeLaunchResult(env, pid, sessionId, false);
     }
-    return nullptr;
+}
+
+napi_value RunWineExeLegacy(napi_env env, napi_callback_info info) {
+    napi_value result = RunWineExe(env, info);
+    napi_value pid;
+    if (napi_get_named_property(env, result, "pid", &pid) != napi_ok) {
+        napi_create_int32(env, -1, &pid);
+    }
+    return pid;
 }

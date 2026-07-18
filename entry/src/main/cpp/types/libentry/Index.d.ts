@@ -8,7 +8,13 @@ export const setPendingToplevel: (id: number) => void;
 export const getCurrentToplevelId: () => number;
 export const destroyToplevel: (id: number) => void;
 export const sendToplevelClose: (id: number) => void;
-export const runWineExe: (binDir: string, sockPath: string, libPath: string, exePath: string, homeDir: string) => void;
+export interface WineLaunchResult { pid: number; sessionId: string; reused: boolean; }
+export interface WineSessionInfo { pid: number; sessionId: string; path: string; state: string; toplevelId: number; }
+export const runWineExe: (binDir: string, sockPath: string, libPath: string, exePath: string, homeDir: string, argumentsValue?: string[], singleAppRoot?: boolean) => WineLaunchResult;
+export const runWineExeLegacy: (binDir: string, sockPath: string, libPath: string, exePath: string, homeDir: string) => number;
+export const getWineSession: (sessionId: string) => WineSessionInfo | null;
+export const stopWineSession: (sessionId: string) => boolean;
+export const activateWineSession: (sessionId: string) => boolean;
 export const checkWinePrefix: () => boolean;
 export const resetWinePrefix: () => void;
 export const setOutputSize: (w: number, h: number) => void;
@@ -24,8 +30,15 @@ export const sendKeyEvent: (toplevelId: number, evdevCode: number, pressed: bool
 export const sendScrollEvent: (toplevelId: number, axis: number, value: number, scrollStep: number, px: number, py: number) => void;
 export const notifyToplevelResize: (toplevelId: number, w: number, h: number) => void;
 export const setToplevelVisible: (toplevelId: number, visible: boolean) => void;
-export const getProcessList: () => Array<{pid: number, name: string, path: string, state: string}>;
+export const getProcessList: () => Array<{pid: number, name: string, path: string, state: string, sessionId: string}>;
 export const killProcess: (pid: number) => boolean;
+export const initGameController: () => number;
+export const cleanupGameController: () => void;
+export const isGamepadConnected: () => boolean;
+export const getGamepadCount: () => number;
+export const setGamepadButtonCallback: (callback: (buttonCode: number, pressed: boolean) => void) => void;
+export const setGamepadAxisCallback: (callback: (axisType: number, x: number, y: number) => void) => void;
+export const setGamepadDeviceCallback: (callback: (connected: boolean) => void) => void;
 export const runMmapTests: () => string;
 export const termRun: (cols: number, rows: number, cb: (data: ArrayBuffer) => void, onExit: () => void) => number;
 export const termSend: (data: ArrayBuffer) => void;

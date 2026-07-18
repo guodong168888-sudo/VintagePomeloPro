@@ -1,11 +1,12 @@
 import { common, Want } from '@kit.AbilityKit';
 import { window, display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { deviceInfo } from '@kit.BasicServicesKit';
 import testNapi from 'libentry.so';
+import { DisplayMode } from '../model/AppModels';
 
 const DOMAIN = 0x0000;
 const TAG = 'WineWM';
+export type SessionAssociationCallback = (sessionId: string, clientPid: number, toplevelId: number) => void;
 
 export class WineWindowManager {
   private static instance: WineWindowManager | null = null;
@@ -15,6 +16,7 @@ export class WineWindowManager {
   // 设备显示密度 + 屏幕尺寸 (用于缩放)
   private displayScale: number = 1.0;
   private scaleBoost: number = 1.0;  // 放大系数, 使 effectiveScale = displayScale × boost = 2.0
+  private outputScalePercent: number = 100;
   // 标题栏 + 边框总高度 (VP), 用于窗口 resize
   // = getWindowDecorHeight() + decorBorderOffset
   private measuredTitleBarH: number = 56;
@@ -26,9 +28,12 @@ export class WineWindowManager {
   private barCalibrationCount: number = 0;
 
   // -- Desktop 模式 (Tablet) --
-  private isDesktopMode: boolean = false;
+  private isDesktopMode: boolean = true;
+  private displayMode: DisplayMode = DisplayMode.DESKTOP;
   private desktopRootId: number = 0;
   private desktopAbilityRunning: boolean = false;
+  private singleAppRootId: number = 0;
+  private singleAppAbilityRunning: boolean = false;
 
   // toplevelId -> UIAbilityContext (用于 terminateSelf)
   private abilityContexts: Map<number, common.UIAbilityContext> = new Map();
@@ -54,6 +59,7 @@ export class WineWindowManager {
   private lastTitles: Map<number, string> = new Map();
   // Wine move_grab 等待 startMoving() — 标记哪些 toplevel 在等待拖拽
   private moveGrabPending: Set<number> = new Set();
+  private sessionAssociationCallback: SessionAssociationCallback | null = null;
 
   static getInstance(): WineWindowManager {
     if (!WineWindowManager.instance) {
@@ -64,6 +70,10 @@ export class WineWindowManager {
 
   getMainWindow(): window.Window | null {
     return this.mainWindow;
+  }
+
+  setSessionAssociationCallback(callback: SessionAssociationCallback): void {
+    this.sessionAssociationCallback = callback;
   }
 
   // -- dump 当前状态 (诊断用) --
@@ -90,14 +100,8 @@ export class WineWindowManager {
     hilog.info(DOMAIN, TAG, '[MW] init: mainWindow=%{public}s ctx=%{public}s',
       this.mainWindow ? 'ok' : 'NULL', this.uiAbilityContext ? 'ok' : 'NULL');
 
-    // Tablet 检测: 桌面合成模式
-    this.isDesktopMode = deviceInfo.deviceType === 'tablet';
-    if (this.isDesktopMode) {
-      testNapi.setDesktopMode(true);
-      hilog.info(DOMAIN, TAG, '[MW] Tablet → DESKTOP MODE (single XComponent)');
-    } else {
-      hilog.info(DOMAIN, TAG, '[MW] deviceType=%{public}s → MANAGED MODE', deviceInfo.deviceType);
-    }
+    testNapi.setDesktopMode(this.isDesktopMode);
+    hilog.info(DOMAIN, TAG, '[MW] configured display mode=%{public}s', this.displayMode);
 
     // 获取设备显示密度 + 主窗口可用区域
     try {
@@ -129,6 +133,40 @@ export class WineWindowManager {
       this.onToplevelEvent(id, event, data);
     });
     hilog.info(DOMAIN, TAG, '[MW] toplevel callback registered OK');
+  }
+
+  setDisplayMode(mode: DisplayMode): void {
+    this.displayMode = mode;
+    this.isDesktopMode = mode === DisplayMode.DESKTOP;
+    this.desktopRootId = 0;
+    this.singleAppRootId = 0;
+    this.destroyed.clear();
+    testNapi.setDesktopMode(this.isDesktopMode);
+    hilog.info(DOMAIN, TAG, '[MW] setDisplayMode=%{public}s nativeDesktop=%{public}s',
+      mode, this.isDesktopMode ? 'yes' : 'no');
+  }
+
+  setOutputScalePercent(value: number): void {
+    this.outputScalePercent = Math.max(75, Math.min(150, value));
+    try {
+      const currentDisplay = display.getDefaultDisplaySync();
+      this.displayScale = currentDisplay.densityPixels;
+      const effectiveScale = 2.0 * this.outputScalePercent / 100;
+      this.scaleBoost = effectiveScale / this.displayScale;
+      testNapi.setDisplayScale(effectiveScale);
+      testNapi.setOutputSize(Math.round(currentDisplay.width / effectiveScale),
+        Math.round(currentDisplay.height / effectiveScale));
+      hilog.info(DOMAIN, TAG, '[MW] output scale=%{public}d%% effective=%{public}s',
+        this.outputScalePercent, effectiveScale.toFixed(2));
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, '[MW] setOutputScalePercent failed: %{public}s', JSON.stringify(error));
+    }
+  }
+
+  prepareSingleAppComposition(): void {
+    if (this.displayMode !== DisplayMode.SINGLE_APP) return;
+    testNapi.setDesktopMode(true);
+    hilog.info(DOMAIN, TAG, '[MW] single-app compositor enabled before root launch');
   }
 
   // -- WineWindowAbility 调用: 注册 / 注销 --
@@ -265,18 +303,35 @@ export class WineWindowManager {
 
     switch (event) {
       case 'created':
+        try {
+          const initial = JSON.parse(data) as Record<string, string | number>;
+          if (this.sessionAssociationCallback && (this.isDesktopMode || this.singleAppRootId === 0)) {
+            this.sessionAssociationCallback(initial.sessionId as string ?? '', initial.clientPid as number ?? 0, id);
+          }
+        } catch (_) {
+        }
         if (this.isDesktopMode) {
           hilog.info(DOMAIN, TAG, '[MW] Desktop mode: toplevel #%{public}d created, skipping Ability', id);
         } else {
-          hilog.info(DOMAIN, TAG, '[MW] -> startWineWindowAbility(#%{public}d)', id);
-          this.startWineWindowAbility(id, data);
+          if (this.singleAppRootId === 0) {
+            this.singleAppRootId = id;
+            hilog.info(DOMAIN, TAG, '[MW] -> startSingleAppAbility(#%{public}d)', id);
+            this.startSingleAppAbility(id, data);
+          } else {
+            hilog.info(DOMAIN, TAG, '[MW] single-app child toplevel #%{public}d composed into root #%{public}d', id, this.singleAppRootId);
+          }
         }
         break;
       case 'desktop_root':
         // Tablet: C++ 识别到 explorer desktop → 打开 DesktopAbility
         hilog.info(DOMAIN, TAG, '[MW] desktop_root toplevel #%{public}d → start DesktopAbility', id);
-        this.desktopRootId = id;
-        this.startDesktopAbility(id);
+        if (this.displayMode === DisplayMode.DESKTOP) {
+          this.desktopRootId = id;
+          this.startDesktopAbility(id);
+        } else if (this.singleAppRootId !== id) {
+          this.singleAppRootId = id;
+          this.startSingleAppAbility(id, data);
+        }
         break;
       case 'destroyed':
         hilog.info(DOMAIN, TAG, '[MW] -> onToplevelDestroyed(#%{public}d)', id);
@@ -553,7 +608,20 @@ export class WineWindowManager {
       return;
     }
 
-    // PC: 原逻辑
+    if (this.displayMode === DisplayMode.SINGLE_APP) {
+      if (id !== this.singleAppRootId) {
+        this.unregisterAbility(id);
+        return;
+      }
+      const ctx = this.abilityContexts.get(id);
+      if (ctx) ctx.terminateSelf().catch((_err: Error) => {});
+      this.unregisterAbility(id);
+      this.singleAppRootId = 0;
+      this.singleAppAbilityRunning = false;
+      return;
+    }
+
+    // Managed-window compatibility path
     if (!this.abilityContexts.has(id) && !this.pendingStarts.has(id)) {
       hilog.info(DOMAIN, TAG, '[MW] onToplevelDestroyed #%{public}d: already cleaned up by ability, skip', id);
       return;
@@ -594,5 +662,29 @@ export class WineWindowManager {
     }
   }
 
+  private startSingleAppAbility(rootId: number, data: string): void {
+    if (!this.uiAbilityContext) return;
+    let sessionId = '';
+    let clientPid = 0;
+    try {
+      const value = JSON.parse(data) as Record<string, string | number>;
+      sessionId = value.sessionId as string ?? '';
+      clientPid = value.clientPid as number ?? 0;
+    } catch (_) {
+    }
+    this.singleAppAbilityRunning = true;
+    const want: Want = {
+      bundleName: 'com.vintage.pomelopro',
+      abilityName: 'SingleAppAbility',
+      parameters: { toplevelId: rootId, sessionId: sessionId, clientPid: clientPid }
+    };
+    this.uiAbilityContext.startAbility(want).catch((err: Error) => {
+      this.singleAppAbilityRunning = false;
+      hilog.error(DOMAIN, TAG, '[MW] startAbility(SingleAppAbility) failed: %{public}s', JSON.stringify(err));
+    });
+  }
+
   getDesktopRootId(): number { return this.desktopRootId; }
+  getSingleAppRootId(): number { return this.singleAppRootId; }
+  getEffectiveScale(): number { return this.displayScale * this.scaleBoost; }
 }
