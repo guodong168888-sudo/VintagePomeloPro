@@ -17,6 +17,9 @@
         "name": "ohos.permission.INTERNET"
       },
       {
+        "name": "ohos.permission.SET_WINDOW_TRANSPARENT"
+      },
+      {
         "name": "ohos.permission.MICROPHONE",
         "reason": "$string:microphone_permission",
         "usedScene": {

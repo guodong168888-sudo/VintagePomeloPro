@@ -792,5 +792,4 @@ export class WineWindowManager {
 
   getDesktopRootId(): number { return this.desktopRootId; }
   getSingleAppRootId(): number { return this.singleAppRootId; }
-  getEffectiveScale(): number { return this.displayScale * this.scaleBoost; }
 }
