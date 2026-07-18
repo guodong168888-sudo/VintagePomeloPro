@@ -321,11 +321,17 @@ setup_build_env() {
         if [ -f "$wayland_src/meson.build" ]; then
             log "wayland-scanner not found, building from thirdparty/wayland..."
             local wl_build="$BUILD_DIR/wayland-scanner-build"
+            local wl_scanner=""
             rm -rf "$wl_build"
             meson setup "$wl_build" "$wayland_src" -Ddocumentation=false -Dtests=false
             meson compile -C "$wl_build"
+            wl_scanner="$(resolve_first_executable \
+                "$wl_build/wayland-scanner" \
+                "$wl_build/src/wayland-scanner" \
+                || true)"
+            [ -n "$wl_scanner" ] || err "built wayland-scanner not found under $wl_build"
             mkdir -p "$HOST_TOOLS_DIR/bin"
-            cp "$wl_build/wayland-scanner" "$HOST_TOOLS_DIR/bin/"
+            cp "$wl_scanner" "$HOST_TOOLS_DIR/bin/wayland-scanner"
             export WAYLAND_SCANNER="$HOST_TOOLS_DIR/bin/wayland-scanner"
         fi
     fi
@@ -609,8 +615,8 @@ EOF
     fi
 
     # wayland-scanner host tool .pc for PKG_CONFIG_LIBDIR isolation
-    if [ ! -f "$SYSROOT_EXT_PC/wayland-scanner.pc" ] && command -v wayland-scanner >/dev/null 2>&1; then
-        local wlscan_prefix="$(dirname "$(dirname "$(command -v wayland-scanner)")")"
+    if [ -x "${WAYLAND_SCANNER:-}" ]; then
+        local wlscan_prefix="$(dirname "$(dirname "$WAYLAND_SCANNER")")"
         cat > "$SYSROOT_EXT_PC/wayland-scanner.pc" <<EOF
 prefix=$wlscan_prefix
 includedir=\${prefix}/include
