@@ -1,6 +1,10 @@
 {
   "src": [
     "pages/Index",
+    "pages/SystemSettings",
+    "pages/AppSettings",
+    "pages/InputLayoutEditor",
+    "pages/SingleAppWindow",
     "pages/WineWindow",
     "pages/DesktopWindow"
   ]
