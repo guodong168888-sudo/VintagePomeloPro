@@ -1,0 +1,4 @@
+interface:
+  display_name: "WineHua Build and Release"
+  short_description: "Build, sign, validate, and deploy WineHua HarmonyOS packages"
+  default_prompt: "Use the project-local WineHua build and release workflow for source updates, ARM packages, signing, validation, and device deployment."
