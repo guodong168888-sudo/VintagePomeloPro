@@ -1,0 +1,13 @@
+.git
+.hvigor
+.idea
+.ohos
+build
+oh_modules
+entry/.cxx
+entry/.test
+entry/build
+entry/libs
+entry/oh_modules
+entry/src/main/resources/rawfile/wine-data.zip
+thirdparty

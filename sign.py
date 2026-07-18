@@ -3,9 +3,11 @@ from pathlib import Path
 
 inFile = sys.argv[1]
 outFile = sys.argv[2]
+profilePath = Path(sys.argv[3] if len(sys.argv) > 3 else "build-profile.json5").resolve()
+signingConfigName = sys.argv[4] if len(sys.argv) > 4 else os.environ.get("WINEHUA_SIGNING_CONFIG", "")
 
 # Read JSON5 file and convert to valid JSON
-with open("build-profile.json5") as f:
+with profilePath.open() as f:
     content = f.read()
 # Remove trailing commas before } or ]
 content = re.sub(r',\s*([}\]])', r'\1', content)
@@ -13,8 +15,25 @@ content = re.sub(r',\s*([}\]])', r'\1', content)
 content = re.sub(r'//.*$', '', content, flags=re.MULTILINE)
 profile = json.loads(content)
 
-config = profile["app"]["signingConfigs"][0]["material"]
-basePath = Path(config["certpath"]).parent
+signingConfigs = profile["app"]["signingConfigs"]
+selected = signingConfigs[0]
+if signingConfigName:
+    selected = next(
+        (item for item in signingConfigs if item.get("name") == signingConfigName),
+        None,
+    )
+    if selected is None:
+        raise ValueError(f"signing config not found: {signingConfigName}")
+config = selected["material"]
+
+def material_path(value):
+    path = Path(value)
+    return path if path.is_absolute() else (profilePath.parent / path).resolve()
+
+certPath = material_path(config["certpath"])
+profileFile = material_path(config["profile"])
+storeFile = material_path(config["storeFile"])
+basePath = certPath.parent
 sdkToolDir = os.environ['TOOL_HOME']
 
 # Decrypt passwords using sign.js
@@ -25,20 +44,20 @@ keystorePwd = subprocess.check_output(
     ["node", "sign.js", str(basePath.absolute()), config["storePassword"]], encoding="utf-8"
 ).strip()
 
-# Build signing command
+# Build the signing command without a shell. Do not log the decrypted
+# passwords: CI/build logs are part of the release threat model.
 jar = f"{sdkToolDir}/sdk/default/openharmony/toolchains/lib/hap-sign-tool.jar"
-cmd = (
-    f"java -jar {jar} sign-app "
-    f"-keyAlias {config['keyAlias']} "
-    f"-signAlg {config['signAlg']} "
-    f"-mode localSign "
-    f"-appCertFile {config['certpath']} "
-    f"-profileFile {config['profile']} "
-    f"-inFile {inFile} "
-    f"-keystoreFile {config['storeFile']} "
-    f"-outFile {outFile} "
-    f"-keyPwd {keyPwd} "
-    f"-keystorePwd {keystorePwd}"
-)
-print(cmd)
-os.system(cmd)
+cmd = [
+    "java", "-jar", jar, "sign-app",
+    "-keyAlias", config["keyAlias"],
+    "-signAlg", config["signAlg"],
+    "-mode", "localSign",
+    "-appCertFile", str(certPath),
+    "-profileFile", str(profileFile),
+    "-inFile", inFile,
+    "-keystoreFile", str(storeFile),
+    "-outFile", outFile,
+    "-keyPwd", keyPwd,
+    "-keystorePwd", keystorePwd,
+]
+subprocess.run(cmd, check=True)
