@@ -6,6 +6,7 @@
     "pages/InputLayoutEditor",
     "pages/SingleAppWindow",
     "pages/WineWindow",
-    "pages/DesktopWindow"
+    "pages/DesktopWindow",
+    "pages/WinePopup"
   ]
 }
