@@ -274,12 +274,18 @@ static void xs_get_toplevel(wl_client* client, wl_resource* xsRes, uint32_t id) 
             td->toplevelId = sd->toplevelId;
             WaylandServer::GetInstance()->RegisterToplevelResource(sd->toplevelId, tl);
             const std::string sessionId = FindSessionIdForClientPid(sd->clientPid);
+            sd->sessionId = sessionId;
             AssociateToplevelWithSession(sessionId, sd->clientPid, sd->toplevelId);
             const std::string initialJson =
                 "{\"w\":640,\"h\":480,\"clientPid\":" + std::to_string(sd->clientPid) +
                 ",\"sessionId\":\"" + JsonEscape(sessionId) +
                 "\",\"title\":\"" + JsonEscape(sd->title) + "\"}";
-            WaylandServer::GetInstance()->FireToplevelEvent(sd->toplevelId, "created", initialJson.c_str());
+            // PC 模式: created 延迟到首帧 commit (此时才知 wl_shm 格式,
+            // ARGB 异型窗口需走子窗口路线而非 ability, 见 surface_commit)
+            if (WaylandServer::GetInstance()->IsDesktopMode()) {
+                WaylandServer::GetInstance()->FireToplevelEvent(
+                    sd->toplevelId, "created", initialJson.c_str());
+            }
         }
     }
 
