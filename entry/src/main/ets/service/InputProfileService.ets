@@ -1,6 +1,6 @@
 import preferences from '@ohos.data.preferences';
 import { common } from '@kit.AbilityKit';
-import { InputProfile, createDefaultInputProfile } from '../model/AppModels';
+import { InputProfile, VirtualControlDescriptor, createDefaultInputProfile } from '../model/AppModels';
 
 const STORE_NAME = 'vintage_pomelo_input_profiles';
 const PROFILES_KEY = 'profiles_v1';
@@ -9,6 +9,25 @@ export class InputProfileService {
   private static instance: InputProfileService | null = null;
   private store: preferences.Preferences | null = null;
   private profiles: Map<string, InputProfile> = new Map<string, InputProfile>();
+
+  private cloneProfile(profile: InputProfile, profileId?: string, profileName?: string): InputProfile {
+    return {
+      id: profileId ?? profile.id,
+      name: profileName ?? profile.name,
+      buttonOpacity: profile.buttonOpacity,
+      stickDeadzone: profile.stickDeadzone,
+      controls: profile.controls.map((control: VirtualControlDescriptor): VirtualControlDescriptor => ({
+        id: control.id,
+        label: control.label,
+        kind: control.kind,
+        evdevCode: control.evdevCode,
+        xPercent: control.xPercent,
+        yPercent: control.yPercent,
+        size: control.size,
+        opacity: control.opacity
+      }))
+    };
+  }
 
   static getInstance(): InputProfileService {
     if (!InputProfileService.instance) InputProfileService.instance = new InputProfileService();
@@ -30,14 +49,23 @@ export class InputProfileService {
   }
 
   getProfile(id: string): InputProfile {
-    return this.profiles.get(id) ?? this.profiles.get('default') ?? createDefaultInputProfile();
+    const profile = this.profiles.get(id) ?? this.profiles.get('default') ?? createDefaultInputProfile();
+    return this.cloneProfile(profile);
+  }
+
+  ensureProfile(id: string, name: string): InputProfile {
+    const profile = this.profiles.get(id);
+    if (profile) return this.cloneProfile(profile);
+    const base = this.profiles.get('default') ?? createDefaultInputProfile();
+    return this.cloneProfile(base, id, name);
   }
 
   async saveProfile(profile: InputProfile): Promise<void> {
-    this.profiles.set(profile.id, profile);
+    const normalized = this.cloneProfile(profile);
+    this.profiles.set(normalized.id, normalized);
     if (!this.store) return;
     const values: InputProfile[] = [];
-    this.profiles.forEach((value: InputProfile) => values.push(value));
+    this.profiles.forEach((value: InputProfile) => values.push(this.cloneProfile(value)));
     await this.store.put(PROFILES_KEY, JSON.stringify(values));
     await this.store.flush();
   }

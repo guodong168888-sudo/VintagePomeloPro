@@ -7,17 +7,46 @@ import {
   VirtualControlKind,
   createDefaultInputProfile
 } from '../model/AppModels';
+import { AppSettingsStore } from '../service/AppSettingsStore';
 import { InputProfileService } from '../service/InputProfileService';
 
 @Entry
 @Component
 struct InputLayoutEditor {
   @State private profile: InputProfile = createDefaultInputProfile();
+  @State private profileId: string = 'default';
+  @State private profileName: string = '默认键鼠手柄';
+  @State private appId: string = '';
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
 
+  private resetToDefault(): void {
+    const defaults = createDefaultInputProfile();
+    this.profile = {
+      id: this.profileId,
+      name: this.profileName,
+      buttonOpacity: defaults.buttonOpacity,
+      stickDeadzone: defaults.stickDeadzone,
+      controls: defaults.controls.map((control: VirtualControlDescriptor): VirtualControlDescriptor => ({
+        id: control.id,
+        label: control.label,
+        kind: control.kind,
+        evdevCode: control.evdevCode,
+        xPercent: control.xPercent,
+        yPercent: control.yPercent,
+        size: control.size,
+        opacity: control.opacity
+      }))
+    };
+  }
+
   aboutToAppear(): void {
+    const params = (router.getParams() as Record<string, string> | undefined) ?? {};
+    this.profileId = params.profileId ?? 'default';
+    this.profileName = params.profileName ?? (this.profileId === 'default' ? '默认键鼠手柄' : '应用专用布局');
+    this.appId = params.appId ?? '';
     InputProfileService.getInstance().initialize(this.context).then(() => {
-      this.profile = InputProfileService.getInstance().getProfile('default');
+      this.profile = InputProfileService.getInstance().ensureProfile(this.profileId, this.profileName);
+      this.profileName = this.profile.name;
     });
   }
 
@@ -46,6 +75,20 @@ struct InputLayoutEditor {
 
   private async save(): Promise<void> {
     await InputProfileService.getInstance().saveProfile(this.profile);
+    if (this.appId) {
+      const current = AppSettingsStore.getInstance().getAppSettings(this.appId);
+      await AppSettingsStore.getInstance().saveAppSettings({
+        appId: current.appId,
+        customTitle: current.customTitle,
+        customCover: current.customCover,
+        executable: current.executable,
+        arguments: current.arguments,
+        workingDirectory: current.workingDirectory,
+        displayModeOverride: current.displayModeOverride,
+        inputProfileId: this.profile.id,
+        prefixId: current.prefixId
+      });
+    }
     promptAction.showToast({ message: '虚拟按键布局已保存' });
     router.back();
   }
@@ -55,10 +98,10 @@ struct InputLayoutEditor {
       Row() {
         Button('‹').type(ButtonType.Circle).width(38).height(38).backgroundColor('#00000000').onClick(() => router.back())
         Column({ space: 2 }) {
-          Text('虚拟按键布局').fontSize(24).fontWeight(FontWeight.Bold)
+          Text(this.profileName).fontSize(24).fontWeight(FontWeight.Bold)
           Text('位置、大小、透明度与 evdev 映射').fontSize(11).fontColor($r('app.color.text_secondary'))
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-        Button('恢复默认').backgroundColor($r('app.color.search_background')).fontColor($r('app.color.text_primary')).onClick(() => this.profile = createDefaultInputProfile())
+        Button('恢复默认').backgroundColor($r('app.color.search_background')).fontColor($r('app.color.text_primary')).onClick(() => this.resetToDefault())
         Button('保存').onClick(() => this.save())
       }.height(68).width('100%')
 

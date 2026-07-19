@@ -6,7 +6,7 @@ import { common } from '@kit.AbilityKit';
 import { GlobalSettings, InputProfile, createDefaultGlobalSettings, createDefaultInputProfile } from '../model/AppModels';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { InputRouter } from '../service/InputRouter';
-import { GamepadConnectionListener, GamepadManager } from '../service/GamepadManager';
+import { GamepadActivityListener, GamepadConnectionListener, GamepadManager } from '../service/GamepadManager';
 import { InputProfileService } from '../service/InputProfileService';
 import { WineWindowManager } from '../service/WineWindowManager';
 import { AppSessionService } from '../service/AppSessionService';
@@ -55,9 +55,11 @@ struct SingleAppWindow {
   @State private hardwareInputActive: boolean = false;
   private controller: SingleAppController = new SingleAppController();
   private gamepadConnectionCallback: GamepadConnectionListener | null = null;
+  private gamepadActivityCallback: GamepadActivityListener | null = null;
 
   aboutToAppear(): void {
     this.settings = AppSettingsStore.getInstance().getGlobalSettings();
+    this.hardwareInputActive = false;
     InputProfileService.getInstance().initialize(getContext(this) as common.UIAbilityContext).then(() => {
       const session = AppSessionService.getInstance().getSession(this.sessionId);
       const profileId = session ? AppSettingsStore.getInstance().getAppSettings(session.appId).inputProfileId : 'default';
@@ -65,9 +67,13 @@ struct SingleAppWindow {
     });
     GamepadManager.getInstance().initialize(this.settings.gamepadDeadzone);
     this.gamepadConnectionCallback = (connected: boolean): void => {
-      if (connected) this.hardwareInputActive = true;
+      if (!connected) this.hardwareInputActive = false;
+    };
+    this.gamepadActivityCallback = (): void => {
+      this.hardwareInputActive = true;
     };
     GamepadManager.getInstance().subscribeConnection(this.gamepadConnectionCallback);
+    GamepadManager.getInstance().subscribeActivity(this.gamepadActivityCallback);
     this.controller.switchToplevel(this.toplevelId);
     InputRouter.getInstance().setActiveToplevel(this.toplevelId);
   }
@@ -75,6 +81,9 @@ struct SingleAppWindow {
   aboutToDisappear(): void {
     if (this.gamepadConnectionCallback) {
       GamepadManager.getInstance().unsubscribeConnection(this.gamepadConnectionCallback);
+    }
+    if (this.gamepadActivityCallback) {
+      GamepadManager.getInstance().unsubscribeActivity(this.gamepadActivityCallback);
     }
     GamepadManager.getInstance().releaseAll();
     InputRouter.getInstance().releaseAllKeys();

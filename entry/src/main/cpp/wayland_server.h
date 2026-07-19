@@ -100,6 +100,15 @@ public:
     bool IsToplevelVisible(uint32_t id);
     // Desktop 模式: 在合成帧中查找包含 (x,y) 的 toplevel (用于输入路由)
     uint32_t FindToplevelAt(int x, int y);
+    struct InputTarget {
+        uint32_t toplevelId = 0;
+        wl_resource* surface = nullptr;
+        int originX = 0, originY = 0;
+        float scale = 1.0f;
+        bool swallow = false;
+    };
+    bool FindInputTargetAt(int x, int y, InputTarget& out);
+    bool IsSurfaceAlive(wl_resource* surface);
     // Desktop 模式: 提到 Z-order 最顶层
     void RaiseToplevel(uint32_t id);
     // 读取 toplevel 桌面坐标 (InputManager 坐标转换用)

@@ -8,7 +8,7 @@ import { VirtualControls } from '../components/VirtualControls';
 import { GlobalSettings, InputProfile, createDefaultGlobalSettings, createDefaultInputProfile } from '../model/AppModels';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { InputRouter } from '../service/InputRouter';
-import { GamepadConnectionListener, GamepadManager } from '../service/GamepadManager';
+import { GamepadActivityListener, GamepadConnectionListener, GamepadManager } from '../service/GamepadManager';
 import { InputProfileService } from '../service/InputProfileService';
 
 const DOMAIN = 0x0000;
@@ -50,6 +50,7 @@ struct DesktopPage {
   @State private inputProfile: InputProfile = createDefaultInputProfile();
   @State private hardwareInputActive: boolean = false;
   private gamepadConnectionCallback: GamepadConnectionListener | null = null;
+  private gamepadActivityCallback: GamepadActivityListener | null = null;
   // 触控状态机: IDLE → PENDING → (DRAGGING | 长按 | 点击)
   // 双指进入 SCROLLING 模式, 覆盖单指状态
   private touchPending: boolean = false;
@@ -86,20 +87,28 @@ struct DesktopPage {
 
   aboutToAppear(): void {
     this.settings = AppSettingsStore.getInstance().getGlobalSettings();
+    this.hardwareInputActive = false;
     InputProfileService.getInstance().initialize(getContext(this) as common.UIAbilityContext).then(() => {
       this.inputProfile = InputProfileService.getInstance().getProfile('default');
     });
     GamepadManager.getInstance().initialize(this.settings.gamepadDeadzone);
     this.gamepadConnectionCallback = (connected: boolean): void => {
-      if (connected) this.hardwareInputActive = true;
+      if (!connected) this.hardwareInputActive = false;
+    };
+    this.gamepadActivityCallback = (): void => {
+      this.hardwareInputActive = true;
     };
     GamepadManager.getInstance().subscribeConnection(this.gamepadConnectionCallback);
+    GamepadManager.getInstance().subscribeActivity(this.gamepadActivityCallback);
     InputRouter.getInstance().setActiveToplevel(WineWindowManager.getInstance().getDesktopRootId());
   }
 
   aboutToDisappear(): void {
     if (this.gamepadConnectionCallback) {
       GamepadManager.getInstance().unsubscribeConnection(this.gamepadConnectionCallback);
+    }
+    if (this.gamepadActivityCallback) {
+      GamepadManager.getInstance().unsubscribeActivity(this.gamepadActivityCallback);
     }
     GamepadManager.getInstance().releaseAll();
     InputRouter.getInstance().releaseAllKeys();

@@ -18,8 +18,21 @@ struct AppSettingsPage {
   @State private value: StoredAppSettings = createDefaultAppSettings('');
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
 
+  private currentProfileId(): string {
+    return this.value.inputProfileId || 'default';
+  }
+
+  private profileEditorId(): string {
+    return this.currentProfileId() === 'default' ? 'app-' + this.value.appId : this.currentProfileId();
+  }
+
+  private profileEditorName(): string {
+    const title = this.value.customTitle || this.app?.title || '应用';
+    return title + ' 键鼠手柄布局';
+  }
+
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, string>;
+    const params = (router.getParams() as Record<string, string> | undefined) ?? {};
     const appId = params.appId ?? '';
     this.app = AppCatalogService.getInstance().getApps().find((item: AppDescriptor) => item.id === appId) ?? null;
     this.value = AppSettingsStore.getInstance().getAppSettings(appId);
@@ -108,6 +121,29 @@ struct AppSettingsPage {
     });
   }
 
+  private async editInputProfile(): Promise<void> {
+    const profileId = this.profileEditorId();
+    this.value = {
+      appId: this.value.appId,
+      customTitle: this.value.customTitle,
+      customCover: this.value.customCover,
+      executable: this.value.executable,
+      arguments: this.value.arguments,
+      workingDirectory: this.value.workingDirectory,
+      displayModeOverride: this.value.displayModeOverride,
+      inputProfileId: profileId,
+      prefixId: this.value.prefixId
+    };
+    router.pushUrl({
+      url: 'pages/InputLayoutEditor',
+      params: {
+        appId: this.value.appId,
+        profileId: profileId,
+        profileName: this.profileEditorName()
+      }
+    });
+  }
+
   @Builder
   private Field(label: string, value: string, onChange: (value: string) => void) {
     Column({ space: 7 }) {
@@ -146,6 +182,17 @@ struct AppSettingsPage {
               Button('桌面模式').layoutWeight(1).backgroundColor(this.value.displayModeOverride === DisplayMode.DESKTOP ? $r('app.color.accent') : $r('app.color.search_background')).onClick(() => this.replace(this.value.customTitle, this.value.customCover, this.value.executable, this.value.workingDirectory, DisplayMode.DESKTOP))
               Button('单应用').layoutWeight(1).backgroundColor(this.value.displayModeOverride === DisplayMode.SINGLE_APP ? $r('app.color.accent') : $r('app.color.search_background')).onClick(() => this.replace(this.value.customTitle, this.value.customCover, this.value.executable, this.value.workingDirectory, DisplayMode.SINGLE_APP))
             }.width('100%')
+          }.width('100%').padding(20).backgroundColor($r('app.color.card_background')).borderRadius(16)
+
+          Column({ space: 12 }) {
+            Text('输入映射').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
+            Text(this.currentProfileId() === 'default' ? '当前使用默认键鼠手柄布局' : '当前使用应用专用键鼠手柄布局')
+              .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
+            Button('编辑虚拟按键 / 虚拟鼠标 / 手柄映射')
+              .width('100%')
+              .backgroundColor($r('app.color.search_background'))
+              .fontColor($r('app.color.text_primary'))
+              .onClick(() => this.editInputProfile())
           }.width('100%').padding(20).backgroundColor($r('app.color.card_background')).borderRadius(16)
 
           if (this.app && !this.app.available) {

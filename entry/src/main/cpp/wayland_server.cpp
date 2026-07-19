@@ -1866,6 +1866,12 @@ void WaylandServer::SendToplevelClose(uint32_t toplevelId) {
 }
 
 uint32_t WaylandServer::FindToplevelAt(int x, int y) {
+    InputTarget target;
+    FindInputTargetAt(x, y, target);
+    return target.toplevelId;
+}
+
+bool WaylandServer::FindInputTargetAt(int x, int y, InputTarget& out) {
     std::lock_guard<std::mutex> lk(toplevelMutex_);
     uint32_t rootId = desktopRootToplevelId_;
 
@@ -1888,7 +1894,18 @@ uint32_t WaylandServer::FindToplevelAt(int x, int y) {
         int layerX = 0, layerY = 0;
         ResolveSubsurfaceLayerPositionLocked(*it, layerX, layerY);
         if (x >= layerX && x < layerX + it->w && y >= layerY && y < layerY + it->h) {
-            return it->isExternal ? rootId : it->parentToplevel;
+            if (it->isExternal) {
+                out.toplevelId = rootId;
+                out.surface = GetSurfaceForToplevel(rootId);
+                out.originX = 0;
+                out.originY = 0;
+            } else {
+                out.toplevelId = it->parentToplevel;
+                out.surface = it->surface;
+                out.originX = layerX;
+                out.originY = layerY;
+            }
+            return out.surface != nullptr;
         }
     }
 
@@ -1905,10 +1922,28 @@ uint32_t WaylandServer::FindToplevelAt(int x, int y) {
                 auto* sd = static_cast<SurfaceData*>(wl_resource_get_user_data(surf));
                 if (sd && sd->inputRegionEmpty) continue;
             }
-            return id;
+            out.toplevelId = id;
+            out.surface = surf;
+            out.originX = tx;
+            out.originY = ty;
+            return out.surface != nullptr;
         }
     }
-    return rootId;
+    out.toplevelId = rootId;
+    out.surface = GetSurfaceForToplevel(rootId);
+    out.originX = 0;
+    out.originY = 0;
+    return out.surface != nullptr;
+}
+
+bool WaylandServer::IsSurfaceAlive(wl_resource* surface) {
+    if (!surface) return false;
+    std::lock_guard<std::mutex> lk(toplevelMutex_);
+    for (const auto& [surfaceKey, resource] : surfaceResources_) {
+        (void)surfaceKey;
+        if (resource == surface) return true;
+    }
+    return false;
 }
 
 bool WaylandServer::IsToplevelVisible(uint32_t id) {

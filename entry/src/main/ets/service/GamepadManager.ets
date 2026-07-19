@@ -9,6 +9,7 @@ const BUTTON_TO_EVDEV: Map<number, number> = new Map<number, number>([
 ]);
 
 export type GamepadConnectionListener = (connected: boolean) => void;
+export type GamepadActivityListener = () => void;
 
 export class GamepadManager {
   private static instance: GamepadManager | null = null;
@@ -19,6 +20,7 @@ export class GamepadManager {
   private axisKeys: Set<number> = new Set<number>();
   private connected: boolean = false;
   private connectionListeners: Set<GamepadConnectionListener> = new Set<GamepadConnectionListener>();
+  private activityListeners: Set<GamepadActivityListener> = new Set<GamepadActivityListener>();
 
   static getInstance(): GamepadManager {
     if (!GamepadManager.instance) GamepadManager.instance = new GamepadManager();
@@ -66,6 +68,18 @@ export class GamepadManager {
     this.connectionListeners.delete(listener);
   }
 
+  subscribeActivity(listener: GamepadActivityListener): void {
+    this.activityListeners.add(listener);
+  }
+
+  unsubscribeActivity(listener: GamepadActivityListener): void {
+    this.activityListeners.delete(listener);
+  }
+
+  private notifyActivity(): void {
+    this.activityListeners.forEach((listener: GamepadActivityListener) => listener());
+  }
+
   setDeadzone(percent: number): void {
     this.deadzone = Math.max(0, Math.min(0.5, percent / 100));
   }
@@ -75,9 +89,11 @@ export class GamepadManager {
     if (!evdev) return false;
     if (pressed && !this.pressed.has(evdev)) {
       this.pressed.add(evdev);
+      this.notifyActivity();
       this.sink.onButton(evdev, true);
     } else if (!pressed && this.pressed.has(evdev)) {
       this.pressed.delete(evdev);
+      this.notifyActivity();
       this.sink.onButton(evdev, false);
     }
     return true;
@@ -86,7 +102,10 @@ export class GamepadManager {
   handleRightStick(x: number, y: number): void {
     const dx = Math.abs(x) >= this.deadzone ? Math.round(x * 18) : 0;
     const dy = Math.abs(y) >= this.deadzone ? Math.round(y * 18) : 0;
-    if (dx !== 0 || dy !== 0) this.sink.onPointerDelta(dx, dy);
+    if (dx !== 0 || dy !== 0) {
+      this.notifyActivity();
+      this.sink.onPointerDelta(dx, dy);
+    }
   }
 
   private setAxisKey(code: number, pressed: boolean): void {
@@ -101,6 +120,8 @@ export class GamepadManager {
       this.handleRightStick(x, y);
       return;
     }
+    const active = Math.abs(x) >= this.deadzone || Math.abs(y) >= this.deadzone;
+    if (active) this.notifyActivity();
     if (axisType === 0) {
       this.setAxisKey(30, x < -this.deadzone);
       this.setAxisKey(32, x > this.deadzone);
