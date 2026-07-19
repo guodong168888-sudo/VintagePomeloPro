@@ -63,7 +63,9 @@ struct SingleAppWindow {
     InputProfileService.getInstance().initialize(getContext(this) as common.UIAbilityContext).then(() => {
       const session = AppSessionService.getInstance().getSession(this.sessionId);
       const profileId = session ? AppSettingsStore.getInstance().getAppSettings(session.appId).inputProfileId : 'default';
-      this.inputProfile = InputProfileService.getInstance().getProfile(profileId);
+      const profile = InputProfileService.getInstance().getProfile(profileId);
+      this.inputProfile = profile;
+      GamepadManager.getInstance().setButtonMappings(profile.gamepadMappings);
     });
     GamepadManager.getInstance().initialize(this.settings.gamepadDeadzone);
     this.gamepadConnectionCallback = (connected: boolean): void => {

@@ -3,6 +3,7 @@ import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import {
   InputProfile,
+  GamepadButtonMapping,
   VirtualControlDescriptor,
   VirtualControlKind,
   createDefaultInputProfile
@@ -26,6 +27,12 @@ struct InputLayoutEditor {
       name: this.profileName,
       buttonOpacity: defaults.buttonOpacity,
       stickDeadzone: defaults.stickDeadzone,
+      gamepadMappings: defaults.gamepadMappings.map((mapping: GamepadButtonMapping): GamepadButtonMapping => ({
+        id: mapping.id,
+        label: mapping.label,
+        buttonCode: mapping.buttonCode,
+        evdevCode: mapping.evdevCode
+      })),
       controls: defaults.controls.map((control: VirtualControlDescriptor): VirtualControlDescriptor => ({
         id: control.id,
         label: control.label,
@@ -69,7 +76,27 @@ struct InputLayoutEditor {
       name: this.profile.name,
       buttonOpacity: this.profile.buttonOpacity,
       stickDeadzone: this.profile.stickDeadzone,
+      gamepadMappings: this.profile.gamepadMappings,
       controls: controls
+    };
+  }
+
+  private updateGamepadMapping(index: number, evdevCode: number): void {
+    const mappings: GamepadButtonMapping[] = this.profile.gamepadMappings.slice();
+    const current = mappings[index];
+    mappings[index] = {
+      id: current.id,
+      label: current.label,
+      buttonCode: current.buttonCode,
+      evdevCode: evdevCode
+    };
+    this.profile = {
+      id: this.profile.id,
+      name: this.profile.name,
+      buttonOpacity: this.profile.buttonOpacity,
+      stickDeadzone: this.profile.stickDeadzone,
+      gamepadMappings: mappings,
+      controls: this.profile.controls
     };
   }
 
@@ -107,6 +134,23 @@ struct InputLayoutEditor {
 
       Scroll() {
         Column({ space: 12 }) {
+          Text('实体手柄映射').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
+          Text('手柄按键会转换为 Wine 可识别的 evdev 键码；摇杆与十字键继续按死区设置处理。')
+            .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
+          ForEach(this.profile.gamepadMappings, (mapping: GamepadButtonMapping, index: number) => {
+            Row({ space: 12 }) {
+              Column({ space: 2 }) {
+                Text(mapping.label).fontSize(15).fontWeight(FontWeight.Medium)
+                Text('物理代码 ' + mapping.buttonCode).fontSize(11).fontColor($r('app.color.text_secondary'))
+              }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+              TextInput({ text: mapping.evdevCode.toString() })
+                .width(94).height(40).type(InputType.Number)
+                .onChange((value: string) => this.updateGamepadMapping(index, Number(value) || 0))
+            }
+            .width('100%').padding(14).backgroundColor($r('app.color.card_background')).borderRadius(14)
+          }, (mapping: GamepadButtonMapping) => mapping.id)
+
+          Text('虚拟按键与鼠标布局').fontSize(18).fontWeight(FontWeight.Medium).width('100%').margin({ top: 12 })
           ForEach(this.profile.controls, (control: VirtualControlDescriptor, index: number) => {
             Column({ space: 10 }) {
               Row() {

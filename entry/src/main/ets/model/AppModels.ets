@@ -127,6 +127,7 @@ export interface InputProfile {
   buttonOpacity: number;
   stickDeadzone: number;
   controls: VirtualControlDescriptor[];
+  gamepadMappings: GamepadButtonMapping[];
 }
 
 export enum VirtualControlKind {
@@ -147,6 +148,13 @@ export interface VirtualControlDescriptor {
   yPercent: number;
   size: number;
   opacity: number;
+}
+
+export interface GamepadButtonMapping {
+  id: string;
+  label: string;
+  buttonCode: number;
+  evdevCode: number;
 }
 
 export function normalizeLaunchPath(path: string): string {
@@ -198,6 +206,25 @@ export function createDefaultInputProfile(): InputProfile {
     name: '默认键鼠手柄',
     buttonOpacity: 72,
     stickDeadzone: 18,
+    gamepadMappings: [
+      { id: 'dpad-up', label: '方向键 ↑', buttonCode: 2012, evdevCode: 103 },
+      { id: 'dpad-down', label: '方向键 ↓', buttonCode: 2013, evdevCode: 108 },
+      { id: 'dpad-left', label: '方向键 ←', buttonCode: 2014, evdevCode: 105 },
+      { id: 'dpad-right', label: '方向键 →', buttonCode: 2015, evdevCode: 106 },
+      { id: 'a', label: 'A / 确认', buttonCode: 2301, evdevCode: 28 },
+      { id: 'b', label: 'B / 返回', buttonCode: 2302, evdevCode: 1 },
+      { id: 'x', label: 'X', buttonCode: 2304, evdevCode: 42 },
+      { id: 'y', label: 'Y', buttonCode: 2305, evdevCode: 29 },
+      { id: 'l1', label: 'L1', buttonCode: 2307, evdevCode: 16 },
+      { id: 'r1', label: 'R1', buttonCode: 2308, evdevCode: 18 },
+      { id: 'l2', label: 'L2', buttonCode: 2309, evdevCode: 15 },
+      { id: 'r2', label: 'R2', buttonCode: 2310, evdevCode: 57 },
+      { id: 'select', label: 'Select', buttonCode: 2311, evdevCode: 1 },
+      { id: 'start', label: 'Start', buttonCode: 2312, evdevCode: 28 },
+      { id: 'l3', label: 'L3', buttonCode: 2313, evdevCode: 1 },
+      { id: 'r3', label: 'R3', buttonCode: 2314, evdevCode: 56 },
+      { id: 'home', label: 'Home', buttonCode: 2315, evdevCode: 57 }
+    ],
     controls: [
       { id: 'l2', label: 'L2', kind: VirtualControlKind.BUTTON, evdevCode: 15, xPercent: 3, yPercent: 4, size: 52, opacity: 78 },
       { id: 'l1', label: 'L1', kind: VirtualControlKind.BUTTON, evdevCode: 16, xPercent: 10, yPercent: 4, size: 52, opacity: 78 },

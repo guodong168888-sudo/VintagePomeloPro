@@ -1,6 +1,6 @@
 import preferences from '@ohos.data.preferences';
 import { common } from '@kit.AbilityKit';
-import { InputProfile, VirtualControlDescriptor, createDefaultInputProfile } from '../model/AppModels';
+import { GamepadButtonMapping, InputProfile, VirtualControlDescriptor, createDefaultInputProfile } from '../model/AppModels';
 
 const STORE_NAME = 'vintage_pomelo_input_profiles';
 const PROFILES_KEY = 'profiles_v1';
@@ -11,11 +11,19 @@ export class InputProfileService {
   private profiles: Map<string, InputProfile> = new Map<string, InputProfile>();
 
   private cloneProfile(profile: InputProfile, profileId?: string, profileName?: string): InputProfile {
+    const defaults = createDefaultInputProfile();
     return {
       id: profileId ?? profile.id,
       name: profileName ?? profile.name,
       buttonOpacity: profile.buttonOpacity,
       stickDeadzone: profile.stickDeadzone,
+      gamepadMappings: (profile.gamepadMappings ?? defaults.gamepadMappings)
+        .map((mapping: GamepadButtonMapping): GamepadButtonMapping => ({
+          id: mapping.id,
+          label: mapping.label,
+          buttonCode: mapping.buttonCode,
+          evdevCode: mapping.evdevCode
+        })),
       controls: profile.controls.map((control: VirtualControlDescriptor): VirtualControlDescriptor => ({
         id: control.id,
         label: control.label,

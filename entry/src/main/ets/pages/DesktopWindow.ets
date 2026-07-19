@@ -89,7 +89,9 @@ struct DesktopPage {
     this.settings = AppSettingsStore.getInstance().getGlobalSettings();
     this.hardwareInputActive = false;
     InputProfileService.getInstance().initialize(getContext(this) as common.UIAbilityContext).then(() => {
-      this.inputProfile = InputProfileService.getInstance().getProfile('default');
+      const profile = InputProfileService.getInstance().getProfile('default');
+      this.inputProfile = profile;
+      GamepadManager.getInstance().setButtonMappings(profile.gamepadMappings);
     });
     GamepadManager.getInstance().initialize(this.settings.gamepadDeadzone);
     this.gamepadConnectionCallback = (connected: boolean): void => {

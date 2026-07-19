@@ -1,12 +1,6 @@
 import { GamepadSink, KeyMouseGamepadSink } from './InputRouter';
+import { GamepadButtonMapping, createDefaultInputProfile } from '../model/AppModels';
 import testNapi from 'libentry.so';
-
-const BUTTON_TO_EVDEV: Map<number, number> = new Map<number, number>([
-  [2012, 103], [2013, 108], [2014, 105], [2015, 106],
-  [2301, 28], [2302, 1], [2304, 42], [2305, 29],
-  [2307, 16], [2308, 18], [2309, 15], [2310, 57],
-  [2311, 1], [2312, 28], [2313, 1], [2314, 56], [2315, 57]
-]);
 
 export type GamepadConnectionListener = (connected: boolean) => void;
 export type GamepadActivityListener = () => void;
@@ -21,6 +15,10 @@ export class GamepadManager {
   private connected: boolean = false;
   private connectionListeners: Set<GamepadConnectionListener> = new Set<GamepadConnectionListener>();
   private activityListeners: Set<GamepadActivityListener> = new Set<GamepadActivityListener>();
+  private buttonMappings: Map<number, number> = new Map<number, number>(
+    createDefaultInputProfile().gamepadMappings.map((mapping: GamepadButtonMapping): [number, number] =>
+      [mapping.buttonCode, mapping.evdevCode])
+  );
 
   static getInstance(): GamepadManager {
     if (!GamepadManager.instance) GamepadManager.instance = new GamepadManager();
@@ -30,6 +28,14 @@ export class GamepadManager {
   setSink(sink: GamepadSink): void {
     this.releaseAll();
     this.sink = sink;
+  }
+
+  setButtonMappings(mappings: GamepadButtonMapping[]): void {
+    this.releaseAll();
+    const source = mappings.length > 0 ? mappings : createDefaultInputProfile().gamepadMappings;
+    this.buttonMappings = new Map<number, number>(
+      source.map((mapping: GamepadButtonMapping): [number, number] => [mapping.buttonCode, mapping.evdevCode])
+    );
   }
 
   initialize(deadzonePercent: number): void {
@@ -85,7 +91,7 @@ export class GamepadManager {
   }
 
   handleKey(keyCode: number, pressed: boolean): boolean {
-    const evdev = BUTTON_TO_EVDEV.get(keyCode);
+    const evdev = this.buttonMappings.get(keyCode);
     if (!evdev) return false;
     if (pressed && !this.pressed.has(evdev)) {
       this.pressed.add(evdev);
