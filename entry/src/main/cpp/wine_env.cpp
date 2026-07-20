@@ -9,19 +9,12 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #undef LOG_TAG
-#undef LOG_DOMAIN
-#define LOG_DOMAIN 0x0000
 #define LOG_TAG "WL_NAPI"
 #include <hilog/log.h>
-
-#ifndef __aarch64__
-namespace {
-constexpr const char* X86_BUNDLED_GUEST_GFX_DIR = "/data/storage/el1/bundle/libs/x86_64";
-}
-#endif
 
 int CreateAudioBootstrapFd(const std::string& runtimeDir) {
     if (!winehua::AudioBroker::GetInstance().EnsureStarted(runtimeDir)) {
@@ -42,7 +35,8 @@ std::vector<std::string> BuildWineEnv(const std::string& sockDir,
                                       const std::string& libPath,
                                       const std::string& binDir,
                                       int audioBootstrapFd,
-                                      const std::string& homeDir) {
+                                      const std::string& homeDir,
+                                      const std::string& prefixDir) {
     std::string shareDir = binDir + "/../share";
     std::string xkbDir = shareDir + "/X11/xkb";
     std::string midiSoundfontPath = binDir + "/../audio/winehua-gm.sf2";
@@ -52,39 +46,23 @@ std::vector<std::string> BuildWineEnv(const std::string& sockDir,
     bool useGuestReceiverRuntime = graphicsState.active == winehua::GraphicsBackend::Virgl;
 
     if (useGuestReceiverRuntime && graphicsState.guestReceiverPresent && !graphicsState.guestReceiverRuntimeDir.empty()) {
-#ifdef __aarch64__
         guestReceiverLibDir = graphicsState.guestReceiverRuntimeDir + "/lib";
-#else
-        const std::string bundledGuestLibDir = X86_BUNDLED_GUEST_GFX_DIR;
-        if (access((bundledGuestLibDir + "/libwinehua_guest_EGL.so").c_str(), R_OK) == 0 &&
-            access((bundledGuestLibDir + "/libgallium-25.0.1.so").c_str(), R_OK) == 0) {
-            guestReceiverLibDir = bundledGuestLibDir;
-        } else {
-            guestReceiverLibDir = graphicsState.guestReceiverRuntimeDir + "/lib";
-        }
-#endif
         if (access(guestReceiverLibDir.c_str(), F_OK) == 0) {
             runtimeLibPath = guestReceiverLibDir + ":" + runtimeLibPath;
         }
     }
 
-    std::string dllPath = binDir + "/x86_64-windows:" + binDir + "/i386-windows:" + binDir;
-#ifndef __aarch64__
-    // x86_64: bundled libs 加入 WINEDLLPATH, load_unixlib_by_name() 从此搜索 .so
-    dllPath += ":/data/storage/el1/bundle/libs/x86_64";
-#endif
-
     std::vector<std::string> env = {
         "XDG_RUNTIME_DIR=" + sockDir,
         "WAYLAND_DISPLAY=" + sockName,
         "HOME=" + homeDir,
-        "WINEPREFIX=" WINE_PREFIX,
+        "WINEPREFIX=" + (prefixDir.empty() ? std::string(WINE_PREFIX) : prefixDir),
         "WINEDATADIR=" + shareDir + "/wine",
         "WINEDLLDIR=" + binDir + "/x86_64-unix",
         "WINEDLLDIR0=" + binDir + "/x86_64-windows",
         "WINEDLLDIR1=" + binDir + "/i386-windows",
         "WINEDLLDIR2=" + binDir,
-        "WINEDLLPATH=" + dllPath,
+        "WINEDLLPATH=" + binDir + "/x86_64-windows:" + binDir + "/i386-windows:" + binDir,
         "WINEDEBUG=-all",
         "LANG=zh_CN.UTF-8",
         "XKB_CONFIG_ROOT=" + xkbDir,
@@ -119,23 +97,105 @@ std::vector<std::string> BuildWineEnv(const std::string& sockDir,
     return env;
 }
 
-std::string SerializeEnvToEntryParams(const std::vector<std::string>& env) {
-    std::string result;
-    for (const std::string& e : env) {
-        // 安全过滤: | 和 \n 会破坏 entryParams 格式
-        if (e.find('|') != std::string::npos ||
-            e.find('\n') != std::string::npos)
-            continue;
-        // 过滤 per-process fd 变量: 子进程会从 fdList 拿到自己的值
-        if (e.rfind("WINESERVERSOCKET=", 0) == 0 ||
-            e.rfind("WINE_OHOS_AUDIO_ENABLE=", 0) == 0 ||
-            e.rfind("WINE_OHOS_AUDIO_BOOTSTRAP_FD=", 0) == 0 ||
-            e.rfind("WINE_OHOS_AUDIO_PROTOCOL_VERSION=", 0) == 0)
-            continue;
-        result += "|__env=";
-        result += e;
+static void UpsertEnvLine(std::vector<std::string>& env, const std::string& line)
+{
+    const size_t sep = line.find('=');
+    if (sep == std::string::npos || sep == 0) return;
+    const std::string key = line.substr(0, sep);
+    for (std::string& existing : env) {
+        if (existing.compare(0, key.size(), key) == 0 &&
+            existing.size() > key.size() && existing[key.size()] == '=') {
+            existing = line;
+            return;
+        }
     }
-    return result;
+    env.push_back(line);
+}
+
+void AppendD3dBackendEnv(std::vector<std::string>& env,
+                         const std::string& d3dBackend,
+                         const std::string& binDir)
+{
+    if (d3dBackend.rfind("dxvk_", 0) != 0) return;
+
+    std::string profile = d3dBackend.substr(strlen("dxvk_"));
+    if (profile.empty()) profile = "legacy";
+    const std::string overlayRoot = std::string(WINE_RUNTIME_ROOT) +
+        "/smoke/dxvk/" + profile;
+    const std::string overlay64 = overlayRoot + "/x64";
+    const std::string overlay86 = overlayRoot + "/x86";
+    const std::string wineDllPath = overlay64 + ":" + overlay86 + ":" +
+        binDir + "/x86_64-windows:" + binDir + "/i386-windows:" + binDir;
+
+    const std::vector<std::string> managed = {
+        "WINEHUA_D3D_BACKEND=" + d3dBackend,
+        "WINEHUA_DXVK_ROOT=" + overlayRoot,
+        "WINEHUA_DXVK_PROFILE=" + profile,
+        "WINEHUA_DXVK_RELAXED_FEATURES=1",
+        "WINEDLLOVERRIDES=d3d11=n;dxgi=n",
+        "DXVK_WINEHUA_COMMAND_QUERY_RESET=1",
+        "DXVK_WINEHUA_FLUSH_DYNAMIC_MAPPED=1",
+        "VN_WINEHUA_REMOTE_MEMORY_SYNC=1",
+        "DXVK_LOG_LEVEL=info",
+        "DXVK_LOG_PATH=C:\\smoke\\results\\desktop-dxvk",
+        "WINEDLLPATH=" + wineDllPath,
+        "WINEDLLDIR0=" + overlay64,
+        "WINEDLLDIR1=" + overlay86,
+    };
+    for (const std::string& line : managed) UpsertEnvLine(env, line);
+}
+
+static bool ShouldSerializeEntryParamEnv(const std::string& envLine) {
+    return envLine.rfind("WINE_OHOS_AUDIO_ENABLE=", 0) != 0 &&
+           envLine.rfind("WINE_OHOS_AUDIO_BOOTSTRAP_FD=", 0) != 0 &&
+           envLine.rfind("WINE_OHOS_AUDIO_PROTOCOL_VERSION=", 0) != 0 &&
+           envLine.rfind("WINESERVERSOCKET=", 0) != 0;
+}
+
+static std::string EnvKey(const std::string& envLine) {
+    size_t sep = envLine.find('=');
+    return sep == std::string::npos ? envLine : envLine.substr(0, sep);
+}
+
+static bool IsBrokerSessionAuthoritativeKey(const std::string& key) {
+    // Explorer may start before VirGL is ready. Replace its early Box64 path
+    // with the finalized path, where guest graphics libraries are a fallback.
+    return key == "BOX64_LD_LIBRARY_PATH";
+}
+
+size_t AppendMissingEntryParamsEnvOverrides(std::string& entryParams,
+                                            const std::vector<std::string>& env) {
+    std::unordered_set<std::string> existingKeys;
+    size_t pos = 0;
+
+    while ((pos = entryParams.find("|__env=", pos)) != std::string::npos) {
+        pos += strlen("|__env=");
+        size_t end = entryParams.find('|', pos);
+        std::string key = EnvKey(entryParams.substr(pos, end == std::string::npos
+                                                          ? std::string::npos
+                                                          : end - pos));
+        if (!key.empty()) existingKeys.insert(std::move(key));
+        if (end == std::string::npos) break;
+        pos = end;
+    }
+
+    size_t appended = 0;
+    for (const std::string& envLine : env) {
+        if (!ShouldSerializeEntryParamEnv(envLine) ||
+            envLine.find('|') != std::string::npos ||
+            envLine.find('\n') != std::string::npos)
+            continue;
+
+        std::string key = EnvKey(envLine);
+        if (key.empty() ||
+            (existingKeys.count(key) && !IsBrokerSessionAuthoritativeKey(key)))
+            continue;
+        entryParams += "|__env=";
+        entryParams += envLine;
+        existingKeys.insert(std::move(key));
+        ++appended;
+    }
+    return appended;
 }
 
 void LogGraphicsBackendStateForLaunch(const char* tag) {

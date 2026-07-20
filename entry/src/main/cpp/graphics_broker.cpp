@@ -440,7 +440,8 @@ bool GraphicsBroker::SendVirglConfigureLocked()
 
 bool GraphicsBroker::SendVirglTargetLocked(uint64_t surfaceKey,
                                            OHNativeWindow* producerWindow,
-                                           uint64_t framePeriodNs)
+                                           uint64_t framePeriodNs,
+                                           uint32_t flags)
 {
     if (!virglIpcConfigured_ || !producerWindow || !surfaceKey)
         return false;
@@ -466,6 +467,8 @@ bool GraphicsBroker::SendVirglTargetLocked(uint64_t surfaceKey,
         writeResult = OH_IPCParcel_WriteInt64(request, static_cast<int64_t>(surfaceKey));
     if (writeResult == OH_IPC_SUCCESS)
         writeResult = OH_IPCParcel_WriteInt64(request, static_cast<int64_t>(framePeriodNs));
+    if (writeResult == OH_IPC_SUCCESS)
+        writeResult = OH_IPCParcel_WriteInt32(request, static_cast<int32_t>(flags));
     if (writeResult == OH_IPC_SUCCESS)
         writeResult = OH_NativeWindow_WriteToParcel(producerWindow, request);
 
@@ -576,7 +579,9 @@ bool GraphicsBroker::AttachZeroCopyTarget(uint64_t surfaceKey,
 
     std::lock_guard<std::mutex> lock(virglIpcMutex_);
     if (zeroCopyAttachedSurfaces_.count(surfaceKey)) return true;
-    if (!SendVirglTargetLocked(surfaceKey, producerWindow, framePeriodNs)) return false;
+    const uint32_t flags = vulkanPresentMode_.load(std::memory_order_acquire)
+        ? virgl_ipc::kSurfaceVulkan : 0;
+    if (!SendVirglTargetLocked(surfaceKey, producerWindow, framePeriodNs, flags)) return false;
     zeroCopyAttachedSurfaces_.insert(surfaceKey);
     return true;
 }
@@ -849,6 +854,11 @@ void GraphicsBroker::SetRequestedBackend(GraphicsBackend backend)
     UpdateActiveBackendLocked();
 }
 
+void GraphicsBroker::SetVulkanPresentMode(bool enabled)
+{
+    vulkanPresentMode_.store(enabled, std::memory_order_release);
+}
+
 GraphicsBackendState GraphicsBroker::GetState() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -903,6 +913,8 @@ void GraphicsBroker::AppendWineEnv(std::vector<std::string>& env) const
     if (!state.lastError.empty()) env.push_back("WINEHUA_GRAPHICS_NOTE=" + state.lastError);
     env.push_back(std::string("WINEHUA_VIRGL_READY=") +
                   ((state.active == GraphicsBackend::Virgl) ? "1" : "0"));
+    if (vulkanPresentMode_.load(std::memory_order_acquire))
+        env.push_back("WINEHUA_VULKAN_PRESENT=1");
     if (state.active == GraphicsBackend::Virgl)
     {
         if (!state.guestReceiverRuntimeDir.empty())
@@ -1023,10 +1035,35 @@ bool GraphicsBroker::IsVirglServerProcessAliveLocked()
     if (virglServerUsesIpc_)
     {
         std::lock_guard<std::mutex> lock(virglIpcMutex_);
+        bool responsive = false;
         if (virglRemoteProxy_ && OH_IPCRemoteProxy_IsRemoteDead(virglRemoteProxy_) == 0)
-            return true;
+        {
+            OHIPCParcel* request = OH_IPCParcel_Create();
+            OHIPCParcel* reply = OH_IPCParcel_Create();
+            int32_t result = request
+                ? OH_IPCParcel_WriteInt32(request, virgl_ipc::kProtocolVersion)
+                : OH_IPC_MEM_ALLOCATOR_ERROR;
+            if (result == OH_IPC_SUCCESS && reply)
+            {
+                OH_IPC_MessageOption option = {OH_IPC_REQUEST_MODE_SYNC, 0, nullptr};
+                result = OH_IPCRemoteProxy_SendRequest(
+                    virglRemoteProxy_, virgl_ipc::kQuerySurfacesRequest,
+                    request, reply, &option);
+            }
+            responsive = result == OH_IPC_SUCCESS;
+            if (reply) OH_IPCParcel_Destroy(reply);
+            if (request) OH_IPCParcel_Destroy(request);
+        }
+        if (responsive) return true;
 
-        lastError_ = "virgl IPC native child process is not running";
+        lastError_ = "virgl IPC native child process is not responding";
+        if (virglRemoteProxy_)
+        {
+            OH_IPCRemoteProxy_Destroy(virglRemoteProxy_);
+            virglRemoteProxy_ = nullptr;
+        }
+        virglIpcConfigured_ = false;
+        virglIpcCallbackComplete_ = false;
         virglServerUsesIpc_ = false;
         virglServerRunning_.store(false, std::memory_order_release);
         virglSocketReady_ = false;

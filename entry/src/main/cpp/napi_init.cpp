@@ -1,5 +1,4 @@
 #include <napi/native_api.h>
-#include "game_controller_bridge.h"
 #include "wayland_server.h"
 #include "plugin_manager.h"
 #include "input_manager.h"
@@ -11,8 +10,9 @@
 #include "wine_env.h"
 #include "wine_process.h"
 #include "wine_launch.h"
+#include "wine_exe.h"
 #include "wine_mmap_test.h"
-#include "ncp_shim/native_child_process.h"
+#include "host_vulkan_probe.h"
 
 #include <unistd.h>
 #include <signal.h>
@@ -24,10 +24,12 @@
 #include <fcntl.h>
 #include <cstdlib>
 #include <cstdio>
+#include <cerrno>
 #include <cstring>
 #include <string>
 #include <thread>
 #include <atomic>
+#include <algorithm>
 #include <dlfcn.h>
 
 #undef LOG_TAG
@@ -110,8 +112,8 @@ static napi_value StartServer(napi_env env, napi_callback_info info) {
 }
 
 static napi_value LaunchClient(napi_env env, napi_callback_info info) {
-    size_t argc = 6;
-    napi_value args[6] = {};
+    size_t argc = 8;
+    napi_value args[8] = {};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
     auto* p = new LaunchParams();
@@ -127,20 +129,29 @@ static napi_value LaunchClient(napi_env env, napi_callback_info info) {
         napi_get_value_string_utf8(env, args[4], buf, sizeof(buf), nullptr);
         p->homeDir = buf;
     }
+    if (argc >= 6) napi_get_value_bool(env, args[5], &p->automationMode);
+    p->prefixDir = WINE_PREFIX;
+    if (argc >= 7) {
+        char prefixMode[32] = {};
+        napi_get_value_string_utf8(env, args[6], prefixMode, sizeof(prefixMode), nullptr);
+        if (!strcmp(prefixMode, "clean")) p->prefixDir = WINE_SMOKE_PREFIX;
+    }
+    if (argc >= 8) {
+        char d3dBackend[64] = {};
+        napi_get_value_string_utf8(env, args[7], d3dBackend, sizeof(d3dBackend), nullptr);
+        if (!strcmp(d3dBackend, "wined3d") || !strncmp(d3dBackend, "dxvk_", 5))
+            p->d3dBackend = d3dBackend;
+    }
     // 向后兼容: 旧调用未传 homeDir 时使用默认路径
     if (p->homeDir.empty()) {
-        p->homeDir = "/storage/Users/currentUser/Download/com.vintage.pomelopro";
-    }
-    if (argc >= 6) {
-        bool forcePrefixRefresh = false;
-        if (napi_get_value_bool(env, args[5], &forcePrefixRefresh) == napi_ok)
-            p->forcePrefixRefresh = forcePrefixRefresh;
+        p->homeDir = "/storage/Users/currentUser/Download";
     }
 
-    OH_LOG_INFO(LOG_APP, "[Launch] exe=%{public}s sock=%{public}s lib=%{public}s home=%{public}s "
-                "prefixRefresh=%{public}s (async)",
+    OH_LOG_INFO(LOG_APP,
+                "[Launch] exe=%{public}s sock=%{public}s lib=%{public}s home=%{public}s prefix=%{public}s automation=%{public}s (async)",
                 p->exePath.c_str(), p->sockPath.c_str(), p->libPath.c_str(), p->homeDir.c_str(),
-                p->forcePrefixRefresh ? "true" : "false");
+                p->prefixDir.c_str(), p->automationMode ? "true" : "false");
+    OH_LOG_INFO(LOG_APP, "[Launch] desktop D3D backend=%{public}s", p->d3dBackend.c_str());
 
     // 保证可执行
     if (access(p->exePath.c_str(), X_OK) != 0) chmod(p->exePath.c_str(), 0755);
@@ -164,44 +175,110 @@ static napi_value LaunchClient(napi_env env, napi_callback_info info) {
     return r;
 }
 
-napi_value RunWineExe(napi_env env, napi_callback_info info);
-napi_value RunWineExeLegacy(napi_env env, napi_callback_info info);
-
 // -- NAPI: checkWinePrefix -- 检测 .wine 是否已完整初始化 --
 static napi_value CheckWinePrefix(napi_env env, napi_callback_info info) {
-    bool ok = IsWinePrefixInitialized();
-    OH_LOG_INFO(LOG_APP, "[Wine] checkWinePrefix: initialized=%{public}s", ok ? "yes" : "no");
+    size_t argc = 1;
+    napi_value args[1] = {};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    std::string prefix = WINE_PREFIX;
+    if (argc >= 1) {
+        char mode[32] = {};
+        napi_get_value_string_utf8(env, args[0], mode, sizeof(mode), nullptr);
+        if (!strcmp(mode, "clean")) prefix = WINE_SMOKE_PREFIX;
+    }
+    bool ok = IsWinePrefixInitialized(prefix);
+    OH_LOG_INFO(LOG_APP, "[Wine] checkWinePrefix prefix=%{public}s initialized=%{public}s",
+                prefix.c_str(), ok ? "yes" : "no");
     napi_value r;
     napi_get_boolean(env, ok, &r);
     return r;
 }
 
-// -- NAPI: resetWinePrefix -- 一键清空 files/.wine 目录
-static void RmDir(const char* path) {
+// -- NAPI: resetWinePrefix -- 一键清空受管 prefix 目录
+static bool RmDir(const char* path) {
     DIR* d = opendir(path);
-    if (!d) return;
+    if (!d) return errno == ENOENT;
+    bool ok = true;
     dirent* e;
     while ((e = readdir(d))) {
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
         std::string full = std::string(path) + "/" + e->d_name;
         struct stat st;
-        if (stat(full.c_str(), &st) == 0) {
-            if (S_ISDIR(st.st_mode)) RmDir(full.c_str());
-            else unlink(full.c_str());
+        if (lstat(full.c_str(), &st) == 0) {
+            if (S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode)) {
+                if (!RmDir(full.c_str())) ok = false;
+            } else if (unlink(full.c_str()) != 0) {
+                ok = false;
+                OH_LOG_ERROR(LOG_APP, "[NAPI] unlink %{public}s failed: %{public}s",
+                             full.c_str(), strerror(errno));
+            }
+        } else {
+            ok = false;
+            OH_LOG_ERROR(LOG_APP, "[NAPI] lstat %{public}s failed: %{public}s",
+                         full.c_str(), strerror(errno));
         }
     }
     closedir(d);
-    rmdir(path);
+    if (rmdir(path) != 0 && errno != ENOENT) {
+        ok = false;
+        OH_LOG_ERROR(LOG_APP, "[NAPI] rmdir %{public}s failed: %{public}s",
+                     path, strerror(errno));
+    }
+    return ok;
 }
 
 static napi_value ResetWinePrefix(napi_env env, napi_callback_info info) {
-    OH_LOG_INFO(LOG_APP, "[NAPI] resetWinePrefix called");
-    KillAllProcesses();
+    size_t argc = 1;
+    napi_value args[1] = {};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     const char* prefix = WINE_PREFIX;
-    RmDir(prefix);
-    mkdir(prefix, 0755);
-    OH_LOG_INFO(LOG_APP, "[NAPI] resetWinePrefix: %{public}s cleared and recreated", prefix);
-    return nullptr;
+    if (argc >= 1) {
+        char mode[32] = {};
+        napi_get_value_string_utf8(env, args[0], mode, sizeof(mode), nullptr);
+        if (!strcmp(mode, "clean")) prefix = WINE_SMOKE_PREFIX;
+    }
+    OH_LOG_INFO(LOG_APP, "[NAPI] resetWinePrefix called prefix=%{public}s", prefix);
+    KillAllProcesses();
+    bool ok = RmDir(prefix);
+    if (mkdir(prefix, 0755) != 0 && errno != EEXIST) {
+        ok = false;
+        OH_LOG_ERROR(LOG_APP, "[NAPI] mkdir %{public}s failed: %{public}s",
+                     prefix, strerror(errno));
+    }
+    OH_LOG_INFO(LOG_APP, "[NAPI] resetWinePrefix: %{public}s %{public}s",
+                prefix, ok ? "cleared and recreated" : "reset failed");
+    napi_value result;
+    napi_get_boolean(env, ok, &result);
+    return result;
+}
+
+static napi_value RunHostVulkanProbe(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2] = {};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    uint64_t surfaceId = 0;
+    bool lossless = false;
+    char runId[128] = {};
+    if (argc < 2 ||
+        napi_get_value_bigint_uint64(env, args[0], &surfaceId, &lossless) != napi_ok || !lossless ||
+        napi_get_value_string_utf8(env, args[1], runId, sizeof(runId), nullptr) != napi_ok) {
+        napi_value result;
+        napi_get_boolean(env, false, &result);
+        return result;
+    }
+    bool started = StartHostVulkanProbe(surfaceId, runId);
+    OH_LOG_INFO(LOG_APP, "[HostVulkan] start surface=%{public}llu run=%{public}s result=%{public}s",
+                static_cast<unsigned long long>(surfaceId), runId, started ? "true" : "false");
+    napi_value result;
+    napi_get_boolean(env, started, &result);
+    return result;
+}
+
+static napi_value StopHostVulkanProbeNapi(napi_env env, napi_callback_info) {
+    StopHostVulkanProbe();
+    napi_value result;
+    napi_get_boolean(env, true, &result);
+    return result;
 }
 
 
@@ -362,21 +439,6 @@ static napi_value ResizeRenderer(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
-// -- NAPI: refreshRenderer -- (Debug overlay 的安全重绘压测)
-static napi_value RefreshRenderer(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    if (argc < 1) {
-        OH_LOG_ERROR(LOG_APP, "[MW-NAPI] refreshRenderer: need toplevelId");
-        return nullptr;
-    }
-    uint32_t tid = 0;
-    napi_get_value_uint32(env, args[0], &tid);
-    PluginManager::GetInstance()->RefreshRenderer(tid);
-    return nullptr;
-}
-
 // -- NAPI: destroyRenderer -- (XComponentController.onSurfaceDestroyed 调用)
 static napi_value DestroyRenderer(napi_env env, napi_callback_info info) {
     size_t argc = 1;
@@ -405,11 +467,13 @@ static napi_value SetOutputSize(napi_env env, napi_callback_info info) {
 }
 
 static napi_value SetDisplayScale(napi_env env, napi_callback_info info) {
-    // The compositor derives the viewport and input transform from its
-    // measured output geometry. Keep this export for the existing ArkTS
-    // callers, but do not revive the removed global renderer scale.
-    (void)env;
-    (void)info;
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    double scale;
+    napi_get_value_double(env, args[0], &scale);
+    EglRenderer::SetGlobalDisplayScale((float)scale);
+    OH_LOG_INFO(LOG_APP, "[MW-NAPI] setDisplayScale = %{public}.2f", scale);
     return nullptr;
 }
 
@@ -426,56 +490,11 @@ static napi_value SetDesktopMode(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
-static napi_value SetForkNcpEnabled(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    if (argc >= 1) {
-        bool enabled = false;
-        napi_get_value_bool(env, args[0], &enabled);
-        winehua::ncp::SetForkBackendEnabled(enabled);
-    }
-    return nullptr;
-}
-
 static napi_value GetDesktopRootId(napi_env env, napi_callback_info) {
     uint32_t id = WaylandServer::GetInstance()->GetDesktopRootToplevelId();
     napi_value r;
     napi_create_uint32(env, id, &r);
     return r;
-}
-
-// -- NAPI: takeWindowMask -- (ARGB 异型窗口剪影掩码, ArkTS 轮询拉取)
-static napi_value TakeWindowMask(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    uint32_t id = 0;
-    if (argc >= 1) {
-        napi_get_value_uint32(env, args[0], &id);
-    }
-    int w = 0, h = 0;
-    std::vector<uint8_t> bits;
-    if (!WaylandServer::GetInstance()->TakeWindowMask(id, w, h, bits)) {
-        return nullptr;
-    }
-    napi_value result, wv, hv, buf;
-    napi_create_object(env, &result);
-    napi_create_int32(env, w, &wv);
-    napi_create_int32(env, h, &hv);
-    void* data = nullptr;
-    napi_create_arraybuffer(env, bits.size(), &data, &buf);
-    if (data && !bits.empty()) {
-        memcpy(data, bits.data(), bits.size());
-    }
-    napi_value wKey, hKey, bufKey;
-    napi_create_string_utf8(env, "w", 1, &wKey);
-    napi_create_string_utf8(env, "h", 1, &hKey);
-    napi_create_string_utf8(env, "buffer", 6, &bufKey);
-    napi_set_property(env, result, wKey, wv);
-    napi_set_property(env, result, hKey, hv);
-    napi_set_property(env, result, bufKey, buf);
-    return result;
 }
 
 // -- Input forwarding NAPI (unified InputManager path) --
@@ -555,9 +574,7 @@ static napi_value RaiseToplevel(napi_env env, napi_callback_info info) {
     if (argc < 1) return nullptr;
     uint32_t tl;
     napi_get_value_uint32(env, args[0], &tl);
-    // 用户显式操作 (任务栏/窗口点击) 路径: 已 fullscreen 的目标会重新取
-    // 全屏优先级号, 支撑两个全屏窗口间的主动切换
-    WaylandServer::GetInstance()->RaiseToplevel(tl, true);
+    WaylandServer::GetInstance()->RaiseToplevel(tl);
     return nullptr;
 }
 
@@ -603,6 +620,8 @@ static napi_value SetToplevelVisible(napi_env env, napi_callback_info info) {
 // -- NAPI: getProcessList — 返回运行中进程列表 --
 static napi_value GetProcessList(napi_env env, napi_callback_info info) {
     auto snapshot = GetProcessListSnapshot();
+    snapshot.erase(std::remove_if(snapshot.begin(), snapshot.end(),
+        [](const WineProcessEntry& entry) { return !entry.running; }), snapshot.end());
 
     napi_value arr;
     napi_create_array_with_length(env, snapshot.size(), &arr);
@@ -612,20 +631,18 @@ static napi_value GetProcessList(napi_env env, napi_callback_info info) {
         napi_value obj;
         napi_create_object(env, &obj);
 
-        napi_value pidVal, nameVal, pathVal, stateVal, sessionVal;
+        napi_value pidVal, nameVal, pathVal, stateVal;
         napi_create_int32(env, entry.pid, &pidVal);
         napi_create_string_utf8(env, entry.exeBasename.c_str(), NAPI_AUTO_LENGTH, &nameVal);
         napi_create_string_utf8(env, entry.exeFullPath.c_str(), NAPI_AUTO_LENGTH, &pathVal);
         napi_create_string_utf8(env, entry.running ? "running" : "exited",
                                 NAPI_AUTO_LENGTH, &stateVal);
-        napi_create_string_utf8(env, entry.sessionId.c_str(), NAPI_AUTO_LENGTH, &sessionVal);
 
         napi_property_descriptor props[] = {
             {"pid",   nullptr, nullptr, nullptr, nullptr, pidVal,   napi_default, nullptr},
             {"name",  nullptr, nullptr, nullptr, nullptr, nameVal,  napi_default, nullptr},
             {"path",  nullptr, nullptr, nullptr, nullptr, pathVal,  napi_default, nullptr},
             {"state", nullptr, nullptr, nullptr, nullptr, stateVal, napi_default, nullptr},
-            {"sessionId", nullptr, nullptr, nullptr, nullptr, sessionVal, napi_default, nullptr},
         };
         napi_define_properties(env, obj, sizeof(props)/sizeof(props[0]), props);
         napi_set_element(env, arr, i, obj);
@@ -654,65 +671,6 @@ static napi_value KillProcess(napi_env env, napi_callback_info info) {
     return r;
 }
 
-static std::string GetStringArgument(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1] = {};
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    if (argc < 1) return "";
-    size_t length = 0;
-    napi_get_value_string_utf8(env, args[0], nullptr, 0, &length);
-    std::string value(length + 1, '\0');
-    napi_get_value_string_utf8(env, args[0], value.data(), value.size(), &length);
-    value.resize(length);
-    return value;
-}
-
-static napi_value GetWineSession(napi_env env, napi_callback_info info) {
-    const std::string sessionId = GetStringArgument(env, info);
-    WineProcessEntry entry{};
-    if (!GetProcessBySessionId(sessionId, &entry)) {
-        napi_value result;
-        napi_get_null(env, &result);
-        return result;
-    }
-    napi_value result, pidValue, sessionValue, pathValue, stateValue, toplevelValue;
-    napi_create_object(env, &result);
-    napi_create_int32(env, entry.pid, &pidValue);
-    napi_create_string_utf8(env, entry.sessionId.c_str(), NAPI_AUTO_LENGTH, &sessionValue);
-    napi_create_string_utf8(env, entry.exeFullPath.c_str(), NAPI_AUTO_LENGTH, &pathValue);
-    napi_create_string_utf8(env, entry.running ? "running" : "exited", NAPI_AUTO_LENGTH, &stateValue);
-    napi_create_uint32(env, entry.toplevelId, &toplevelValue);
-    napi_set_named_property(env, result, "pid", pidValue);
-    napi_set_named_property(env, result, "sessionId", sessionValue);
-    napi_set_named_property(env, result, "path", pathValue);
-    napi_set_named_property(env, result, "state", stateValue);
-    napi_set_named_property(env, result, "toplevelId", toplevelValue);
-    return result;
-}
-
-static napi_value StopWineSession(napi_env env, napi_callback_info info) {
-    const std::string sessionId = GetStringArgument(env, info);
-    WineProcessEntry entry{};
-    const bool found = GetProcessBySessionId(sessionId, &entry);
-    if (found) {
-        kill(entry.pid, SIGKILL);
-        RemoveProcess(entry.pid);
-    }
-    napi_value result;
-    napi_get_boolean(env, found, &result);
-    return result;
-}
-
-static napi_value ActivateWineSession(napi_env env, napi_callback_info info) {
-    const std::string sessionId = GetStringArgument(env, info);
-    WineProcessEntry entry{};
-    const bool found = GetProcessBySessionId(sessionId, &entry) && entry.toplevelId > 0;
-    if (found) WaylandServer::GetInstance()->RaiseToplevel(entry.toplevelId);
-    napi_value result;
-    napi_get_boolean(env, found, &result);
-    return result;
-}
-
 // -- 模块注册 --
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports) {
@@ -730,23 +688,17 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"destroyToplevel", nullptr, DestroyToplevel, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"sendToplevelClose", nullptr, SendToplevelClose, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runWineExe",     nullptr, RunWineExe,     nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"runWineExeLegacy", nullptr, RunWineExeLegacy, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"getWineSession", nullptr, GetWineSession, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"stopWineSession", nullptr, StopWineSession, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"activateWineSession", nullptr, ActivateWineSession, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"initGameController", nullptr, InitGameController, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"cleanupGameController", nullptr, CleanupGameController, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"isGamepadConnected", nullptr, IsGamepadConnected, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"getGamepadCount", nullptr, GetGamepadCount, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"setGamepadButtonCallback", nullptr, SetGamepadButtonCallback, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"setGamepadAxisCallback", nullptr, SetGamepadAxisCallback, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"setGamepadDeviceCallback", nullptr, SetGamepadDeviceCallback, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"runWineProgram", nullptr, RunWineProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"runGuestProgram", nullptr, RunGuestProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"queryWineProcess", nullptr, QueryWineProcess, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"terminateWineProcess", nullptr, TerminateWineProcess, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"checkWinePrefix",nullptr, CheckWinePrefix,nullptr, nullptr, nullptr, napi_default, nullptr},
         {"resetWinePrefix",nullptr, ResetWinePrefix,nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"runHostVulkanProbe", nullptr, RunHostVulkanProbe, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"stopHostVulkanProbe", nullptr, StopHostVulkanProbeNapi, nullptr, nullptr, nullptr, napi_default, nullptr},
         // surfaceId 驱动的渲染器管理 (XComponentController 回调)
         {"createRenderer",  nullptr, CreateRenderer,  nullptr, nullptr, nullptr, napi_default, nullptr},
         {"resizeRenderer",  nullptr, ResizeRenderer,  nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"refreshRenderer", nullptr, RefreshRenderer, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"destroyRenderer", nullptr, DestroyRenderer, nullptr, nullptr, nullptr, napi_default, nullptr},
 #ifdef DEBUG_MMAP_TEST
         {"runMmapTests",  nullptr, RunMmapTests,  nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -754,14 +706,12 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setOutputSize",   nullptr, SetOutputSize,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setDisplayScale",  nullptr, SetDisplayScale,  nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setDesktopMode",   nullptr, SetDesktopMode,   nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"setForkNcpEnabled", nullptr, SetForkNcpEnabled, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getDesktopRootId", nullptr, GetDesktopRootId, nullptr, nullptr, nullptr, napi_default, nullptr},
         // ArkTS input forwarding (unified InputManager path)
         {"sendPointerEvent", nullptr, SendPointerEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"sendKeyEvent",     nullptr, SendKeyEvent,     nullptr, nullptr, nullptr, napi_default, nullptr},
         {"sendScrollEvent",   nullptr, SendScrollEvent,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"notifyToplevelResize",nullptr,NotifyToplevelResize,nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"takeWindowMask", nullptr, TakeWindowMask, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"findToplevelAt",   nullptr, FindToplevelAt,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"raiseToplevel",    nullptr, RaiseToplevel,    nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setToplevelVisible", nullptr, SetToplevelVisible, nullptr, nullptr, nullptr, napi_default, nullptr},

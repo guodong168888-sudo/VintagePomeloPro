@@ -59,6 +59,7 @@ public:
     void SetWineRuntimeBinaryDir(const std::string& wineBinDir);
 
     void SetRequestedBackend(GraphicsBackend backend);
+    void SetVulkanPresentMode(bool enabled);
     GraphicsBackendState GetState() const;
 
     void AppendWineEnv(std::vector<std::string>& env) const;
@@ -92,13 +93,9 @@ private:
     static void OnVirglIpcProcessStarted(int errorCode, OHIPCRemoteProxy* remoteProxy);
     bool SendVirglConfigureLocked();
     bool SendVirglTargetLocked(uint64_t surfaceKey, OHNativeWindow* producerWindow,
-                               uint64_t framePeriodNs);
+                               uint64_t framePeriodNs, uint32_t flags);
     bool SendVirglFramePeriodLocked(uint64_t surfaceKey, uint64_t framePeriodNs);
     bool SendVirglDetachLocked(uint64_t surfaceKey);
-    bool StartVirglInProcessHostLocked(const std::string& ldLibraryPath,
-                                       const std::string& syncMode,
-                                       const std::string& logPath);
-    void ResetVirglInProcessSurfacesLocked();
     void ShutdownVirglIpc();
 
     mutable std::mutex mutex_;
@@ -124,14 +121,8 @@ private:
     int virglServerPid_ = -1;
     bool virglServerUsesNcp_ = false;
     bool virglServerUsesIpc_ = false;
-    std::atomic<bool> virglServerUsesInProcess_{false};
     std::atomic<bool> virglServerRunning_{false};
-    void* virglInProcessHandle_ = nullptr;
-    void* virglInProcessAttach_ = nullptr;
-    void* virglInProcessDetach_ = nullptr;
-    void* virglInProcessSetFramePeriod_ = nullptr;
-    void* virglInProcessQuery_ = nullptr;
-    void* virglInProcessReset_ = nullptr;
+    std::atomic<bool> vulkanPresentMode_{false};
 
     mutable std::mutex virglIpcMutex_;
     std::condition_variable virglIpcCondition_;
