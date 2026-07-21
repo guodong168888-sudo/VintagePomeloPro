@@ -45,6 +45,35 @@ export enum ThemeMode {
   DARK = 'dark'
 }
 
+/** Matches VintagePomelo's control-bar behavior contract. */
+export enum ControlBarDirection {
+  HORIZONTAL = 'horizontal',
+  VERTICAL = 'vertical',
+  AUTO = 'auto',
+  AUTO_HIDE = 'auto_hide'
+}
+
+export interface VirtualMouseConfig {
+  mouseSensitivity: number;
+  doubleClickInterval: number;
+  showCursor: boolean;
+}
+
+export const DEFAULT_VIRTUAL_MOUSE_CONFIG: VirtualMouseConfig = {
+  mouseSensitivity: 100,
+  doubleClickInterval: 100,
+  showCursor: true
+};
+
+export function cloneVirtualMouseConfig(config?: VirtualMouseConfig): VirtualMouseConfig {
+  const value = config ?? DEFAULT_VIRTUAL_MOUSE_CONFIG;
+  return {
+    mouseSensitivity: value.mouseSensitivity ?? DEFAULT_VIRTUAL_MOUSE_CONFIG.mouseSensitivity,
+    doubleClickInterval: value.doubleClickInterval ?? DEFAULT_VIRTUAL_MOUSE_CONFIG.doubleClickInterval,
+    showCursor: value.showCursor ?? DEFAULT_VIRTUAL_MOUSE_CONFIG.showCursor
+  };
+}
+
 export interface LaunchTarget {
   kind: LaunchKind;
   executable: string;
@@ -85,6 +114,8 @@ export interface GlobalSettings {
   usePageBackground: boolean;
   showVirtualControls: boolean;
   autoHideVirtualControls: boolean;
+  controlBarDirection: ControlBarDirection;
+  virtualMouseConfig: VirtualMouseConfig;
   controlOpacity: number;
   gamepadDeadzone: number;
   outputScale: number;
@@ -413,6 +444,8 @@ export function createDefaultGlobalSettings(): GlobalSettings {
     showVirtualControls: true,
     // 独立 ArkTS 覆盖层默认保持可见，避免实体输入后无法恢复控制层。
     autoHideVirtualControls: false,
+    controlBarDirection: ControlBarDirection.AUTO,
+    virtualMouseConfig: cloneVirtualMouseConfig(DEFAULT_VIRTUAL_MOUSE_CONFIG),
     controlOpacity: 72,
     gamepadDeadzone: 18,
     outputScale: 100

@@ -3,9 +3,11 @@ import { common } from '@kit.AbilityKit';
 import {
   AppSettings,
   AppDescriptor,
+  ControlBarDirection,
   DisplayMode,
   GlobalSettings,
   ViewMode,
+  cloneVirtualMouseConfig,
   createDefaultAppSettings,
   createDefaultGlobalSettings
 } from '../model/AppModels';
@@ -51,6 +53,8 @@ export class AppSettingsStore {
         usePageBackground: stored.usePageBackground ?? defaults.usePageBackground,
         showVirtualControls: stored.showVirtualControls ?? defaults.showVirtualControls,
         autoHideVirtualControls: stored.autoHideVirtualControls ?? defaults.autoHideVirtualControls,
+        controlBarDirection: stored.controlBarDirection ?? ControlBarDirection.AUTO,
+        virtualMouseConfig: cloneVirtualMouseConfig(stored.virtualMouseConfig ?? defaults.virtualMouseConfig),
         controlOpacity: stored.controlOpacity ?? defaults.controlOpacity,
         gamepadDeadzone: stored.gamepadDeadzone ?? defaults.gamepadDeadzone,
         outputScale: stored.outputScale ?? defaults.outputScale
@@ -109,6 +113,8 @@ export class AppSettingsStore {
       usePageBackground: current.usePageBackground,
       showVirtualControls: current.showVirtualControls,
       autoHideVirtualControls: current.autoHideVirtualControls,
+      controlBarDirection: current.controlBarDirection,
+      virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
       outputScale: current.outputScale
@@ -125,6 +131,8 @@ export class AppSettingsStore {
       usePageBackground: current.usePageBackground,
       showVirtualControls: current.showVirtualControls,
       autoHideVirtualControls: current.autoHideVirtualControls,
+      controlBarDirection: current.controlBarDirection,
+      virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
       outputScale: current.outputScale

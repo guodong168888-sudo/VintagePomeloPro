@@ -2,9 +2,13 @@ import { describe, it, expect } from '@ohos/hypium';
 import { chooseCoverFileName, chooseExecutablePath } from '../main/ets/model/AppCatalogRules';
 import {
   AppSource,
+  ControlBarDirection,
+  DEFAULT_VIRTUAL_MOUSE_CONFIG,
   DisplayMode,
   EngineState,
   canTransitionEngineState,
+  cloneVirtualMouseConfig,
+  createDefaultGlobalSettings,
   createDefaultInputProfile,
   normalizeLaunchPath,
   resolveDisplayMode,
@@ -72,6 +76,21 @@ export default function localUnitTest() {
       expect(layout.rightTrigger.centerX > 0.5).assertTrue();
       expect(layout.leftTrigger.centerY < layout.direction.centerY).assertTrue();
       expect(layout.rightTrigger.centerY < layout.action.centerY).assertTrue();
+    });
+
+    it('usesVintageControlBarAndFullScreenMouseDefaults', 0, () => {
+      const settings = createDefaultGlobalSettings();
+      expect(settings.controlBarDirection).assertEqual(ControlBarDirection.AUTO);
+      expect(settings.virtualMouseConfig.mouseSensitivity).assertEqual(100);
+      expect(settings.virtualMouseConfig.doubleClickInterval).assertEqual(100);
+      expect(settings.virtualMouseConfig.showCursor).assertTrue();
+    });
+
+    it('clonesVirtualMouseSettingsWithoutSharingMutableState', 0, () => {
+      const cloned = cloneVirtualMouseConfig(DEFAULT_VIRTUAL_MOUSE_CONFIG);
+      cloned.mouseSensitivity = 180;
+      expect(DEFAULT_VIRTUAL_MOUSE_CONFIG.mouseSensitivity).assertEqual(100);
+      expect(cloned.mouseSensitivity).assertEqual(180);
     });
 
     it('keepsSharedVirtualKeyPressedUntilEverySourceReleases', 0, () => {

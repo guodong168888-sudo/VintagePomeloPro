@@ -1,5 +1,6 @@
 import {
   ButtonGroupPosition,
+  ControlBarDirection,
   DirectionControlMode,
   FreeButton,
   FreeButtonLayoutMode,
@@ -13,7 +14,7 @@ import {
 import { InputDispatcher } from '../service/InputDispatcher';
 
 type DirectionName = 'up' | 'down' | 'left' | 'right';
-type ToolbarAction = 'toggle' | 'editor' | 'fold';
+type ToolbarAction = 'toolbar' | 'editor' | 'controls' | 'wake';
 
 interface OverlayPoint {
   x: number;
@@ -32,7 +33,10 @@ export struct VirtualInputOverlay {
   @Prop opacityValue: number = 100;
   @Prop interactive: boolean = true;
   @Prop hideToolbar: boolean = false;
+  @Prop @Watch('onControlsVisibleChanged') controlsVisible: boolean = true;
+  @Prop @Watch('onControlBarDirectionChanged') controlBarDirection: ControlBarDirection = ControlBarDirection.AUTO;
   onOpenLayoutEditor: () => void = (): void => {};
+  onControlsVisibleChange: (visible: boolean) => void = (_visible: boolean): void => {};
   onUnhandledTouch: (event: TouchEvent) => void = (_event: TouchEvent): void => {};
   onUnhandledMouse: (event: MouseEvent) => void = (_event: MouseEvent): void => {};
   onUnhandledAxis: (event?: AxisEvent) => void = (_event?: AxisEvent): void => {};
@@ -48,10 +52,11 @@ export struct VirtualInputOverlay {
   @State private dpadLeft: boolean = false;
   @State private dpadRight: boolean = false;
   @State private pressedFreeButtons: string = '';
-  // Keep the ArkTS control bar alive when the gamepad itself is folded.  This
-  // is the same split VintagePomelo uses: the control bar remains clickable,
-  // while the actual virtual controls can be hidden and restored instantly.
-  @State private controlsExpanded: boolean = true;
+  // Toolbar folding and virtual-control visibility are deliberately separate:
+  // the chevron changes only this local state, while controlsVisible is owned
+  // by the coordinator and never disables the full-screen mouse surface.
+  @State private toolbarExpanded: boolean = true;
+  @State private toolbarAutoHidden: boolean = false;
   private activeButtonTouches: Map<VirtualKey, number> = new Map<VirtualKey, number>();
   private joystickTouchId: number = -1;
   private joystickCenterX: number = 0;
@@ -65,6 +70,7 @@ export struct VirtualInputOverlay {
   private toolbarTouchAction: ToolbarAction | null = null;
   private toolbarMouseAction: ToolbarAction | null = null;
   private lastToolbarTouchAt: number = 0;
+  private toolbarAutoHideTimer: number = -1;
 
   private config() {
     return this.profile.virtualKeyConfig;
@@ -170,19 +176,83 @@ export struct VirtualInputOverlay {
     return x >= left && x <= left + width && y >= top && y <= top + height;
   }
 
+  private resolveToolbarVertical(): boolean {
+    if (this.controlBarDirection === ControlBarDirection.VERTICAL) return true;
+    if (this.controlBarDirection === ControlBarDirection.HORIZONTAL) return false;
+    // VintagePomelo AUTO / AUTO_HIDE contract: portrait uses a vertical bar.
+    return this.overlayH > this.overlayW;
+  }
+
+  private isAutoHideMode(): boolean {
+    return this.controlBarDirection === ControlBarDirection.AUTO_HIDE;
+  }
+
+  private cancelToolbarAutoHide(): void {
+    if (this.toolbarAutoHideTimer >= 0) {
+      clearTimeout(this.toolbarAutoHideTimer);
+      this.toolbarAutoHideTimer = -1;
+    }
+  }
+
+  private startToolbarAutoHide(): void {
+    this.cancelToolbarAutoHide();
+    if (!this.isAutoHideMode() || this.toolbarExpanded) return;
+    this.toolbarAutoHideTimer = setTimeout((): void => {
+      this.toolbarAutoHideTimer = -1;
+      if (this.isAutoHideMode() && !this.toolbarExpanded) this.toolbarAutoHidden = true;
+    }, 3000) as number;
+  }
+
+  private onControlBarDirectionChanged(): void {
+    this.toolbarAutoHidden = false;
+    if (this.toolbarExpanded) this.cancelToolbarAutoHide();
+    else this.startToolbarAutoHide();
+  }
+
+  private onControlsVisibleChanged(): void {
+    if (this.controlsVisible) return;
+    this.activeButtonTouches.clear();
+    this.activeFreeTouches.clear();
+    this.joystickTouchId = -1;
+    this.dpadTouchId = -1;
+    this.pressedKeys = '';
+    this.pressedFreeButtons = '';
+    this.joystickActive = false;
+    this.joystickX = 0;
+    this.joystickY = 0;
+    this.dpadUp = false;
+    this.dpadDown = false;
+    this.dpadLeft = false;
+    this.dpadRight = false;
+  }
+
+  aboutToDisappear(): void {
+    this.cancelToolbarAutoHide();
+  }
+
   private toolbarOriginX(): number {
-    return Math.max(4, this.overlayW - (this.controlsExpanded ? 150 : 54));
+    if (this.resolveToolbarVertical()) return Math.max(4, this.overlayW - 54);
+    return Math.max(4, this.overlayW - (this.toolbarExpanded ? 150 : 54));
   }
 
   private toolbarActionAt(x: number, y: number): ToolbarAction | null {
     const originX = this.toolbarOriginX();
-    if (this.controlsExpanded) {
-      if (this.rectContains(x, y, originX + 4, 14, 40, 48)) return 'toggle';
-      if (this.rectContains(x, y, originX + 44, 14, 44, 52)) return 'editor';
-      if (this.rectContains(x, y, originX + 88, 14, 44, 52)) return 'fold';
+    if (this.toolbarAutoHidden && this.isAutoHideMode()) {
+      return this.rectContains(x, y, Math.max(0, this.overlayW - 52), 8, 48, 48) ? 'wake' : null;
+    }
+    if (!this.toolbarExpanded) {
+      return this.rectContains(x, y, originX, 14, 44, 44) ? 'toolbar' : null;
+    }
+    if (this.resolveToolbarVertical()) {
+      if (this.rectContains(x, y, originX, 14, 44, 40)) return 'toolbar';
+      if (this.rectContains(x, y, originX, 54, 44, 44)) return 'editor';
+      if (this.rectContains(x, y, originX, 98, 44, 44)) return 'controls';
       return null;
     }
-    return this.rectContains(x, y, originX, 14, 40, 44) ? 'toggle' : null;
+    if (this.rectContains(x, y, originX + 4, 14, 40, 48)) return 'toolbar';
+    if (this.rectContains(x, y, originX + 44, 14, 44, 52)) return 'editor';
+    if (this.rectContains(x, y, originX + 88, 14, 44, 52)) return 'controls';
+    return null;
   }
 
   private runToolbarAction(action: ToolbarAction): void {
@@ -190,7 +260,19 @@ export struct VirtualInputOverlay {
       this.onOpenLayoutEditor();
       return;
     }
-    this.controlsExpanded = action === 'toggle' ? !this.controlsExpanded : false;
+    if (action === 'controls') {
+      this.onControlsVisibleChange(!this.controlsVisible);
+      return;
+    }
+    if (action === 'wake') {
+      this.toolbarAutoHidden = false;
+      this.startToolbarAutoHide();
+      return;
+    }
+    this.toolbarExpanded = !this.toolbarExpanded;
+    this.toolbarAutoHidden = false;
+    if (this.toolbarExpanded) this.cancelToolbarAutoHide();
+    else this.startToolbarAutoHide();
   }
 
   private handleToolbarOverlayTouch(event: TouchEvent): boolean {
@@ -404,7 +486,7 @@ export struct VirtualInputOverlay {
   private handleOverlayTouch(event: TouchEvent): void {
     if (event.changedTouches.length === 0) return;
     if (!this.hideToolbar && this.handleToolbarOverlayTouch(event)) return;
-    if (!this.interactive || !this.controlsExpanded) {
+    if (!this.interactive || !this.controlsVisible) {
       this.onUnhandledTouch(event);
       return;
     }
@@ -445,7 +527,7 @@ export struct VirtualInputOverlay {
 
   private handleOverlayMouse(event: MouseEvent): void {
     if (!this.hideToolbar && this.handleToolbarOverlayMouse(event)) return;
-    if (!this.interactive || !this.controlsExpanded ||
+    if (!this.interactive || !this.controlsVisible ||
       this.profile.freeButtonsConfig.enabled || Date.now() - this.lastActionTouchAt <= 320) {
       this.onUnhandledMouse(event);
       return;
@@ -850,36 +932,79 @@ export struct VirtualInputOverlay {
     .hitTestBehavior(HitTestMode.None)
   }
 
+  @Builder
+  private ExpandedToolbarButtons() {
+    this.ControlBarButton($r('sys.symbol.gearshape'), 'wine-input-layout-editor')
+    this.ControlBarButton(
+      this.controlsVisible ? $r('sys.symbol.gamecontroller') : $r('sys.symbol.eye_slash'),
+      'wine-input-overlay-fold', this.controlsVisible)
+  }
+
+  @Builder
+  private ToolbarToggleButton(vertical: boolean) {
+    Button({ type: ButtonType.Circle }) {
+      if (vertical) {
+        SymbolGlyph(this.toolbarExpanded ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_up'))
+          .fontSize(14).fontColor(['#FFFFFFFF'])
+      } else {
+        SymbolGlyph(this.toolbarExpanded ? $r('sys.symbol.chevron_right') : $r('sys.symbol.chevron_left'))
+          .fontSize(14).fontColor(['#FFFFFFFF'])
+      }
+    }
+    .width(28).height(28)
+    .backgroundColor(this.toolbarExpanded ? '#1AFFFFFF' : '#BF282828')
+    .border({ width: 1, color: '#33FFFFFF' })
+    .id('wine-input-overlay-toggle')
+    .hitTestBehavior(HitTestMode.None)
+  }
+
   /** Direct ArkTS adaptation of VintagePomelo's collapsible icon control bar. */
   @Builder
   private Toolbar() {
-    Row({ space: 8 }) {
-      Button({ type: ButtonType.Circle }) {
-        SymbolGlyph(this.controlsExpanded ? $r('sys.symbol.chevron_right') : $r('sys.symbol.chevron_left'))
-          .fontSize(14).fontColor(['#FFFFFFFF'])
-      }
-      .width(28).height(28)
-      .backgroundColor(this.controlsExpanded ? '#1AFFFFFF' : '#BF282828')
-      .border({ width: 1, color: '#33FFFFFF' })
-      .id('wine-input-overlay-toggle')
-      .hitTestBehavior(HitTestMode.None)
+    if (this.toolbarAutoHidden && this.isAutoHideMode()) {
+      Button({ type: ButtonType.Normal }) {}
+        .width(48).height(48)
+        .backgroundColor('#00000000').opacity(0)
+        .hitTestBehavior(HitTestMode.None)
+        .position({ x: Math.max(0, this.overlayW - 52), y: 8 })
+        .id('wine-input-overlay-wake')
+        .zIndex(30)
+    } else if (this.resolveToolbarVertical()) {
+      Column({ space: 8 }) {
+        this.ToolbarToggleButton(true)
 
-      if (this.controlsExpanded) {
-        this.ControlBarButton($r('sys.symbol.gearshape'), 'wine-input-layout-editor')
-        this.ControlBarButton($r('sys.symbol.gamecontroller'), 'wine-input-overlay-fold', true)
+        if (this.toolbarExpanded) {
+          this.ExpandedToolbarButtons()
+        }
       }
+      .padding(this.toolbarExpanded ? 8 : 4)
+      .backgroundColor('#4D000000')
+      .borderRadius(20)
+      .hitTestBehavior(HitTestMode.None)
+      .position({ x: this.toolbarOriginX(), y: 14 })
+      .id('wine-input-toolbar-vertical')
+      .zIndex(30)
+    } else {
+      Row({ space: 8 }) {
+        this.ToolbarToggleButton(false)
+
+        if (this.toolbarExpanded) {
+          this.ExpandedToolbarButtons()
+        }
+      }
+      .padding(this.toolbarExpanded ? 8 : 4)
+      .backgroundColor('#4D000000')
+      .borderRadius(20)
+      .hitTestBehavior(HitTestMode.None)
+      .position({ x: this.toolbarOriginX(), y: 14 })
+      .id('wine-input-toolbar-horizontal')
+      .zIndex(30)
     }
-    .padding(this.controlsExpanded ? 8 : 4)
-    .backgroundColor('#4D000000')
-    .borderRadius(20)
-    .hitTestBehavior(HitTestMode.None)
-    .position({ x: this.toolbarOriginX(), y: 14 })
-    .zIndex(30)
   }
 
   build() {
     Stack() {
-      if (this.overlayW > 0 && this.overlayH > 0 && this.controlsExpanded) {
+      if (this.overlayW > 0 && this.overlayH > 0 && this.controlsVisible) {
         if (this.profile.freeButtonsConfig.enabled && this.profile.freeButtonsConfig.buttons.length > 0) {
           this.FreeButtonGroup()
         } else {

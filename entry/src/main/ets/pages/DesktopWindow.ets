@@ -128,7 +128,7 @@ struct DesktopPage {
 
   private noteHardwareActivity(): void {
     if (this.settings.autoHideVirtualControls && this.settings.showVirtualControls) {
-      InputOverlayWindowCoordinator.getInstance().setVisible(false).catch(() => {});
+      InputOverlayWindowCoordinator.getInstance().setControlsVisible(false);
     }
   }
 
@@ -142,7 +142,7 @@ struct DesktopPage {
     GamepadManager.getInstance().initialize(this.settings.gamepadDeadzone);
     this.gamepadConnectionCallback = (connected: boolean): void => {
       if (!connected && this.settings.autoHideVirtualControls && this.settings.showVirtualControls) {
-        InputOverlayWindowCoordinator.getInstance().setVisible(true).catch(() => {});
+        InputOverlayWindowCoordinator.getInstance().setControlsVisible(true);
       }
     };
     this.gamepadActivityCallback = (): void => {

@@ -7,6 +7,7 @@ export interface InputOverlaySnapshot {
   session: WineInputSession;
   profileId: string;
   visible: boolean;
+  controlsVisible: boolean;
   opacity: number;
   createdCount: number;
   destroyedCount: number;
@@ -34,7 +35,7 @@ export class InputOverlayWindowCoordinator {
   private attaching: boolean = false;
   private snapshot: InputOverlaySnapshot = {
     session: { sessionId: '', displayMode: DisplayMode.DESKTOP, toplevelId: 0, active: false },
-    profileId: 'default', visible: false, opacity: 72,
+    profileId: 'default', visible: false, controlsVisible: true, opacity: 72,
     createdCount: 0, destroyedCount: 0, rendererRebinds: 0, zLevel: 0,
     stressRunning: false, stressCompleted: 0, lastError: ''
   };
@@ -65,6 +66,7 @@ export class InputOverlayWindowCoordinator {
       },
       profileId: this.snapshot.profileId,
       visible: this.snapshot.visible,
+      controlsVisible: this.snapshot.controlsVisible,
       opacity: this.snapshot.opacity,
       createdCount: this.snapshot.createdCount,
       destroyedCount: this.snapshot.destroyedCount,
@@ -78,12 +80,12 @@ export class InputOverlayWindowCoordinator {
 
   async attach(stage: window.WindowStage, parentWindow: window.Window,
     sessionId: string, displayMode: DisplayMode, toplevelId: number,
-    profileId: string = 'default', visible: boolean = true, opacity: number = 72): Promise<void> {
+    profileId: string = 'default', controlsVisible: boolean = true, opacity: number = 72): Promise<void> {
     const session: WineInputSession = { sessionId, displayMode, toplevelId, active: true };
     if (this.overlayWindow && this.stage === stage) {
       this.parentWindow = parentWindow;
-      this.update(session, profileId, visible, opacity);
-      await this.setVisible(visible);
+      this.update(session, profileId, controlsVisible, opacity);
+      await this.setVisible(true);
       await this.syncBounds();
       await this.raise();
       return;
@@ -94,14 +96,14 @@ export class InputOverlayWindowCoordinator {
     // 收到 1300002 并把已创建的覆盖层遗弃。
     if (this.attaching && this.stage === stage) {
       this.parentWindow = parentWindow;
-      this.update(session, profileId, visible, opacity);
+      this.update(session, profileId, controlsVisible, opacity);
       return;
     }
 
     await this.detach('replace-overlay');
     this.stage = stage;
     this.parentWindow = parentWindow;
-    this.update(session, profileId, visible, opacity);
+    this.update(session, profileId, controlsVisible, opacity);
     this.attaching = true;
     try {
       // 必须在创建时写入尺寸和 zLevel。部分 API 23 WindowManager 会在
@@ -110,7 +112,7 @@ export class InputOverlayWindowCoordinator {
       const initialRect = parentWindow.getWindowProperties().windowRect;
       hilog.info(OVERLAY_DOMAIN, OVERLAY_TAG,
         'attach session=%{public}s visible=%{public}s rect=%{public}d,%{public}d %{public}dx%{public}d',
-        sessionId, visible ? 'true' : 'false', initialRect.left, initialRect.top,
+        sessionId, controlsVisible ? 'true' : 'false', initialRect.left, initialRect.top,
         initialRect.width, initialRect.height);
       let overlay: window.Window | null = null;
       let configuredCreateError: string = '';
@@ -177,7 +179,7 @@ export class InputOverlayWindowCoordinator {
           this.publish();
         }
       });
-      await this.setVisible(visible);
+      await this.setVisible(true);
       await this.raise();
       this.publish();
     } catch (error) {
@@ -190,10 +192,10 @@ export class InputOverlayWindowCoordinator {
     }
   }
 
-  update(session: WineInputSession, profileId: string, visible: boolean, opacity: number): void {
+  update(session: WineInputSession, profileId: string, controlsVisible: boolean, opacity: number): void {
     this.snapshot.session = session;
     this.snapshot.profileId = profileId || 'default';
-    this.snapshot.visible = visible;
+    this.snapshot.controlsVisible = controlsVisible;
     this.snapshot.opacity = Math.max(25, Math.min(100, opacity));
     InputDispatcher.getInstance().setSession(session);
     this.publish();
@@ -207,6 +209,13 @@ export class InputOverlayWindowCoordinator {
       }
     }
     if (!visible) InputDispatcher.getInstance().releaseAll('overlay-hidden');
+    this.publish();
+  }
+
+  setControlsVisible(visible: boolean): void {
+    if (this.snapshot.controlsVisible === visible) return;
+    this.snapshot.controlsVisible = visible;
+    if (!visible) InputDispatcher.getInstance().releaseAll('virtual-controls-hidden');
     this.publish();
   }
 

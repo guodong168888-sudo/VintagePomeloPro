@@ -455,6 +455,28 @@ struct Index {
     .width('100%')
   }
 
+  /**
+   * Give every catalog filter its own ArkUI branch and scroll identity.
+   * Reusing one non-empty Grid made ForEach keep the previous category until
+   * an empty branch (usually Favorites) forced the node tree to be recreated.
+   */
+  @Builder
+  private CatalogScroll(items: AppDescriptor[], filter: CatalogFilter) {
+    Scroll() {
+      Column() {
+        this.AppGrid(items)
+      }
+      .width('100%')
+      .constraintSize({ minHeight: '100%' })
+      .justifyContent(FlexAlign.Start)
+      .padding({ top: 2, bottom: this.breakpoint === 'sm' ? 76 : 20 })
+    }
+    .layoutWeight(1)
+    .width('100%')
+    .scrollBar(BarState.Auto)
+    .id('library-scroll-' + filter)
+  }
+
   @Builder
   private Library() {
     Column() {
@@ -474,20 +496,14 @@ struct Index {
               .onClick((): void => this.handleEmptyAction())
           }
         }.layoutWeight(1).justifyContent(FlexAlign.Center)
+      } else if (this.filter === 'builtin') {
+        this.CatalogScroll(this.visibleApps, 'builtin')
+      } else if (this.filter === 'windows') {
+        this.CatalogScroll(this.visibleApps, 'windows')
+      } else if (this.filter === 'running') {
+        this.CatalogScroll(this.visibleApps, 'running')
       } else {
-        Scroll() {
-          Column() {
-            this.AppGrid(this.visibleApps)
-          }
-          .width('100%')
-          .constraintSize({ minHeight: '100%' })
-          .justifyContent(FlexAlign.Start)
-          .padding({ top: 2, bottom: this.breakpoint === 'sm' ? 76 : 20 })
-        }
-        .layoutWeight(1)
-        .width('100%')
-        .scrollBar(BarState.Auto)
-        .id('library-scroll-filtered')
+        this.CatalogScroll(this.visibleApps, 'favorite')
       }
     }
     .layoutWeight(1)

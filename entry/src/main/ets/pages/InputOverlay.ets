@@ -1,7 +1,13 @@
 import { common, Want } from '@kit.AbilityKit';
 import { DEBUG } from 'BuildProfile';
 import { mapMouseButton } from '../common/MouseMap';
-import { InputDiagnostics, InputProfile, createDefaultInputProfile } from '../model/AppModels';
+import {
+  GlobalSettings,
+  InputDiagnostics,
+  InputProfile,
+  createDefaultGlobalSettings,
+  createDefaultInputProfile
+} from '../model/AppModels';
 import { VirtualInputOverlay } from '../components/VirtualInputOverlay';
 import { InputDiagnosticsListener, InputDispatcher } from '../service/InputDispatcher';
 import { InputOverlayListener, InputOverlaySnapshot, InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
@@ -27,7 +33,12 @@ interface DirectTouch {
 struct InputOverlayPage {
   @State private snapshot: InputOverlaySnapshot = InputOverlayWindowCoordinator.getInstance().getSnapshot();
   @State private profile: InputProfile = createDefaultInputProfile();
+  @State private settings: GlobalSettings = createDefaultGlobalSettings();
   @State private inputDiagnostics: InputDiagnostics = InputDispatcher.getInstance().getDiagnostics();
+  @State private cursorX: number = 0;
+  @State private cursorY: number = 0;
+  @State private cursorVisible: boolean = false;
+  @State private cursorFlash: boolean = false;
   private listener: InputOverlayListener | null = null;
   private diagnosticsListener: InputDiagnosticsListener | null = null;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
@@ -39,6 +50,8 @@ struct InputOverlayPage {
   private eventGate: InputEventGate = new InputEventGate();
   private readonly TAP_TIMEOUT_MS: number = 300;
   private readonly TAP_SLOP_PX: number = 24;
+  private cursorHideTimer: number = -1;
+  private cursorFlashTimer: number = -1;
 
   aboutToAppear(): void {
     this.listener = (snapshot: InputOverlaySnapshot): void => {
@@ -46,6 +59,7 @@ struct InputOverlayPage {
       const sessionChanged = this.snapshot.session.sessionId !== snapshot.session.sessionId;
       const becameVisible = !this.snapshot.visible && snapshot.visible;
       this.snapshot = snapshot;
+      this.settings = AppSettingsStore.getInstance().getGlobalSettings();
       if (sessionChanged) {
         this.directTouches.clear();
         this.twoFinger = false;
@@ -61,13 +75,46 @@ struct InputOverlayPage {
       this.inputDiagnostics = diagnostics;
     };
     InputDispatcher.getInstance().subscribeDiagnostics(this.diagnosticsListener);
+    this.settings = AppSettingsStore.getInstance().getGlobalSettings();
     this.loadProfile(this.snapshot.profileId);
   }
 
   aboutToDisappear(): void {
     if (this.listener) InputOverlayWindowCoordinator.getInstance().unsubscribe(this.listener);
     if (this.diagnosticsListener) InputDispatcher.getInstance().unsubscribeDiagnostics(this.diagnosticsListener);
+    this.cancelCursorTimers();
     InputDispatcher.getInstance().releaseAll('overlay-page-disappear');
+  }
+
+  private cancelCursorTimers(): void {
+    if (this.cursorHideTimer >= 0) clearTimeout(this.cursorHideTimer);
+    if (this.cursorFlashTimer >= 0) clearTimeout(this.cursorFlashTimer);
+    this.cursorHideTimer = -1;
+    this.cursorFlashTimer = -1;
+  }
+
+  private showCursorAt(x: number, y: number, flash: boolean = false): void {
+    if (!this.settings.virtualMouseConfig.showCursor) return;
+    this.cursorX = x;
+    this.cursorY = y;
+    this.cursorVisible = true;
+    if (this.cursorHideTimer >= 0) clearTimeout(this.cursorHideTimer);
+    this.cursorHideTimer = setTimeout((): void => {
+      this.cursorHideTimer = -1;
+      this.cursorVisible = false;
+    }, 900) as number;
+    if (!flash) return;
+    this.cursorFlash = true;
+    if (this.cursorFlashTimer >= 0) clearTimeout(this.cursorFlashTimer);
+    this.cursorFlashTimer = setTimeout((): void => {
+      this.cursorFlashTimer = -1;
+      this.cursorFlash = false;
+    }, 90) as number;
+  }
+
+  private scrollThresholdPx(): number {
+    const sensitivity = Math.max(50, Math.min(200, this.settings.virtualMouseConfig.mouseSensitivity));
+    return Math.max(6, 18 * 100 / sensitivity);
   }
 
   private loadProfile(profileId: string): void {
@@ -95,11 +142,16 @@ struct InputOverlayPage {
   private injectClick(source: string, x: number, y: number, button: number): void {
     InputDispatcher.getInstance().pointerDown(source, x, y, button);
     InputDispatcher.getInstance().pointerUp(source, x, y, button);
+    this.showCursorAt(px2vp(x), px2vp(y), true);
   }
 
   private handleDirectTouch(event: TouchEvent): void {
     if (!this.eventGate.shouldHandleTouch(event.source, event.sourceTool)) return;
     event.stopPropagation();
+    const changed = event.changedTouches[0];
+    if (changed && (event.type === TouchType.Down || event.type === TouchType.Move)) {
+      this.showCursorAt(Number(changed.x), Number(changed.y));
+    }
     for (let index = 0; index < event.changedTouches.length; index++) {
       const touch = event.changedTouches[index];
       const x = vp2px(touch.x);
@@ -135,12 +187,13 @@ struct InputOverlayPage {
           const midY = this.midpointY();
           const deltaX = this.lastMidX - midX;
           const delta = this.lastMidY - midY;
-          if (Math.abs(deltaX) >= 18) {
+          const threshold = this.scrollThresholdPx();
+          if (Math.abs(deltaX) >= threshold) {
             this.twoFingerTapEligible = false;
             InputDispatcher.getInstance().scroll('direct-scroll', 1, deltaX > 0 ? 1 : -1);
             this.lastMidX = midX;
           }
-          if (Math.abs(delta) >= 18) {
+          if (Math.abs(delta) >= threshold) {
             this.twoFingerTapEligible = false;
             InputDispatcher.getInstance().scroll('direct-scroll', 0, delta > 0 ? 1 : -1);
             this.lastMidY = midY;
@@ -186,7 +239,7 @@ struct InputOverlayPage {
   private hideForExternalInput(): void {
     const settings = AppSettingsStore.getInstance().getGlobalSettings();
     if (settings.autoHideVirtualControls && settings.showVirtualControls) {
-      InputOverlayWindowCoordinator.getInstance().setVisible(false).catch(() => {});
+      InputOverlayWindowCoordinator.getInstance().setControlsVisible(false);
     }
   }
 
@@ -248,12 +301,34 @@ struct InputOverlayPage {
         VirtualInputOverlay({
           profile: this.profile,
           opacityValue: this.snapshot.opacity,
+          controlsVisible: this.snapshot.controlsVisible,
+          controlBarDirection: this.settings.controlBarDirection,
           onOpenLayoutEditor: (): void => { this.openLayoutEditor(); },
+          onControlsVisibleChange: (visible: boolean): void => {
+            InputOverlayWindowCoordinator.getInstance().setControlsVisible(visible);
+          },
           onUnhandledTouch: (event: TouchEvent): void => this.handleDirectTouch(event),
           onUnhandledMouse: (event: MouseEvent): void => this.handleDirectMouse(event),
           onUnhandledAxis: (event?: AxisEvent): void => this.handleDirectAxis(event)
         })
         .zIndex(10)
+      }
+      if (this.cursorVisible && this.settings.virtualMouseConfig.showCursor) {
+        Stack({ alignContent: Alignment.Center }) {
+          Circle()
+            .width(this.cursorFlash ? 10 : 7)
+            .height(this.cursorFlash ? 10 : 7)
+            .fill(this.cursorFlash ? '#FF4CAF50' : '#E6FFFFFF')
+            .stroke(this.cursorFlash ? '#CCB9F6CA' : '#D9000000')
+            .strokeWidth(1)
+            .shadow({ radius: this.cursorFlash ? 8 : 4, color: '#66000000', offsetX: 0, offsetY: 1 })
+        }
+        .width(14).height(14)
+        .position({ x: this.cursorX, y: this.cursorY })
+        .markAnchor({ x: '50%', y: '50%' })
+        .hitTestBehavior(HitTestMode.None)
+        .id('wine-virtual-mouse-cursor')
+        .zIndex(15)
       }
       if (DEBUG) {
         Column({ space: 3 }) {

@@ -1,7 +1,17 @@
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
-import { DisplayMode, EngineState, GlobalSettings, ThemeMode, ViewMode, createDefaultGlobalSettings } from '../model/AppModels';
+import {
+  ControlBarDirection,
+  DisplayMode,
+  EngineState,
+  GlobalSettings,
+  ThemeMode,
+  ViewMode,
+  VirtualMouseConfig,
+  cloneVirtualMouseConfig,
+  createDefaultGlobalSettings
+} from '../model/AppModels';
 import { ThemeSettingsService } from '../service/ThemeSettingsService';
 import { EngineStateListener, WineEngineService } from '../service/WineEngineService';
 import { GamepadManager } from '../service/GamepadManager';
@@ -93,7 +103,9 @@ struct SystemSettingsPage {
     opacity: number = this.settings.controlOpacity,
     deadzone: number = this.settings.gamepadDeadzone,
     scale: number = this.settings.outputScale,
-    theme: ThemeMode = this.settings.themeMode): void {
+    theme: ThemeMode = this.settings.themeMode,
+    controlBarDirection: ControlBarDirection = this.settings.controlBarDirection,
+    virtualMouseConfig: VirtualMouseConfig = cloneVirtualMouseConfig(this.settings.virtualMouseConfig)): void {
     this.settings = {
       defaultDisplayMode: mode,
       viewMode: view,
@@ -102,6 +114,8 @@ struct SystemSettingsPage {
       usePageBackground: background,
       showVirtualControls: controls,
       autoHideVirtualControls: autoHide,
+      controlBarDirection: controlBarDirection,
+      virtualMouseConfig: cloneVirtualMouseConfig(virtualMouseConfig),
       controlOpacity: opacity,
       gamepadDeadzone: deadzone,
       outputScale: scale
@@ -110,7 +124,7 @@ struct SystemSettingsPage {
     WineWindowManager.getInstance().setOutputScalePercent(scale);
     ThemeSettingsService.getInstance().update(this.settings);
     InputOverlayWindowCoordinator.getInstance().setOpacity(opacity);
-    InputOverlayWindowCoordinator.getInstance().setVisible(controls).catch(() => {});
+    InputOverlayWindowCoordinator.getInstance().setControlsVisible(controls);
   }
 
   private updateTheme(theme: ThemeMode): void {
@@ -121,6 +135,27 @@ struct SystemSettingsPage {
       this.settings.outputScale, theme);
   }
 
+  private updateControlBarDirection(direction: ControlBarDirection): void {
+    this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
+      this.settings.useGlassEffect, this.settings.usePageBackground,
+      this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
+      this.settings.controlOpacity, this.settings.gamepadDeadzone,
+      this.settings.outputScale, this.settings.themeMode, direction);
+  }
+
+  private updateVirtualMouse(sensitivity: number = this.settings.virtualMouseConfig.mouseSensitivity,
+    showCursor: boolean = this.settings.virtualMouseConfig.showCursor): void {
+    const mouse = cloneVirtualMouseConfig(this.settings.virtualMouseConfig);
+    mouse.mouseSensitivity = Math.max(50, Math.min(200, Math.round(sensitivity / 10) * 10));
+    mouse.showCursor = showCursor;
+    this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
+      this.settings.useGlassEffect, this.settings.usePageBackground,
+      this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
+      this.settings.controlOpacity, this.settings.gamepadDeadzone,
+      this.settings.outputScale, this.settings.themeMode,
+      this.settings.controlBarDirection, mouse);
+  }
+
   private restoreDefaults(): void {
     const defaults = createDefaultGlobalSettings();
     this.settings = defaults;
@@ -128,7 +163,7 @@ struct SystemSettingsPage {
     WineWindowManager.getInstance().setOutputScalePercent(defaults.outputScale);
     ThemeSettingsService.getInstance().update(defaults);
     InputOverlayWindowCoordinator.getInstance().setOpacity(defaults.controlOpacity);
-    InputOverlayWindowCoordinator.getInstance().setVisible(defaults.showVirtualControls).catch(() => {});
+    InputOverlayWindowCoordinator.getInstance().setControlsVisible(defaults.showVirtualControls);
   }
 
   @Builder
@@ -156,6 +191,19 @@ struct SystemSettingsPage {
     .padding({ left: 14, right: 14, top: 13, bottom: 13 })
     .backgroundColor($r('app.color.search_background'))
     .borderRadius(14)
+  }
+
+  @Builder
+  private ControlBarDirectionChip(label: string, direction: ControlBarDirection) {
+    Button(label)
+      .height(40)
+      .padding({ left: 14, right: 14 })
+      .borderRadius(20)
+      .fontSize(13)
+      .fontColor(this.settings.controlBarDirection === direction ? '#FFFFFFFF' : $r('app.color.text_primary'))
+      .backgroundColor(this.settings.controlBarDirection === direction ? $r('app.color.accent') : $r('app.color.search_background'))
+      .id('control-bar-direction-' + direction)
+      .onClick((): void => this.updateControlBarDirection(direction))
   }
 
   @Builder
@@ -253,8 +301,33 @@ struct SystemSettingsPage {
       } else if (this.section === 'input') {
         Column({ space: 16 }) {
           Text('输入与控制').fontSize(20).fontWeight(FontWeight.Bold).width('100%')
-          this.SwitchRow('全屏鼠标与虚拟手柄', '空白画面支持点击、双击和双指滚动；顶部图标可展开或收起手柄', this.settings.showVirtualControls, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, value))
-          this.SwitchRow('自动隐藏', '连接实体键盘鼠标或手柄后收起覆盖层', this.settings.autoHideVirtualControls, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, value))
+          this.SwitchRow('显示虚拟按键', '只控制十字键、摇杆、ABXY 和肩键；全屏鼠标与右上角控制栏不受影响', this.settings.showVirtualControls, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, value))
+          this.SwitchRow('外设接管时隐藏按键', '检测到实体键盘、鼠标或手柄操作后，仅隐藏虚拟按键', this.settings.autoHideVirtualControls, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, value))
+          Column({ space: 10 }) {
+            Text('控制栏方向').fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
+            Text('自动会根据横竖屏切换；自动隐藏会在控制栏收起 3 秒后完全隐藏，点击右上角热区即可唤出。')
+              .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+            Flex({ wrap: FlexWrap.Wrap }) {
+              this.ControlBarDirectionChip('自动', ControlBarDirection.AUTO)
+              this.ControlBarDirectionChip('横向', ControlBarDirection.HORIZONTAL)
+              this.ControlBarDirectionChip('纵向', ControlBarDirection.VERTICAL)
+              this.ControlBarDirectionChip('自动隐藏', ControlBarDirection.AUTO_HIDE)
+            }.width('100%')
+          }
+          .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
+          Column({ space: 10 }) {
+            Text('全屏虚拟鼠标').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
+            Text('空白画面单指轻点为左键、连续轻点为双击、拖动为左键拖拽；双指轻点为右键，双指滑动为滚轮。')
+              .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+            this.SwitchRow('显示触摸光标', '操作时短暂显示鼠标位置与点击反馈', this.settings.virtualMouseConfig.showCursor,
+              (value: boolean): void => this.updateVirtualMouse(this.settings.virtualMouseConfig.mouseSensitivity, value))
+            Text('滚动灵敏度 ' + this.settings.virtualMouseConfig.mouseSensitivity + '%')
+              .fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
+            Slider({ value: this.settings.virtualMouseConfig.mouseSensitivity, min: 50, max: 200, step: 10 })
+              .id('virtual-mouse-sensitivity')
+              .onChange((value: number): void => this.updateVirtualMouse(value))
+          }
+          .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
           Text('控制层透明度 ' + this.settings.controlOpacity + '%').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
           Slider({ value: this.settings.controlOpacity, min: 25, max: 100, step: 1 }).onChange((value: number) => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, this.settings.autoHideVirtualControls, value))
           Text('手柄死区 ' + this.settings.gamepadDeadzone + '%').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
