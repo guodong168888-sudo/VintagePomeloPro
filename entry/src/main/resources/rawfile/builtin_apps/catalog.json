@@ -1,19 +1,19 @@
 {
   "version": 1,
   "apps": [
-    {
-      "id": "builtin-desktop",
-      "title": "Wine 桌面",
-      "launchKind": "wine-desktop",
-      "launchParams": { "executable": "explorer.exe", "arguments": [], "workingDirectory": "" },
+  {
+    "id": "builtin-desktop",
+    "title": "Wine 桌面",
+    "launchKind": "wine-desktop",
+    "launchParams": { "executable": "explorer.exe", "arguments": [], "workingDirectory": "" },
       "cover": "",
       "displayMode": "desktop"
     },
-    {
-      "id": "builtin-explorer",
-      "title": "文件资源管理器",
-      "launchKind": "wine-system",
-      "launchParams": { "executable": "explorer.exe", "arguments": [], "workingDirectory": "" },
+  {
+    "id": "builtin-explorer",
+    "title": "文件资源管理器",
+    "launchKind": "wine-system",
+    "launchParams": { "executable": "explorer.exe", "arguments": ["Z:\\"], "workingDirectory": "" },
       "cover": "",
       "displayMode": "desktop"
     },

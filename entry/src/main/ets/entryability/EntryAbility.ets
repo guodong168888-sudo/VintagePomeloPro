@@ -1,12 +1,10 @@
-import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { AbilityConstant, UIAbility, Want, bundleManager } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
 import { WineWindowManager } from '../service/WineWindowManager';
 
 const DOMAIN = 0x0000;
-const DOWNLOAD_LIBRARY_URI = 'file://docs/storage/Users/currentUser/Download/com.vintage.pomelopro';
-
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
@@ -20,7 +18,7 @@ export default class EntryAbility extends UIAbility {
       if (fs.statSync(path).isDirectory()) return;
     } catch (_) {
       try {
-        fs.mkdirSync(path, true);
+        fs.mkdirSync(path);
       } catch (error) {
         hilog.error(DOMAIN, 'EntryAbility', 'Failed to create %{public}s: %{public}s', path, JSON.stringify(error));
       }
@@ -29,7 +27,10 @@ export default class EntryAbility extends UIAbility {
 
   private ensureDownloadGamesDirectory(): void {
     try {
-      const libraryPath = new fileUri.FileUri(DOWNLOAD_LIBRARY_URI).path;
+      const bundleInfo = bundleManager.getBundleInfoForSelfSync(
+        bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION);
+      const libraryUri = 'file://docs/storage/Users/currentUser/Download/' + bundleInfo.name;
+      const libraryPath = new fileUri.FileUri(libraryUri).path;
       this.ensureDirectoryExists(libraryPath);
       this.ensureDirectoryExists(libraryPath + '/games');
       hilog.info(DOMAIN, 'EntryAbility', 'Download games directory ready: %{public}s', libraryPath + '/games');

@@ -107,7 +107,7 @@ struct Index {
       WineWindowManager.getInstance().setOutputScalePercent(settings.outputScale);
     };
     ThemeSettingsService.getInstance().subscribe(this.settingsCallback);
-    AppCatalogService.getInstance().initialize(this.context);
+    await AppCatalogService.getInstance().initialize(this.context);
     AppSessionService.getInstance().initialize(this.context);
     LauncherAdapterRegistry.getInstance().initialize(this.context);
     WineEngineService.getInstance().initialize(this.context);
@@ -269,6 +269,43 @@ struct Index {
       promptAction.showToast({ message: WineEngineService.getInstance().getMessage() });
     }
     this.refreshRunningState();
+  }
+
+  private isEngineBusy(): boolean {
+    return this.engineState === EngineState.PREPARING || this.engineState === EngineState.SWITCHING;
+  }
+
+  @Builder
+  private EngineBusyOverlay() {
+    Column({ space: 14 }) {
+      LoadingProgress()
+        .width(52)
+        .height(52)
+        .color($r('app.color.accent'))
+      Text(this.engineState === EngineState.SWITCHING ? '正在重建 Wine 会话' : '正在初始化 Wine')
+        .fontSize(22)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_primary'))
+      Text(this.engineMessage)
+        .fontSize(14)
+        .fontColor($r('app.color.text_secondary'))
+        .textAlign(TextAlign.Center)
+      if (this.engineState === EngineState.PREPARING) {
+        Text('首次启动需要解压运行环境并初始化 Windows，可能需要一段时间')
+          .fontSize(12)
+          .fontColor($r('app.color.text_secondary'))
+          .textAlign(TextAlign.Center)
+          .constraintSize({ maxWidth: 420 })
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .padding(28)
+    .backgroundColor($r('app.color.page_background'))
+    .hitTestBehavior(HitTestMode.Block)
+    .id('wine-engine-blocking-overlay')
+    .zIndex(100)
   }
 
   private openAppSettings(app: AppDescriptor): void {
@@ -577,6 +614,9 @@ struct Index {
           Column().layoutWeight(1).height('100%').backgroundColor('#55000000')
             .onClick((): void => { this.mobileSidebarVisible = false; })
         }.width('100%').height('100%').alignItems(VerticalAlign.Top)
+      }
+      if (this.isEngineBusy()) {
+        this.EngineBusyOverlay()
       }
     }
     .width('100%').height('100%')

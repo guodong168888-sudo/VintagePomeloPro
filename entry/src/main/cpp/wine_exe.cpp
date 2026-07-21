@@ -73,7 +73,7 @@ napi_value RunWineExe(napi_env env, napi_callback_info info) {
 
     std::string homeDir(homePath);
     if (homeDir.empty()) homeDir = gBrokerHomeDir;
-    if (homeDir.empty()) homeDir = "/storage/Users/currentUser/Download";
+    if (homeDir.empty()) homeDir = "/storage/Users/currentUser/Download/com.vintage.pomelopro";
 
     std::string exePath(wineExe);
     {

@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { Environment, fileIo as fs, fileUri } from '@kit.CoreFileKit';
+import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
 import util from '@ohos.util';
 import {
   AppDescriptor,
@@ -76,38 +76,36 @@ export class AppCatalogService {
   private static instance: AppCatalogService | null = null;
   private context: common.UIAbilityContext | null = null;
   private apps: AppDescriptor[] = [];
+  private libraryRoot: string = '';
 
   static getInstance(): AppCatalogService {
     if (!AppCatalogService.instance) AppCatalogService.instance = new AppCatalogService();
     return AppCatalogService.instance;
   }
 
-  initialize(context: common.UIAbilityContext): void {
+  async initialize(context: common.UIAbilityContext): Promise<void> {
     this.context = context;
-    // Download/com.vintage.pomelopro/games 是应用的固定入口，不应等到用户
-    // 第一次点击“重新扫描”才出现。启动时创建也让文件管理器中的入口保持
-    // 与旧版本一致。
+    this.libraryRoot = this.directLibraryRoot();
     this.ensureGamesDirectory();
   }
 
   getLibraryRoot(): string {
+    if (this.libraryRoot) return this.libraryRoot;
+    return this.directLibraryRoot();
+  }
+
+  private directLibraryRoot(): string {
     try {
-      // DocumentPicker 的 DOWNLOAD 模式和 VintagePomelo 都使用这条 FileUri。
-      // 它在 API 23 设备上可用，而 Environment.getUserDownloadDir() 是可选
-      // 系统能力，不能作为专用 Download 目录的唯一来源。
       return new fileUri.FileUri(DOWNLOAD_LIBRARY_URI).path;
     } catch (_) {
-      const savedPath = AppSettingsStore.getInstance().getLibraryPath().replace(/\/$/, '');
-      return savedPath.endsWith('/' + APPLICATION_DIRECTORY) ? savedPath : '';
+      return '';
     }
   }
 
   getWineHomeDirectory(): string {
-    try {
-      return Environment.getUserDownloadDir();
-    } catch (_) {
-      return '/storage/Users/currentUser/Download';
-    }
+    const gamesPath = this.ensureGamesDirectory();
+    if (gamesPath) return this.getLibraryRoot();
+    return '/storage/Users/currentUser/Download/' + APPLICATION_DIRECTORY;
   }
 
   getGamesDirectory(): string {
@@ -129,10 +127,9 @@ export class AppCatalogService {
     if (!libraryRoot) return '';
     const gamesPath = joinPath(libraryRoot, GAMES_DIRECTORY);
     try {
-      // fileIo.mkdirSync 的第二个参数在不同 API 版本中不能可靠地当作
-      // recursive 使用。分两级创建，避免父目录不存在时整个 games 创建失败。
-      if (!isDirectory(libraryRoot)) fs.mkdirSync(libraryRoot, true);
-      if (!isDirectory(gamesPath)) fs.mkdirSync(gamesPath, true);
+      // 与 VintagePomelo 一致，分两级创建且不传非标准 recursive 参数。
+      if (!isDirectory(libraryRoot)) fs.mkdirSync(libraryRoot);
+      if (!isDirectory(gamesPath)) fs.mkdirSync(gamesPath);
       return isDirectory(gamesPath) ? gamesPath : '';
     } catch (_) {
       return '';
@@ -244,7 +241,7 @@ export class AppCatalogService {
       version: 1,
       apps: [
         { id: 'builtin-desktop', title: 'Wine 桌面', launchKind: 'wine-desktop', launchParams: { executable: 'explorer.exe' }, cover: '', displayMode: 'desktop' },
-        { id: 'builtin-explorer', title: '文件资源管理器', launchKind: 'wine-system', launchParams: { executable: 'explorer.exe' }, cover: '', displayMode: 'desktop' },
+        { id: 'builtin-explorer', title: '文件资源管理器', launchKind: 'wine-system', launchParams: { executable: 'explorer.exe', arguments: ['Z:\\'] }, cover: '', displayMode: 'desktop' },
         { id: 'builtin-winecfg', title: 'Wine 配置', launchKind: 'wine-system', launchParams: { executable: 'winecfg.exe' }, cover: '', displayMode: 'desktop' },
         { id: 'builtin-control', title: '控制面板', launchKind: 'wine-system', launchParams: { executable: 'control.exe' }, cover: '', displayMode: 'desktop' },
         { id: 'builtin-taskmgr', title: '任务管理器', launchKind: 'wine-system', launchParams: { executable: 'taskmgr.exe' }, cover: '', displayMode: 'desktop' },

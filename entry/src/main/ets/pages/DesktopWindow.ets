@@ -109,8 +109,8 @@ struct DesktopPage {
   private lastTapPx: number = 0;
   private lastTapPy: number = 0;
   private lastTapTl: number = 0;
-  private static readonly DOUBLE_TAP_MS: number = 400;
-  private static readonly DOUBLE_TAP_DIST: number = 30;
+  private static readonly DOUBLE_TAP_MS: number = 500;
+  private static readonly DOUBLE_TAP_DIST: number = 64;
   // 双指滚动
   private twoFingerActive: boolean = false;
   private twoFingerLastMidX: number = 0;
@@ -355,14 +355,13 @@ struct DesktopPage {
                                     && dist < DesktopPage.DOUBLE_TAP_DIST && this.pendingTl === this.lastTapTl);
 
                 if (isDoubleTap) {
-                  // 双击: 两个连续点击使用同一位置
+                  // 第一次点击已在上一轮 Up 注入；第二轮只需再注入一次。
+                  // 旧逻辑在这里额外注入两次，Windows 实际收到三击。
                   this.lastTapTime = 0;
-                  testNapi.sendPointerEvent(this.pendingTl, MouseAction.Press, this.lastTapPx, this.lastTapPy, btnLeft);
-                  testNapi.sendPointerEvent(this.pendingTl, MouseAction.Release, this.lastTapPx, this.lastTapPy, btnLeft);
-                  testNapi.sendPointerEvent(this.pendingTl, MouseAction.Press, this.lastTapPx, this.lastTapPy, btnLeft);
-                  testNapi.sendPointerEvent(this.pendingTl, MouseAction.Release, this.lastTapPx, this.lastTapPy, btnLeft);
+                  testNapi.sendPointerEvent(this.pendingTl, MouseAction.Press, this.pendingPx, this.pendingPy, btnLeft);
+                  testNapi.sendPointerEvent(this.pendingTl, MouseAction.Release, this.pendingPx, this.pendingPy, btnLeft);
                   hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] DOUBLE-TAP tl=%{public}d px=(%{public}d,%{public}d)',
-                    this.pendingTl, this.lastTapPx, this.lastTapPy);
+                    this.pendingTl, this.pendingPx, this.pendingPy);
                 } else {
                   // 单击
                   testNapi.sendPointerEvent(this.pendingTl, MouseAction.Press, this.pendingPx, this.pendingPy, btnLeft);

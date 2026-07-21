@@ -39,6 +39,18 @@
     {
       "name": "selected_background",
       "value": "#FFE2ECFF"
+    },
+    {
+      "name": "keyboard_background",
+      "value": "#FFEEF2F7"
+    },
+    {
+      "name": "keyboard_key_background",
+      "value": "#FFFFFFFF"
+    },
+    {
+      "name": "keyboard_key_border",
+      "value": "#FFD5DCE7"
     }
   ]
 }

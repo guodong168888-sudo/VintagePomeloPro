@@ -76,16 +76,18 @@ export struct KeyboardLayout {
   private Key(key: KeyboardKey) {
     Button({ type: ButtonType.Normal }) {
       Column() {
-        if (key.subLabel) Text(key.subLabel).fontSize(7).fontColor(this.selectedEvdevCode === key.code ? '#FFFFFFFF' : '#99FFFFFF')
+        if (key.subLabel) Text(key.subLabel).fontSize(7)
+          .fontColor(this.selectedEvdevCode === key.code ? '#FFFFFFFF' : $r('app.color.text_secondary'))
         Text(key.label).fontSize(key.label.length > 4 ? 8 : 11).fontWeight(FontWeight.Medium)
-          .fontColor(this.selectedEvdevCode === key.code ? '#FFFFFFFF' : '#FFE7ECF5')
+          .fontColor(this.selectedEvdevCode === key.code ? '#FFFFFFFF' : $r('app.color.text_primary'))
       }.justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
     }
     .width(this.keySize * (key.width ?? 1) + this.gap * ((key.width ?? 1) - 1))
     .height(this.keySize)
     .borderRadius(6)
-    .backgroundColor(this.selectedEvdevCode === key.code ? '#FF2979FF' : '#2AFFFFFF')
-    .border({ width: 1, color: this.selectedEvdevCode === key.code ? '#FF6EA8FF' : '#33FFFFFF' })
+    .backgroundColor(this.selectedEvdevCode === key.code ? $r('app.color.accent') : $r('app.color.keyboard_key_background'))
+    .border({ width: 1, color: this.selectedEvdevCode === key.code ? $r('app.color.accent') : $r('app.color.keyboard_key_border') })
+    .shadow({ radius: 2, color: '#20000000', offsetY: 1 })
     .onClick((): void => this.onKeySelected(key.code, key.label))
   }
 
@@ -112,8 +114,8 @@ export struct KeyboardLayout {
       Column({ space: this.gap }) { ForEach(NUMPAD_ROWS, (row: KeyboardKey[]): void => this.KeyRow(row)) }
     }
     .padding(10)
-    .backgroundColor('#FF1A1F2B')
+    .backgroundColor($r('app.color.keyboard_background'))
     .borderRadius(14)
-    .border({ width: 1, color: '#33FFFFFF' })
+    .border({ width: 1, color: $r('app.color.keyboard_key_border') })
   }
 }

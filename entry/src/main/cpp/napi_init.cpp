@@ -128,7 +128,7 @@ static napi_value LaunchClient(napi_env env, napi_callback_info info) {
     }
     // 向后兼容: 旧调用未传 homeDir 时使用默认路径
     if (p->homeDir.empty()) {
-        p->homeDir = "/storage/Users/currentUser/Download";
+        p->homeDir = "/storage/Users/currentUser/Download/com.vintage.pomelopro";
     }
 
     OH_LOG_INFO(LOG_APP, "[Launch] exe=%{public}s sock=%{public}s lib=%{public}s home=%{public}s (async)",

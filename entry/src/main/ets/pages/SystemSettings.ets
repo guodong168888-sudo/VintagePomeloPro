@@ -556,6 +556,8 @@ struct SystemSettingsPage {
                 .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
               this.SwitchRow('显示触摸光标', '操作时短暂显示鼠标位置与点击反馈', this.settings.virtualMouseConfig.showCursor,
                 (value: boolean): void => this.updateVirtualMouse(this.settings.virtualMouseConfig.mouseSensitivity, value))
+              Text('轻点为左键，双指轻点为右键；轻点后再次按住并移动可拖拽窗口')
+                .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
               Text('滚动灵敏度 ' + this.settings.virtualMouseConfig.mouseSensitivity + '%')
                 .fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
               Slider({ value: this.settings.virtualMouseConfig.mouseSensitivity, min: 50, max: 200, step: 10 })
