@@ -22,7 +22,8 @@ import { VirtualInputOverlay } from '../components/VirtualInputOverlay';
 import { InputProfileService } from '../service/InputProfileService';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 
-type ButtonGroupKey = 'direction' | 'action' | 'aux';
+type ButtonGroupKey = 'direction' | 'leftTrigger' | 'leftBumper' | 'action' |
+  'rightBumper' | 'rightTrigger' | 'aux';
 
 interface GroupDisplayInfo {
   key: ButtonGroupKey;
@@ -36,7 +37,8 @@ function clamp(value: number, min: number, max: number): number {
 
 /**
  * Direct adaptation of VintagePomelo's ButtonLayoutEditor.  Editing operates
- * on three groups only; per-button X/Y and size fields no longer exist.
+ * on functional groups. Shoulder controls remain independently movable so the
+ * default can mirror a physical controller without coupling them to ABXY.
  */
 @Entry
 @Component
@@ -55,7 +57,11 @@ struct InputLayoutEditor {
   private dragStartY: number = 0;
   private readonly groups: GroupDisplayInfo[] = [
     { key: 'direction', label: '方向', color: '#4CAF50' },
+    { key: 'leftTrigger', label: 'LT', color: '#FFB74D' },
+    { key: 'leftBumper', label: 'LB', color: '#FFCC80' },
     { key: 'action', label: '按键', color: '#2196F3' },
+    { key: 'rightBumper', label: 'RB', color: '#90CAF9' },
+    { key: 'rightTrigger', label: 'RT', color: '#64B5F6' },
     { key: 'aux', label: '辅助', color: '#FF9800' }
   ];
 
@@ -85,7 +91,7 @@ struct InputLayoutEditor {
     this.profile = {
       id: this.profile.id,
       name: this.profile.name,
-      schemaVersion: 2,
+      schemaVersion: 3,
       virtualKeyConfig: cloneVirtualKeyConfig(config),
       layoutLandscape: cloneGamepadLayout(landscape),
       layoutPortrait: cloneGamepadLayout(portrait, DEFAULT_GAMEPAD_LAYOUT_PORTRAIT),
@@ -98,7 +104,11 @@ struct InputLayoutEditor {
   private groupPosition(key: ButtonGroupKey): ButtonGroupPosition {
     const layout = this.currentLayout();
     if (key === 'direction') return layout.direction;
+    if (key === 'leftTrigger') return layout.leftTrigger;
+    if (key === 'leftBumper') return layout.leftBumper;
     if (key === 'action') return layout.action;
+    if (key === 'rightBumper') return layout.rightBumper;
+    if (key === 'rightTrigger') return layout.rightTrigger;
     return layout.aux;
   }
 
@@ -109,10 +119,11 @@ struct InputLayoutEditor {
       return [size, size];
     }
     if (key === 'action') {
-      let height = 140;
-      if (config.showButtonShift || config.showButtonCtrl) height += 41;
-      if (config.showButtonL || config.showButtonR) height += 43;
-      return [140 * config.buttonSize / 100, height * config.buttonSize / 100];
+      return [140 * config.buttonSize / 100, 140 * config.buttonSize / 100];
+    }
+    if (key === 'leftTrigger' || key === 'leftBumper' ||
+      key === 'rightBumper' || key === 'rightTrigger') {
+      return [Math.max(48, 56 * config.buttonSize / 100), Math.max(48, 40 * config.buttonSize / 100)];
     }
     return [config.showButtonMenu ? 35 * config.buttonSize / 100 : 0, 35 * config.buttonSize / 100];
   }
@@ -125,13 +136,21 @@ struct InputLayoutEditor {
     if (this.isPortrait) {
       const portrait = cloneGamepadLayout(this.profile.layoutPortrait, DEFAULT_GAMEPAD_LAYOUT_PORTRAIT);
       if (key === 'direction') portrait.direction = next;
+      else if (key === 'leftTrigger') portrait.leftTrigger = next;
+      else if (key === 'leftBumper') portrait.leftBumper = next;
       else if (key === 'action') portrait.action = next;
+      else if (key === 'rightBumper') portrait.rightBumper = next;
+      else if (key === 'rightTrigger') portrait.rightTrigger = next;
       else portrait.aux = next;
       this.replace(this.config(), this.profile.layoutLandscape, portrait);
     } else {
       const landscape = cloneGamepadLayout(this.profile.layoutLandscape);
       if (key === 'direction') landscape.direction = next;
+      else if (key === 'leftTrigger') landscape.leftTrigger = next;
+      else if (key === 'leftBumper') landscape.leftBumper = next;
       else if (key === 'action') landscape.action = next;
+      else if (key === 'rightBumper') landscape.rightBumper = next;
+      else if (key === 'rightTrigger') landscape.rightTrigger = next;
       else landscape.aux = next;
       this.replace(this.config(), landscape, this.profile.layoutPortrait);
     }

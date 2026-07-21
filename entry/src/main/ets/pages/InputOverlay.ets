@@ -18,14 +18,7 @@ interface DirectTouch {
   moved: boolean;
   buttonDown: boolean;
   consumed: boolean;
-  doubleTap: boolean;
-}
-
-interface PendingTap {
-  x: number;
-  y: number;
-  createdAt: number;
-  timerId: number;
+  startTime: number;
 }
 
 /** 全屏透明应用子窗口的 ArkTS 根页面。 */
@@ -40,11 +33,11 @@ struct InputOverlayPage {
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private directTouches: Map<number, DirectTouch> = new Map();
   private twoFinger: boolean = false;
+  private twoFingerTapEligible: boolean = false;
   private lastMidX: number = 0;
   private lastMidY: number = 0;
-  private pendingTap: PendingTap | null = null;
   private eventGate: InputEventGate = new InputEventGate();
-  private readonly TAP_TIMEOUT_MS: number = 260;
+  private readonly TAP_TIMEOUT_MS: number = 300;
   private readonly TAP_SLOP_PX: number = 24;
 
   aboutToAppear(): void {
@@ -54,9 +47,9 @@ struct InputOverlayPage {
       const becameVisible = !this.snapshot.visible && snapshot.visible;
       this.snapshot = snapshot;
       if (sessionChanged) {
-        this.clearPendingTap();
         this.directTouches.clear();
         this.twoFinger = false;
+        this.twoFingerTapEligible = false;
       }
       // Editors update the contents of an existing profile ID. Reload when
       // returning to a Wine session as well as when the ID changes so saved
@@ -75,7 +68,6 @@ struct InputOverlayPage {
     if (this.listener) InputOverlayWindowCoordinator.getInstance().unsubscribe(this.listener);
     if (this.diagnosticsListener) InputDispatcher.getInstance().unsubscribeDiagnostics(this.diagnosticsListener);
     InputDispatcher.getInstance().releaseAll('overlay-page-disappear');
-    this.clearPendingTap();
   }
 
   private loadProfile(profileId: string): void {
@@ -100,41 +92,9 @@ struct InputOverlayPage {
     return (values[0].x + values[1].x) / 2;
   }
 
-  private clearPendingTap(): void {
-    if (!this.pendingTap) return;
-    clearTimeout(this.pendingTap.timerId);
-    this.pendingTap = null;
-  }
-
   private injectClick(source: string, x: number, y: number, button: number): void {
     InputDispatcher.getInstance().pointerDown(source, x, y, button);
     InputDispatcher.getInstance().pointerUp(source, x, y, button);
-  }
-
-  private commitPendingLeftTap(): void {
-    if (!this.pendingTap) return;
-    const pending = this.pendingTap;
-    this.pendingTap = null;
-    this.injectClick('direct-rdp-left', pending.x, pending.y, 272);
-  }
-
-  private prepareTap(x: number, y: number): boolean {
-    if (!this.pendingTap) return false;
-    const pending = this.pendingTap;
-    const elapsed = Date.now() - pending.createdAt;
-    const distance = Math.abs(pending.x - x) + Math.abs(pending.y - y);
-    if (elapsed <= this.TAP_TIMEOUT_MS && distance <= this.TAP_SLOP_PX * 2) {
-      this.clearPendingTap();
-      return true;
-    }
-    this.commitPendingLeftTap();
-    return false;
-  }
-
-  private scheduleLeftTap(x: number, y: number): void {
-    this.clearPendingTap();
-    const timerId = setTimeout((): void => this.commitPendingLeftTap(), this.TAP_TIMEOUT_MS);
-    this.pendingTap = { x, y, createdAt: Date.now(), timerId };
   }
 
   private handleDirectTouch(event: TouchEvent): void {
@@ -146,13 +106,12 @@ struct InputOverlayPage {
       const y = vp2px(touch.y);
       const source = this.directSource(touch.id);
       if (event.type === TouchType.Down) {
-        const secondTap = this.directTouches.size === 0 && this.prepareTap(x, y);
         this.directTouches.set(touch.id, {
-          x, y, startX: x, startY: y, moved: false, buttonDown: false, consumed: false, doubleTap: secondTap
+          x, y, startX: x, startY: y, moved: false, buttonDown: false, consumed: false, startTime: Date.now()
         });
         if (this.directTouches.size === 2) {
           this.twoFinger = true;
-          this.clearPendingTap();
+          this.twoFingerTapEligible = true;
           this.lastMidX = this.midpointX();
           this.lastMidY = this.midpointY();
           // 双指只负责滚动：取消可能中的点击/拖拽，但不触及虚拟手柄按键。
@@ -160,6 +119,8 @@ struct InputOverlayPage {
             value.consumed = true;
             if (value.buttonDown) InputDispatcher.getInstance().releaseSource(this.directSource(activeTouchId));
           });
+        } else if (this.directTouches.size > 2) {
+          this.twoFingerTapEligible = false;
         }
       } else if (event.type === TouchType.Move) {
         const previous = this.directTouches.get(touch.id);
@@ -167,24 +128,24 @@ struct InputOverlayPage {
         const moved = previous.moved || Math.abs(x - previous.startX) + Math.abs(y - previous.startY) > this.TAP_SLOP_PX;
         this.directTouches.set(touch.id, {
           x, y, startX: previous.startX, startY: previous.startY, moved,
-          buttonDown: previous.buttonDown, consumed: previous.consumed, doubleTap: previous.doubleTap
+          buttonDown: previous.buttonDown, consumed: previous.consumed, startTime: previous.startTime
         });
         if (this.twoFinger && this.directTouches.size >= 2) {
-          this.clearPendingTap();
           const midX = this.midpointX();
           const midY = this.midpointY();
           const deltaX = this.lastMidX - midX;
           const delta = this.lastMidY - midY;
           if (Math.abs(deltaX) >= 18) {
+            this.twoFingerTapEligible = false;
             InputDispatcher.getInstance().scroll('direct-scroll', 1, deltaX > 0 ? 1 : -1);
             this.lastMidX = midX;
           }
           if (Math.abs(delta) >= 18) {
+            this.twoFingerTapEligible = false;
             InputDispatcher.getInstance().scroll('direct-scroll', 0, delta > 0 ? 1 : -1);
             this.lastMidY = midY;
           }
         } else if (moved && !previous.consumed) {
-          this.clearPendingTap();
           if (!previous.buttonDown) {
             InputDispatcher.getInstance().pointerDown(source, previous.startX, previous.startY, 272);
             const current = this.directTouches.get(touch.id);
@@ -195,19 +156,28 @@ struct InputOverlayPage {
       } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
         const previous = this.directTouches.get(touch.id);
         if (!previous) continue;
+        const elapsed = Date.now() - previous.startTime;
         const wasTwoFinger = this.twoFinger || previous.consumed;
         this.directTouches.delete(touch.id);
-        if (!wasTwoFinger && previous.buttonDown) {
+        if (wasTwoFinger) {
+          if (previous.moved || elapsed >= this.TAP_TIMEOUT_MS || event.type === TouchType.Cancel) {
+            this.twoFingerTapEligible = false;
+          }
+          InputDispatcher.getInstance().releaseSource(source);
+          if (this.directTouches.size === 0) {
+            if (event.type === TouchType.Up && this.twoFingerTapEligible) {
+              this.injectClick('direct-rdp-two-finger-right', this.lastMidX, this.lastMidY, 273);
+            }
+            InputDispatcher.getInstance().releaseSource('direct-scroll');
+            this.twoFinger = false;
+            this.twoFingerTapEligible = false;
+          }
+        } else if (previous.buttonDown) {
           InputDispatcher.getInstance().pointerUp(source, x, y, 272);
-        } else if (!wasTwoFinger && event.type === TouchType.Up && !previous.moved) {
-          if (previous.doubleTap) this.injectClick('direct-rdp-right', x, y, 273);
-          else this.scheduleLeftTap(x, y);
+        } else if (event.type === TouchType.Up && !previous.moved && elapsed < this.TAP_TIMEOUT_MS) {
+          this.injectClick('direct-rdp-left', x, y, 272);
         } else {
           InputDispatcher.getInstance().releaseSource(source);
-        }
-        if (wasTwoFinger && this.directTouches.size < 2) {
-          InputDispatcher.getInstance().releaseSource('direct-scroll');
-          this.twoFinger = false;
         }
       }
     }

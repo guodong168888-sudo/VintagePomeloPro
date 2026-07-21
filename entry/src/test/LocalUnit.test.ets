@@ -5,6 +5,7 @@ import {
   DisplayMode,
   EngineState,
   canTransitionEngineState,
+  createDefaultInputProfile,
   normalizeLaunchPath,
   resolveDisplayMode,
   stableAppId
@@ -61,6 +62,16 @@ export default function localUnitTest() {
       expect(canTransitionEngineState(EngineState.PREPARING, EngineState.READY)).assertTrue();
       expect(canTransitionEngineState(EngineState.PREPARING, EngineState.SWITCHING)).assertTrue();
       expect(canTransitionEngineState(EngineState.STOPPED, EngineState.READY)).assertFalse();
+    });
+
+    it('placesShoulderControlsOnTheirPhysicalControllerSides', 0, () => {
+      const layout = createDefaultInputProfile().layoutLandscape;
+      expect(layout.leftTrigger.centerX < 0.5).assertTrue();
+      expect(layout.leftBumper.centerX < 0.5).assertTrue();
+      expect(layout.rightBumper.centerX > 0.5).assertTrue();
+      expect(layout.rightTrigger.centerX > 0.5).assertTrue();
+      expect(layout.leftTrigger.centerY < layout.direction.centerY).assertTrue();
+      expect(layout.rightTrigger.centerY < layout.action.centerY).assertTrue();
     });
 
     it('keepsSharedVirtualKeyPressedUntilEverySourceReleases', 0, () => {

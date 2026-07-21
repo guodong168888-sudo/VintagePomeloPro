@@ -13,7 +13,7 @@ import {
 
 const STORE_NAME = 'vintage_pomelo_input_profiles';
 const PROFILES_KEY = 'profiles_v2';
-const INPUT_PROFILE_SCHEMA_VERSION = 2;
+const INPUT_PROFILE_SCHEMA_VERSION = 3;
 
 /**
  * Persists the VintagePomelo-compatible grouped layout contract.  Version one
@@ -70,12 +70,18 @@ export class InputProfileService {
       }
     }
 
-    // The former v1 store is intentionally not read: its individual-button
-    // coordinates are incompatible with the grouped Vintage layout.  A clean
-    // default is safer than displaying both direction controls after upgrade.
     let changed = false;
-    const defaultProfile = this.profiles.get('default');
-    if (!defaultProfile || defaultProfile.schemaVersion !== INPUT_PROFILE_SCHEMA_VERSION) {
+    this.profiles.forEach((value: InputProfile, id: string): void => {
+      if (value.schemaVersion !== INPUT_PROFILE_SCHEMA_VERSION ||
+        !value.layoutLandscape.leftTrigger || !value.layoutLandscape.leftBumper ||
+        !value.layoutLandscape.rightBumper || !value.layoutLandscape.rightTrigger) {
+        // Version three separates all four shoulder controls while retaining
+        // every existing direction/action/aux position and key mapping.
+        this.profiles.set(id, this.cloneProfile(value));
+        changed = true;
+      }
+    });
+    if (!this.profiles.has('default')) {
       this.profiles.set('default', createDefaultInputProfile());
       changed = true;
     }

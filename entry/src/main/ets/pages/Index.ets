@@ -31,6 +31,7 @@ type CatalogFilter = 'builtin' | 'windows' | 'running' | 'favorite';
 struct Index {
   @StorageLink('overlayEditorRequest') @Watch('onOverlayEditorRequest') private overlayEditorRequest: string = '';
   @State private apps: AppDescriptor[] = [];
+  @State private visibleApps: AppDescriptor[] = [];
   @State private searchQuery: string = '';
   @State private filter: CatalogFilter = 'builtin';
   @State private breakpoint: BreakpointType = 'lg';
@@ -68,6 +69,11 @@ struct Index {
     if (this.engineCallback) WineEngineService.getInstance().unsubscribe(this.engineCallback);
     if (this.settingsCallback) ThemeSettingsService.getInstance().unsubscribe(this.settingsCallback);
     if (this.refreshTimer >= 0) clearInterval(this.refreshTimer);
+  }
+
+  onPageShow(): void {
+    this.settings = AppSettingsStore.getInstance().getGlobalSettings();
+    this.refreshRunningState();
   }
 
   private onOverlayEditorRequest(): void {
@@ -114,24 +120,33 @@ struct Index {
   }
 
   private refreshRunningState(): void {
-    this.runningAppIds = AppSessionService.getInstance().getRunningAppIds();
+    const running = AppSessionService.getInstance().getRunningAppIds();
+    this.runningAppIds = running;
+    this.visibleApps = this.filterApps(this.searchQuery, this.filter, running);
   }
 
-  private filteredApps(): AppDescriptor[] {
-    const query = this.searchQuery.trim().toLowerCase();
+  private filterApps(searchQuery: string, filter: CatalogFilter,
+    running: Set<string> = this.runningAppIds): AppDescriptor[] {
+    const query = searchQuery.trim().toLowerCase();
     return this.apps.filter((app: AppDescriptor) => {
       const normalized = normalizeLaunchPath(app.launchTarget.executable);
-      if (this.filter === 'builtin' && app.source !== AppSource.BUILTIN) return false;
-      if (this.filter === 'windows' && app.source !== AppSource.DOWNLOAD) return false;
-      if (this.filter === 'running' && !this.runningAppIds.has(app.id)) return false;
-      if (this.filter === 'favorite' && !AppSettingsStore.getInstance().getAppSettings(app.id).favorite) return false;
+      if (filter === 'builtin' && app.source !== AppSource.BUILTIN) return false;
+      if (filter === 'windows' && app.source !== AppSource.DOWNLOAD) return false;
+      if (filter === 'running' && !running.has(app.id)) return false;
+      if (filter === 'favorite' && !AppSettingsStore.getInstance().getAppSettings(app.id).favorite) return false;
       if (!query) return true;
       return app.title.toLowerCase().includes(query) || normalized.includes(query);
     });
   }
 
+  private updateSearch(value: string): void {
+    this.searchQuery = value;
+    this.visibleApps = this.filterApps(value, this.filter);
+  }
+
   private selectFilter(value: CatalogFilter): void {
     this.filter = value;
+    this.visibleApps = this.filterApps(this.searchQuery, value);
     this.mobileSidebarVisible = false;
   }
 
@@ -149,6 +164,43 @@ struct Index {
     if (this.filter === 'running') return '点击卡片可恢复，长按可关闭会话';
     if (this.filter === 'favorite') return '已收藏的内建应用和 Windows 程序';
     return this.engineMessage;
+  }
+
+  private emptyTitle(): string {
+    if (this.searchQuery.trim()) return '没有匹配的应用';
+    if (this.filter === 'favorite') return '还没有收藏应用';
+    if (this.filter === 'running') return '当前没有运行中的应用';
+    if (this.filter === 'windows') return '尚未发现 Windows 程序';
+    return '未找到内建应用';
+  }
+
+  private emptyDescription(): string {
+    if (this.searchQuery.trim()) return '请更换关键词，或清除搜索后查看当前分类的全部内容';
+    if (this.filter === 'favorite') return '在应用设置中开启收藏后，应用会显示在这里';
+    if (this.filter === 'running') return '启动 Wine 桌面或程序后，可在这里恢复或关闭会话';
+    if (this.filter === 'windows') return '将程序放入 Download/com.vintage.pomelopro/games，应用会自动扫描';
+    return '安装包中的内建应用清单为空，请检查应用资源';
+  }
+
+  private emptyIcon(): Resource {
+    if (this.filter === 'favorite') return $r('sys.symbol.star');
+    if (this.filter === 'running') return $r('sys.symbol.play_fill');
+    if (this.filter === 'windows') return $r('sys.symbol.folder');
+    return $r('sys.symbol.house_fill');
+  }
+
+  private emptyActionLabel(): string {
+    if (this.searchQuery.trim()) return '清除搜索';
+    if (this.filter === 'windows') return '重新扫描';
+    return '';
+  }
+
+  private handleEmptyAction(): void {
+    if (this.searchQuery.trim()) {
+      this.updateSearch('');
+      return;
+    }
+    if (this.filter === 'windows') this.rescan();
   }
 
   private gridColumns(): string {
@@ -286,7 +338,7 @@ struct Index {
       if (!this.sidebarCollapsed || mobile) {
         AppSearchBar({
           value: this.searchQuery,
-          onValueChange: (value: string): void => { this.searchQuery = value; }
+          onValueChange: (value: string): void => { this.updateSearch(value); }
         })
         Button('重新扫描').width('100%').height(48).fontSize(13).fontWeight(FontWeight.Medium)
           .backgroundColor($r('app.color.search_background')).fontColor($r('app.color.text_primary')).borderRadius(16)
@@ -347,7 +399,7 @@ struct Index {
       if (this.breakpoint === 'sm' || this.breakpoint === 'md') {
         AppSearchBar({
           value: this.searchQuery,
-          onValueChange: (value: string): void => { this.searchQuery = value; }
+          onValueChange: (value: string): void => { this.updateSearch(value); }
         })
       }
       if (this.breakpoint === 'md') {
@@ -412,17 +464,20 @@ struct Index {
           LoadingProgress().width(20).height(20)
           Text('正在扫描应用目录…').fontColor($r('app.color.text_secondary'))
         }.margin({ top: 22 })
-      } else if (this.filteredApps().length === 0) {
+      } else if (this.visibleApps.length === 0) {
         Column({ space: 12 }) {
-          SymbolGlyph($r('sys.symbol.square_grid_2x2')).fontSize(48).fontColor([$r('app.color.text_secondary')])
-          Text('这里还没有应用').fontSize(20).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
-          Text('将 EXE 或游戏文件夹放入 Download/com.vintage.pomelopro/games 后重新扫描').fontSize(13).fontColor($r('app.color.text_secondary'))
-          Button('重新扫描').borderRadius(20).id('library-empty-rescan').onClick(() => this.rescan())
+          SymbolGlyph(this.emptyIcon()).fontSize(48).fontColor([$r('app.color.text_secondary')])
+          Text(this.emptyTitle()).fontSize(20).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+          Text(this.emptyDescription()).fontSize(13).fontColor($r('app.color.text_secondary')).textAlign(TextAlign.Center)
+          if (this.emptyActionLabel()) {
+            Button(this.emptyActionLabel()).height(48).borderRadius(24).id('library-empty-action')
+              .onClick((): void => this.handleEmptyAction())
+          }
         }.layoutWeight(1).justifyContent(FlexAlign.Center)
       } else {
         Scroll() {
           Column() {
-            this.AppGrid(this.filteredApps())
+            this.AppGrid(this.visibleApps)
           }
           .width('100%')
           .constraintSize({ minHeight: '100%' })

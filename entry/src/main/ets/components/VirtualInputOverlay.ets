@@ -1,4 +1,5 @@
 import {
+  ButtonGroupPosition,
   DirectionControlMode,
   FreeButton,
   FreeButtonLayoutMode,
@@ -12,6 +13,7 @@ import {
 import { InputDispatcher } from '../service/InputDispatcher';
 
 type DirectionName = 'up' | 'down' | 'left' | 'right';
+type ToolbarAction = 'toggle' | 'editor' | 'fold';
 
 interface OverlayPoint {
   x: number;
@@ -59,6 +61,10 @@ export struct VirtualInputOverlay {
   private activeActionMouseKey: VirtualKey | null = null;
   private activeActionMouseFallback: number = 0;
   private lastActionTouchAt: number = 0;
+  private toolbarTouchId: number = -1;
+  private toolbarTouchAction: ToolbarAction | null = null;
+  private toolbarMouseAction: ToolbarAction | null = null;
+  private lastToolbarTouchAt: number = 0;
 
   private config() {
     return this.profile.virtualKeyConfig;
@@ -98,14 +104,31 @@ export struct VirtualInputOverlay {
   }
 
   private actionHeight(): number {
-    let height = 140;
-    if (this.config().showButtonShift || this.config().showButtonCtrl) height += 41;
-    if (this.config().showButtonL || this.config().showButtonR) height += 43;
-    return height * this.config().buttonSize / 100;
+    return 140 * this.config().buttonSize / 100;
+  }
+
+  private shoulderWidth(): number {
+    return 56 * this.config().buttonSize / 100;
+  }
+
+  private shoulderHeight(): number {
+    return 40 * this.config().buttonSize / 100;
+  }
+
+  private shoulderHitWidth(): number {
+    return Math.max(48, this.shoulderWidth());
+  }
+
+  private shoulderHitHeight(): number {
+    return Math.max(48, this.shoulderHeight());
   }
 
   private auxWidth(): number {
-    return this.config().showButtonMenu ? 35 * this.config().buttonSize / 100 : 0;
+    return this.config().showButtonMenu ? Math.max(48, 35 * this.config().buttonSize / 100) : 0;
+  }
+
+  private auxHeight(): number {
+    return Math.max(48, 35 * this.config().buttonSize / 100);
   }
 
   private groupPosition(centerX: number, centerY: number, groupW: number, groupH: number): OverlayPoint {
@@ -147,6 +170,73 @@ export struct VirtualInputOverlay {
     return x >= left && x <= left + width && y >= top && y <= top + height;
   }
 
+  private toolbarOriginX(): number {
+    return Math.max(4, this.overlayW - (this.controlsExpanded ? 150 : 54));
+  }
+
+  private toolbarActionAt(x: number, y: number): ToolbarAction | null {
+    const originX = this.toolbarOriginX();
+    if (this.controlsExpanded) {
+      if (this.rectContains(x, y, originX + 4, 14, 40, 48)) return 'toggle';
+      if (this.rectContains(x, y, originX + 44, 14, 44, 52)) return 'editor';
+      if (this.rectContains(x, y, originX + 88, 14, 44, 52)) return 'fold';
+      return null;
+    }
+    return this.rectContains(x, y, originX, 14, 40, 44) ? 'toggle' : null;
+  }
+
+  private runToolbarAction(action: ToolbarAction): void {
+    if (action === 'editor') {
+      this.onOpenLayoutEditor();
+      return;
+    }
+    this.controlsExpanded = action === 'toggle' ? !this.controlsExpanded : false;
+  }
+
+  private handleToolbarOverlayTouch(event: TouchEvent): boolean {
+    const touch = event.changedTouches[0];
+    if (!touch) return false;
+    if (this.toolbarTouchId === touch.id) {
+      event.stopPropagation();
+      this.lastToolbarTouchAt = Date.now();
+      if (event.type === TouchType.Up && this.toolbarTouchAction) this.runToolbarAction(this.toolbarTouchAction);
+      if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.toolbarTouchId = -1;
+        this.toolbarTouchAction = null;
+      }
+      return true;
+    }
+    if (event.type !== TouchType.Down) return false;
+    const action = this.toolbarActionAt(Number(touch.x), Number(touch.y));
+    if (!action) return false;
+    this.toolbarTouchId = touch.id;
+    this.toolbarTouchAction = action;
+    this.lastToolbarTouchAt = Date.now();
+    event.stopPropagation();
+    return true;
+  }
+
+  private handleToolbarOverlayMouse(event: MouseEvent): boolean {
+    const action = this.toolbarActionAt(Number(event.x), Number(event.y));
+    if (event.action === MouseAction.Press && action) {
+      this.toolbarMouseAction = action;
+      event.stopPropagation();
+      return true;
+    }
+    if (event.action === MouseAction.Release && this.toolbarMouseAction) {
+      const active = this.toolbarMouseAction;
+      this.toolbarMouseAction = null;
+      event.stopPropagation();
+      if (Date.now() - this.lastToolbarTouchAt > 350) this.runToolbarAction(active);
+      return true;
+    }
+    if (action) {
+      event.stopPropagation();
+      return true;
+    }
+    return false;
+  }
+
   private actionOrigin(): OverlayPoint {
     return this.groupPosition(this.layout().action.centerX, this.layout().action.centerY,
       this.actionWidth(), this.actionHeight());
@@ -154,39 +244,53 @@ export struct VirtualInputOverlay {
 
   private actionButtonAtLocal(localX: number, localY: number): [VirtualKey, number] | null {
     const scale = this.config().buttonSize / 100;
-    const small = 35 * scale;
-    const spacing = 16 * scale;
     const big = 50 * scale;
-    let rowY = 0;
-    if (this.config().showButtonShift || this.config().showButtonCtrl) {
-      if (this.config().showButtonShift && this.rectContains(localX, localY, 0, rowY, small, small)) {
-        return [VirtualKey.BUTTON_SHIFT, 42];
-      }
-      if (this.config().showButtonCtrl && this.rectContains(localX, localY, small + spacing, rowY, small, small)) {
-        return [VirtualKey.BUTTON_CTRL, 29];
-      }
-      rowY += small + 6;
-    }
-    if (this.config().showButtonL || this.config().showButtonR) {
-      if (this.config().showButtonL && this.rectContains(localX, localY, 0, rowY, small, small)) {
-        return [VirtualKey.BUTTON_L, 16];
-      }
-      if (this.config().showButtonR && this.rectContains(localX, localY, small + spacing, rowY, small, small)) {
-        return [VirtualKey.BUTTON_R, 17];
-      }
-      rowY += small + 8;
-    }
-    if (this.config().showButtonY && this.rectContains(localX, localY, 45 * scale, rowY, big, big)) {
+    if (this.config().showButtonY && this.rectContains(localX, localY, 45 * scale, 0, big, big)) {
       return [VirtualKey.BUTTON_Y, 31];
     }
-    if (this.config().showButtonX && this.rectContains(localX, localY, 0, rowY + 45 * scale, big, big)) {
+    if (this.config().showButtonX && this.rectContains(localX, localY, 0, 45 * scale, big, big)) {
       return [VirtualKey.BUTTON_X, 30];
     }
-    if (this.config().showButtonA && this.rectContains(localX, localY, 90 * scale, rowY + 45 * scale, big, big)) {
+    if (this.config().showButtonA && this.rectContains(localX, localY, 90 * scale, 45 * scale, big, big)) {
       return [VirtualKey.BUTTON_A, 57];
     }
-    if (this.config().showButtonB && this.rectContains(localX, localY, 45 * scale, rowY + 90 * scale, big, big)) {
+    if (this.config().showButtonB && this.rectContains(localX, localY, 45 * scale, 90 * scale, big, big)) {
       return [VirtualKey.BUTTON_B, 45];
+    }
+    return null;
+  }
+
+  private shoulderTargetAt(x: number, y: number): [VirtualKey, number] | null {
+    const layout = this.layout();
+    const targets: Array<[boolean, ButtonGroupPosition, VirtualKey, number]> = [
+      [this.config().showButtonShift, layout.leftTrigger, VirtualKey.BUTTON_SHIFT, 42],
+      [this.config().showButtonL, layout.leftBumper, VirtualKey.BUTTON_L, 16],
+      [this.config().showButtonR, layout.rightBumper, VirtualKey.BUTTON_R, 17],
+      [this.config().showButtonCtrl, layout.rightTrigger, VirtualKey.BUTTON_CTRL, 29]
+    ];
+    for (const target of targets) {
+      if (!target[0]) continue;
+      const origin = this.groupPosition(target[1].centerX, target[1].centerY,
+        this.shoulderHitWidth(), this.shoulderHitHeight());
+      if (this.rectContains(x, y, origin.x, origin.y, this.shoulderHitWidth(), this.shoulderHitHeight())) {
+        return [target[2], target[3]];
+      }
+    }
+    return null;
+  }
+
+  private buttonTargetAt(x: number, y: number): [VirtualKey, number] | null {
+    const shoulder = this.shoulderTargetAt(x, y);
+    if (shoulder) return shoulder;
+    const origin = this.actionOrigin();
+    const action = this.actionButtonAtLocal(x - origin.x, y - origin.y);
+    if (action) return action;
+    if (this.config().showButtonMenu && this.auxWidth() > 0) {
+      const aux = this.groupPosition(this.layout().aux.centerX, this.layout().aux.centerY,
+        this.auxWidth(), this.auxHeight());
+      if (this.rectContains(x, y, aux.x, aux.y, this.auxWidth(), this.auxHeight())) {
+        return [VirtualKey.BUTTON_MENU, 1];
+      }
     }
     return null;
   }
@@ -299,6 +403,7 @@ export struct VirtualInputOverlay {
 
   private handleOverlayTouch(event: TouchEvent): void {
     if (event.changedTouches.length === 0) return;
+    if (!this.hideToolbar && this.handleToolbarOverlayTouch(event)) return;
     if (!this.interactive || !this.controlsExpanded) {
       this.onUnhandledTouch(event);
       return;
@@ -308,14 +413,17 @@ export struct VirtualInputOverlay {
     const y = Number(touch.y);
     const direction = this.groupPosition(this.layout().direction.centerX, this.layout().direction.centerY,
       this.directionSize(), this.directionSize());
-    const aux = this.groupPosition(this.layout().aux.centerX, this.layout().aux.centerY,
-      this.auxWidth(), 35 * this.config().buttonSize / 100);
     let claimed = false;
     if (this.dpadTouchId === touch.id) {
       this.handleDpadTouch(event);
       claimed = true;
     } else if (this.joystickTouchId === touch.id) {
       this.handleJoystickTouch(event);
+      claimed = true;
+    } else if (this.activeButtonForTouch(touch.id)) {
+      this.lastActionTouchAt = Date.now();
+      const active = this.activeButtonForTouch(touch.id);
+      if (active) this.handleButtonTouch(event, active[0], active[1]);
       claimed = true;
     } else if (this.profile.freeButtonsConfig.enabled && this.profile.freeButtonsConfig.buttons.length > 0) {
       claimed = this.handleFreeOverlayTouch(event, x, y);
@@ -324,14 +432,50 @@ export struct VirtualInputOverlay {
       else this.handleJoystickTouch(event);
       claimed = true;
     } else {
-      claimed = this.handleActionOverlayTouch(event, x, y);
-      if (!claimed && this.auxWidth() > 0) {
-        claimed = this.rectContains(x, y, aux.x, aux.y, this.auxWidth(), 35 * this.config().buttonSize / 100);
-        if (claimed && this.config().showButtonMenu) this.handleButtonTouch(event, VirtualKey.BUTTON_MENU, 1);
+      const target = event.type === TouchType.Down ? this.buttonTargetAt(x, y) : null;
+      if (target) {
+        this.lastActionTouchAt = Date.now();
+        this.handleButtonTouch(event, target[0], target[1]);
+        claimed = true;
       }
     }
     if (claimed) event.stopPropagation();
     else this.onUnhandledTouch(event);
+  }
+
+  private handleOverlayMouse(event: MouseEvent): void {
+    if (!this.hideToolbar && this.handleToolbarOverlayMouse(event)) return;
+    if (!this.interactive || !this.controlsExpanded ||
+      this.profile.freeButtonsConfig.enabled || Date.now() - this.lastActionTouchAt <= 320) {
+      this.onUnhandledMouse(event);
+      return;
+    }
+    const x = Number(event.x);
+    const y = Number(event.y);
+    if (event.action === MouseAction.Press) {
+      const target = this.buttonTargetAt(x, y);
+      if (!target) {
+        this.onUnhandledMouse(event);
+        return;
+      }
+      event.stopPropagation();
+      this.activeActionMouseKey = target[0];
+      this.activeActionMouseFallback = target[1];
+      this.setPressed(target[0], true);
+      this.pressVirtualKey(target[0], target[1], -100, 'overlay-mouse');
+      return;
+    }
+    if (event.action === MouseAction.Release && this.activeActionMouseKey !== null) {
+      event.stopPropagation();
+      const key = this.activeActionMouseKey;
+      const fallback = this.activeActionMouseFallback;
+      this.activeActionMouseKey = null;
+      this.activeActionMouseFallback = 0;
+      this.setPressed(key, false);
+      this.releaseVirtualKey(key, fallback, -100, 'overlay-mouse');
+      return;
+    }
+    this.onUnhandledMouse(event);
   }
 
   private isFreePressed(button: FreeButton): boolean {
@@ -500,8 +644,9 @@ export struct VirtualInputOverlay {
     for (let index = 0; index < event.touches.length; index++) {
       const touch = event.touches[index];
       if (touch.id !== this.dpadTouchId) continue;
-      const center = this.directionSize() / 2;
-      const direction = this.directionFor(Number(touch.x) - center, Number(touch.y) - center);
+      const centerX = this.overlayW * this.layout().direction.centerX;
+      const centerY = this.overlayH * this.layout().direction.centerY;
+      const direction = this.directionFor(Number(touch.x) - centerX, Number(touch.y) - centerY);
       this.applyDirection(direction[0], direction[1], direction[2], direction[3], this.dpadTouchId, 'dpad');
       break;
     }
@@ -540,8 +685,7 @@ export struct VirtualInputOverlay {
         .fontColor(this.textColor(this.isPressed(key), accent))
     }
     .width((small ? 35 : 50) * this.config().buttonSize / 100).height((small ? 35 : 50) * this.config().buttonSize / 100)
-    .hitTestBehavior(HitTestMode.Block)
-    .onTouch((event: TouchEvent): void => this.handleButtonTouch(event, key, fallback))
+    .hitTestBehavior(HitTestMode.None)
   }
 
   @Builder
@@ -566,8 +710,7 @@ export struct VirtualInputOverlay {
         .opacity(this.visibleOpacity(this.config().joystickTransparency) * (this.dpadRight ? 1 : 0.5)).position({ x: this.directionSize() - this.joystickRadius() * 0.9 - 10, y: this.directionSize() / 2 - this.joystickRadius() * 0.3 })
       Circle().width(this.joystickRadius() * 0.4).height(this.joystickRadius() * 0.4).fill(this.fillColor(false)).opacity(this.visibleOpacity(this.config().joystickTransparency) * 0.7)
     }
-    .width(this.directionSize()).height(this.directionSize()).hitTestBehavior(HitTestMode.Block).id('wine-vintage-direction-dpad')
-    .onTouch((event: TouchEvent): void => this.handleDpadTouch(event))
+    .width(this.directionSize()).height(this.directionSize()).hitTestBehavior(HitTestMode.None).id('wine-vintage-direction-dpad')
   }
 
   @Builder
@@ -588,8 +731,7 @@ export struct VirtualInputOverlay {
         .fill(this.fillColor(this.joystickActive)).stroke(this.strokeColor()).strokeWidth(2)
         .opacity(this.visibleOpacity(this.config().joystickTransparency) * (this.joystickActive ? 1 : 0.7)).translate({ x: this.joystickX, y: this.joystickY })
     }
-    .width(this.directionSize()).height(this.directionSize()).hitTestBehavior(HitTestMode.Block).id('wine-vintage-direction-joystick')
-    .onTouch((event: TouchEvent): void => this.handleJoystickTouch(event))
+    .width(this.directionSize()).height(this.directionSize()).hitTestBehavior(HitTestMode.None).id('wine-vintage-direction-joystick')
   }
 
   @Builder
@@ -599,57 +741,65 @@ export struct VirtualInputOverlay {
       else this.Joystick()
     }
     .width(this.directionSize()).height(this.directionSize())
-    .hitTestBehavior(HitTestMode.Block)
+    .hitTestBehavior(HitTestMode.None)
     .position(this.groupPosition(this.layout().direction.centerX, this.layout().direction.centerY, this.directionSize(), this.directionSize()))
   }
 
   @Builder
   private ActionGroup() {
     Stack() {
-      Column() {
-        if (this.config().showButtonShift || this.config().showButtonCtrl) {
-          Row({ space: 16 * this.config().buttonSize / 100 }) {
-            if (this.config().showButtonShift) this.GameButton('LT', VirtualKey.BUTTON_SHIFT, 42, '#FFFFB74D', true)
-            if (this.config().showButtonCtrl) this.GameButton('RT', VirtualKey.BUTTON_CTRL, 29, '#FF64B5F6', true)
-          }.margin({ bottom: 6 }).hitTestBehavior(HitTestMode.Block)
-        }
-        if (this.config().showButtonL || this.config().showButtonR) {
-          Row({ space: 16 * this.config().buttonSize / 100 }) {
-            if (this.config().showButtonL) this.GameButton('LB', VirtualKey.BUTTON_L, 16, this.strokeColor(), true)
-            if (this.config().showButtonR) this.GameButton('RB', VirtualKey.BUTTON_R, 17, this.strokeColor(), true)
-          }.margin({ bottom: 8 }).hitTestBehavior(HitTestMode.Block)
-        }
-        Stack() {
-          if (this.config().showButtonY) {
-            Stack() { this.GameButton('Y', VirtualKey.BUTTON_Y, 31, this.strokeColor()) }
-              .width(50 * this.config().buttonSize / 100).height(50 * this.config().buttonSize / 100).position({ x: 45 * this.config().buttonSize / 100, y: 0 })
-          }
-          if (this.config().showButtonX) {
-            Stack() { this.GameButton('X', VirtualKey.BUTTON_X, 30, this.strokeColor()) }
-              .width(50 * this.config().buttonSize / 100).height(50 * this.config().buttonSize / 100).position({ x: 0, y: 45 * this.config().buttonSize / 100 })
-          }
-          if (this.config().showButtonA) {
-            Stack() { this.GameButton('A', VirtualKey.BUTTON_A, 57, '#FF81C784') }
-              .width(50 * this.config().buttonSize / 100).height(50 * this.config().buttonSize / 100).position({ x: 90 * this.config().buttonSize / 100, y: 45 * this.config().buttonSize / 100 })
-          }
-          if (this.config().showButtonB) {
-            Stack() { this.GameButton('B', VirtualKey.BUTTON_B, 45, '#FFFF5252') }
-              .width(50 * this.config().buttonSize / 100).height(50 * this.config().buttonSize / 100).position({ x: 45 * this.config().buttonSize / 100, y: 90 * this.config().buttonSize / 100 })
-          }
-        }.width(140 * this.config().buttonSize / 100).height(140 * this.config().buttonSize / 100).hitTestBehavior(HitTestMode.Block)
+      if (this.config().showButtonY) {
+        Stack() { this.GameButton('Y', VirtualKey.BUTTON_Y, 31, this.strokeColor()) }
+          .width(50 * this.config().buttonSize / 100).height(50 * this.config().buttonSize / 100).position({ x: 45 * this.config().buttonSize / 100, y: 0 })
       }
-      .width(this.actionWidth()).height(this.actionHeight()).hitTestBehavior(HitTestMode.None)
-
-      Column()
-        .width(this.actionWidth()).height(this.actionHeight())
-        .backgroundColor('#00000000')
-        .hitTestBehavior(HitTestMode.Block)
-        .onTouch((event: TouchEvent): void => this.handleActionGroupTouch(event))
-        .onMouse((event: MouseEvent): void => this.handleActionGroupMouse(event))
+      if (this.config().showButtonX) {
+        Stack() { this.GameButton('X', VirtualKey.BUTTON_X, 30, this.strokeColor()) }
+          .width(50 * this.config().buttonSize / 100).height(50 * this.config().buttonSize / 100).position({ x: 0, y: 45 * this.config().buttonSize / 100 })
+      }
+      if (this.config().showButtonA) {
+        Stack() { this.GameButton('A', VirtualKey.BUTTON_A, 57, '#FF81C784') }
+          .width(50 * this.config().buttonSize / 100).height(50 * this.config().buttonSize / 100).position({ x: 90 * this.config().buttonSize / 100, y: 45 * this.config().buttonSize / 100 })
+      }
+      if (this.config().showButtonB) {
+        Stack() { this.GameButton('B', VirtualKey.BUTTON_B, 45, '#FFFF5252') }
+          .width(50 * this.config().buttonSize / 100).height(50 * this.config().buttonSize / 100).position({ x: 45 * this.config().buttonSize / 100, y: 90 * this.config().buttonSize / 100 })
+      }
     }
-    .width(this.actionWidth()).height(this.actionHeight()).hitTestBehavior(HitTestMode.Transparent)
+    .width(this.actionWidth()).height(this.actionHeight()).hitTestBehavior(HitTestMode.None)
     .id('wine-vintage-action')
     .position(this.groupPosition(this.layout().action.centerX, this.layout().action.centerY, this.actionWidth(), this.actionHeight()))
+  }
+
+  @Builder
+  private ShoulderButton(label: string, key: VirtualKey, accent: string, position: ButtonGroupPosition, id: string) {
+    Stack({ alignContent: Alignment.Center }) {
+      Rect().width(this.shoulderWidth()).height(this.shoulderHeight())
+        .fill(this.isPressed(key) ? accent : this.fillColor(false))
+        .stroke(accent).strokeWidth(2).borderRadius(this.shoulderHeight() / 2)
+        .opacity(this.visibleOpacity(this.config().transparency))
+        .shadow({ radius: this.isPressed(key) ? 2 : 5, color: '#66000000' })
+      Text(label).fontSize(12 * this.config().buttonSize / 100).fontWeight(FontWeight.Bold)
+        .fontColor(this.textColor(this.isPressed(key), accent))
+    }
+    .width(this.shoulderHitWidth()).height(this.shoulderHitHeight())
+    .position(this.groupPosition(position.centerX, position.centerY, this.shoulderHitWidth(), this.shoulderHitHeight()))
+    .hitTestBehavior(HitTestMode.None).id(id)
+  }
+
+  @Builder
+  private ShoulderGroups() {
+    if (this.config().showButtonShift) {
+      this.ShoulderButton('LT', VirtualKey.BUTTON_SHIFT, '#FFFFB74D', this.layout().leftTrigger, 'wine-vintage-left-trigger')
+    }
+    if (this.config().showButtonL) {
+      this.ShoulderButton('LB', VirtualKey.BUTTON_L, this.strokeColor(), this.layout().leftBumper, 'wine-vintage-left-bumper')
+    }
+    if (this.config().showButtonR) {
+      this.ShoulderButton('RB', VirtualKey.BUTTON_R, this.strokeColor(), this.layout().rightBumper, 'wine-vintage-right-bumper')
+    }
+    if (this.config().showButtonCtrl) {
+      this.ShoulderButton('RT', VirtualKey.BUTTON_CTRL, '#FF64B5F6', this.layout().rightTrigger, 'wine-vintage-right-trigger')
+    }
   }
 
   @Builder
@@ -658,9 +808,9 @@ export struct VirtualInputOverlay {
       Row() {
         if (this.config().showButtonMenu) this.GameButton('菜单', VirtualKey.BUTTON_MENU, 1, this.strokeColor(), true)
       }
-      .width(this.auxWidth()).height(35 * this.config().buttonSize / 100).hitTestBehavior(HitTestMode.Block)
+      .width(this.auxWidth()).height(this.auxHeight()).justifyContent(FlexAlign.Center).hitTestBehavior(HitTestMode.None)
       .id('wine-vintage-aux')
-      .position(this.groupPosition(this.layout().aux.centerX, this.layout().aux.centerY, this.auxWidth(), 35 * this.config().buttonSize / 100))
+      .position(this.groupPosition(this.layout().aux.centerX, this.layout().aux.centerY, this.auxWidth(), this.auxHeight()))
     }
   }
 
@@ -679,17 +829,16 @@ export struct VirtualInputOverlay {
         }
         .width(this.freeButtonSize()).height(this.freeButtonSize())
         .position({ x: this.freePositionX(index), y: this.freePositionY(index) })
-        .hitTestBehavior(HitTestMode.Block)
-        .onTouch((event: TouchEvent): void => this.handleFreeButtonTouch(event, button))
+        .hitTestBehavior(HitTestMode.None)
       }, (button: FreeButton): string => button.id)
     }
-    .width(this.freeGroupSize()).height(this.freeGroupSize()).hitTestBehavior(HitTestMode.Block)
+    .width(this.freeGroupSize()).height(this.freeGroupSize()).hitTestBehavior(HitTestMode.None)
     .id('wine-vintage-free-buttons')
     .position(this.groupPosition(this.layout().action.centerX, this.layout().action.centerY, this.freeGroupSize(), this.freeGroupSize()))
   }
 
   @Builder
-  private ControlBarButton(icon: Resource, id: string, action: () => void, highlighted: boolean = false) {
+  private ControlBarButton(icon: Resource, id: string, highlighted: boolean = false) {
     Button({ type: ButtonType.Circle }) {
       SymbolGlyph(icon).fontSize(16).fontColor(['#FFFFFFFF'])
     }
@@ -698,10 +847,7 @@ export struct VirtualInputOverlay {
     .border({ width: 1, color: '#33FFFFFF' })
     .shadow({ radius: 8, color: '#66000000', offsetX: 0, offsetY: 2 })
     .id(id)
-    .hitTestBehavior(HitTestMode.Block)
-    .onTouch((event: TouchEvent): void => event.stopPropagation())
-    .onMouse((event: MouseEvent): void => event.stopPropagation())
-    .onClick(action)
+    .hitTestBehavior(HitTestMode.None)
   }
 
   /** Direct ArkTS adaptation of VintagePomelo's collapsible icon control bar. */
@@ -716,25 +862,19 @@ export struct VirtualInputOverlay {
       .backgroundColor(this.controlsExpanded ? '#1AFFFFFF' : '#BF282828')
       .border({ width: 1, color: '#33FFFFFF' })
       .id('wine-input-overlay-toggle')
-      .hitTestBehavior(HitTestMode.Block)
-      .onTouch((event: TouchEvent): void => event.stopPropagation())
-      .onMouse((event: MouseEvent): void => event.stopPropagation())
-      .onClick((): void => { this.controlsExpanded = !this.controlsExpanded; })
+      .hitTestBehavior(HitTestMode.None)
 
       if (this.controlsExpanded) {
-        this.ControlBarButton($r('sys.symbol.gearshape'), 'wine-input-layout-editor', (): void => {
-          this.onOpenLayoutEditor();
-        })
-        this.ControlBarButton($r('sys.symbol.gamecontroller'), 'wine-input-overlay-fold', (): void => {
-          this.controlsExpanded = false;
-        }, true)
+        this.ControlBarButton($r('sys.symbol.gearshape'), 'wine-input-layout-editor')
+        this.ControlBarButton($r('sys.symbol.gamecontroller'), 'wine-input-overlay-fold', true)
       }
     }
     .padding(this.controlsExpanded ? 8 : 4)
     .backgroundColor('#4D000000')
     .borderRadius(20)
-    .hitTestBehavior(HitTestMode.Block)
-    .position({ x: Math.max(4, this.overlayW - (this.controlsExpanded ? 150 : 54)), y: 14 })
+    .hitTestBehavior(HitTestMode.None)
+    .position({ x: this.toolbarOriginX(), y: 14 })
+    .zIndex(30)
   }
 
   build() {
@@ -744,6 +884,7 @@ export struct VirtualInputOverlay {
           this.FreeButtonGroup()
         } else {
           this.DirectionGroup()
+          this.ShoulderGroups()
           this.ActionGroup()
           this.AuxGroup()
         }
@@ -752,7 +893,7 @@ export struct VirtualInputOverlay {
     }
     .width('100%').height('100%').hitTestBehavior(HitTestMode.Block).id('wine-vintage-gamepad-overlay')
     .onTouch((event: TouchEvent): void => this.handleOverlayTouch(event))
-    .onMouse((event: MouseEvent): void => this.onUnhandledMouse(event))
+    .onMouse((event: MouseEvent): void => this.handleOverlayMouse(event))
     .onAxisEvent((event?: AxisEvent): void => this.onUnhandledAxis(event))
     .onAreaChange((_oldValue: Area, area: Area): void => {
       this.overlayW = area.width as number;

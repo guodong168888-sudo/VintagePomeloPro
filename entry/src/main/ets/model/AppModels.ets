@@ -213,7 +213,11 @@ export interface ButtonGroupPosition {
 
 export interface VirtualGamepadLayout {
   direction: ButtonGroupPosition;
+  leftTrigger: ButtonGroupPosition;
+  leftBumper: ButtonGroupPosition;
   action: ButtonGroupPosition;
+  rightBumper: ButtonGroupPosition;
+  rightTrigger: ButtonGroupPosition;
   aux: ButtonGroupPosition;
 }
 
@@ -311,14 +315,22 @@ export function computeRadialPositions(count: number, radius: number): FreeButto
 }
 
 export const DEFAULT_GAMEPAD_LAYOUT: VirtualGamepadLayout = {
-  direction: { centerX: 0.12, centerY: 0.65 },
-  action: { centerX: 0.88, centerY: 0.62 },
+  direction: { centerX: 0.13, centerY: 0.70 },
+  leftTrigger: { centerX: 0.075, centerY: 0.45 },
+  leftBumper: { centerX: 0.16, centerY: 0.45 },
+  action: { centerX: 0.87, centerY: 0.70 },
+  rightBumper: { centerX: 0.84, centerY: 0.45 },
+  rightTrigger: { centerX: 0.925, centerY: 0.45 },
   aux: { centerX: 0.50, centerY: 0.10 }
 };
 
 export const DEFAULT_GAMEPAD_LAYOUT_PORTRAIT: VirtualGamepadLayout = {
-  direction: { centerX: 0.15, centerY: 0.82 },
-  action: { centerX: 0.85, centerY: 0.78 },
+  direction: { centerX: 0.16, centerY: 0.83 },
+  leftTrigger: { centerX: 0.09, centerY: 0.66 },
+  leftBumper: { centerX: 0.23, centerY: 0.66 },
+  action: { centerX: 0.84, centerY: 0.81 },
+  rightBumper: { centerX: 0.77, centerY: 0.66 },
+  rightTrigger: { centerX: 0.91, centerY: 0.66 },
   aux: { centerX: 0.50, centerY: 0.65 }
 };
 
@@ -368,7 +380,11 @@ export function cloneGamepadLayout(layout: VirtualGamepadLayout,
   defaults: VirtualGamepadLayout = DEFAULT_GAMEPAD_LAYOUT): VirtualGamepadLayout {
   return {
     direction: { centerX: layout.direction?.centerX ?? defaults.direction.centerX, centerY: layout.direction?.centerY ?? defaults.direction.centerY },
+    leftTrigger: { centerX: layout.leftTrigger?.centerX ?? defaults.leftTrigger.centerX, centerY: layout.leftTrigger?.centerY ?? defaults.leftTrigger.centerY },
+    leftBumper: { centerX: layout.leftBumper?.centerX ?? defaults.leftBumper.centerX, centerY: layout.leftBumper?.centerY ?? defaults.leftBumper.centerY },
     action: { centerX: layout.action?.centerX ?? defaults.action.centerX, centerY: layout.action?.centerY ?? defaults.action.centerY },
+    rightBumper: { centerX: layout.rightBumper?.centerX ?? defaults.rightBumper.centerX, centerY: layout.rightBumper?.centerY ?? defaults.rightBumper.centerY },
+    rightTrigger: { centerX: layout.rightTrigger?.centerX ?? defaults.rightTrigger.centerX, centerY: layout.rightTrigger?.centerY ?? defaults.rightTrigger.centerY },
     aux: { centerX: layout.aux?.centerX ?? defaults.aux.centerX, centerY: layout.aux?.centerY ?? defaults.aux.centerY }
   };
 }
@@ -422,7 +438,7 @@ export function createDefaultInputProfile(): InputProfile {
   return {
     id: 'default',
     name: 'Vintage 默认手柄布局',
-    schemaVersion: 2,
+    schemaVersion: 3,
     virtualKeyConfig: cloneVirtualKeyConfig(DEFAULT_VIRTUAL_KEY_CONFIG),
     layoutLandscape: cloneGamepadLayout(DEFAULT_GAMEPAD_LAYOUT),
     layoutPortrait: cloneGamepadLayout(DEFAULT_GAMEPAD_LAYOUT_PORTRAIT, DEFAULT_GAMEPAD_LAYOUT_PORTRAIT),
