@@ -47,6 +47,7 @@ export class AppSettingsStore {
       const defaults = createDefaultGlobalSettings();
       this.globalSettings = {
         defaultDisplayMode: stored.defaultDisplayMode ?? defaults.defaultDisplayMode,
+        desktopInputProfileId: stored.desktopInputProfileId ?? defaults.desktopInputProfileId,
         viewMode: stored.viewMode ?? defaults.viewMode,
         themeMode: stored.themeMode ?? defaults.themeMode,
         useGlassEffect: stored.useGlassEffect ?? defaults.useGlassEffect,
@@ -107,6 +108,7 @@ export class AppSettingsStore {
     const current = this.globalSettings;
     await this.saveGlobalSettings({
       defaultDisplayMode: current.defaultDisplayMode,
+      desktopInputProfileId: current.desktopInputProfileId,
       viewMode: value,
       themeMode: current.themeMode,
       useGlassEffect: current.useGlassEffect,
@@ -125,6 +127,7 @@ export class AppSettingsStore {
     const current = this.globalSettings;
     await this.saveGlobalSettings({
       defaultDisplayMode: value,
+      desktopInputProfileId: current.desktopInputProfileId,
       viewMode: current.viewMode,
       themeMode: current.themeMode,
       useGlassEffect: current.useGlassEffect,

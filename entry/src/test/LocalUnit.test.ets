@@ -6,12 +6,15 @@ import {
   DEFAULT_VIRTUAL_MOUSE_CONFIG,
   DisplayMode,
   EngineState,
+  VirtualKey,
   canTransitionEngineState,
   cloneVirtualMouseConfig,
   createDefaultGlobalSettings,
   createDefaultInputProfile,
   normalizeLaunchPath,
   resolveDisplayMode,
+  resolveInputProfileId,
+  resolveVirtualKeyMapping,
   stableAppId
 } from '../main/ets/model/AppModels';
 import { InputStateTracker } from '../main/ets/service/InputStateTracker';
@@ -91,6 +94,19 @@ export default function localUnitTest() {
       cloned.mouseSensitivity = 180;
       expect(DEFAULT_VIRTUAL_MOUSE_CONFIG.mouseSensitivity).assertEqual(100);
       expect(cloned.mouseSensitivity).assertEqual(180);
+    });
+
+    it('resolvesDesktopAndPerGameInputProfilesExplicitly', 0, () => {
+      expect(resolveInputProfileId('default', 'desktop-custom')).assertEqual('desktop-custom');
+      expect(resolveInputProfileId('app-game', 'desktop-custom')).assertEqual('app-game');
+      expect(resolveInputProfileId('', '')).assertEqual('default');
+    });
+
+    it('appliesEditedVirtualKeyMappingAtRuntime', 0, () => {
+      const profile = createDefaultInputProfile();
+      const changed = profile.virtualKeyMappings.map((mapping) => mapping.virtualKey === VirtualKey.BUTTON_A ?
+        { virtualKey: mapping.virtualKey, evdevCode: 28, keyLabel: 'Enter' } : mapping);
+      expect(resolveVirtualKeyMapping(changed, VirtualKey.BUTTON_A, 57)).assertEqual(28);
     });
 
     it('keepsSharedVirtualKeyPressedUntilEverySourceReleases', 0, () => {

@@ -27,6 +27,16 @@ interface DirectTouch {
   startTime: number;
 }
 
+interface TouchpadFinger {
+  id: number;
+  startX: number;
+  startY: number;
+  lastX: number;
+  lastY: number;
+  startTime: number;
+  moved: boolean;
+}
+
 /** 全屏透明应用子窗口的 ArkTS 根页面。 */
 @Entry
 @Component
@@ -39,6 +49,9 @@ struct InputOverlayPage {
   @State private cursorY: number = 0;
   @State private cursorVisible: boolean = false;
   @State private cursorFlash: boolean = false;
+  @State private touchpadMode: boolean = false;
+  @State private overlayW: number = 0;
+  @State private overlayH: number = 0;
   private listener: InputOverlayListener | null = null;
   private diagnosticsListener: InputDiagnosticsListener | null = null;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
@@ -52,6 +65,12 @@ struct InputOverlayPage {
   private readonly TAP_SLOP_PX: number = 24;
   private cursorHideTimer: number = -1;
   private cursorFlashTimer: number = -1;
+  private touchpadFingers: Map<number, TouchpadFinger> = new Map<number, TouchpadFinger>();
+  private touchpadTwoFinger: boolean = false;
+  private touchpadSuppressSingleTap: boolean = false;
+  private touchpadTwoFingerTapEligible: boolean = false;
+  private touchpadLastMidX: number = 0;
+  private touchpadLastMidY: number = 0;
 
   aboutToAppear(): void {
     this.listener = (snapshot: InputOverlaySnapshot): void => {
@@ -64,6 +83,9 @@ struct InputOverlayPage {
         this.directTouches.clear();
         this.twoFinger = false;
         this.twoFingerTapEligible = false;
+        this.resetTouchpadGesture();
+        this.touchpadMode = false;
+        this.cursorVisible = false;
       }
       // Editors update the contents of an existing profile ID. Reload when
       // returning to a Wine session as well as when the ID changes so saved
@@ -83,6 +105,7 @@ struct InputOverlayPage {
     if (this.listener) InputOverlayWindowCoordinator.getInstance().unsubscribe(this.listener);
     if (this.diagnosticsListener) InputDispatcher.getInstance().unsubscribeDiagnostics(this.diagnosticsListener);
     this.cancelCursorTimers();
+    this.resetTouchpadGesture();
     InputDispatcher.getInstance().releaseAll('overlay-page-disappear');
   }
 
@@ -94,7 +117,7 @@ struct InputOverlayPage {
   }
 
   private showCursorAt(x: number, y: number, flash: boolean = false): void {
-    if (!this.settings.virtualMouseConfig.showCursor) return;
+    if (!this.touchpadMode || !this.settings.virtualMouseConfig.showCursor) return;
     this.cursorX = x;
     this.cursorY = y;
     this.cursorVisible = true;
@@ -142,16 +165,11 @@ struct InputOverlayPage {
   private injectClick(source: string, x: number, y: number, button: number): void {
     InputDispatcher.getInstance().pointerDown(source, x, y, button);
     InputDispatcher.getInstance().pointerUp(source, x, y, button);
-    this.showCursorAt(px2vp(x), px2vp(y), true);
   }
 
   private handleDirectTouch(event: TouchEvent): void {
     if (!this.eventGate.shouldHandleTouch(event.source, event.sourceTool)) return;
     event.stopPropagation();
-    const changed = event.changedTouches[0];
-    if (changed && (event.type === TouchType.Down || event.type === TouchType.Move)) {
-      this.showCursorAt(Number(changed.x), Number(changed.y));
-    }
     for (let index = 0; index < event.changedTouches.length; index++) {
       const touch = event.changedTouches[index];
       const x = vp2px(touch.x);
@@ -236,6 +254,149 @@ struct InputOverlayPage {
     }
   }
 
+  private touchpadMidpoint(): [number, number] {
+    const values = Array.from(this.touchpadFingers.values());
+    if (values.length < 2) return [0, 0];
+    return [(values[0].lastX + values[1].lastX) / 2, (values[0].lastY + values[1].lastY) / 2];
+  }
+
+  private ensureTouchpadCursor(): void {
+    const width = this.overlayW > 0 ? this.overlayW : 720;
+    const height = this.overlayH > 0 ? this.overlayH : 480;
+    if (this.cursorX <= 0 || this.cursorX >= width || this.cursorY <= 0 || this.cursorY >= height) {
+      this.cursorX = width / 2;
+      this.cursorY = height / 2;
+    }
+  }
+
+  private resetTouchpadGesture(): void {
+    this.touchpadFingers.clear();
+    this.touchpadTwoFinger = false;
+    this.touchpadSuppressSingleTap = false;
+    this.touchpadTwoFingerTapEligible = false;
+    InputDispatcher.getInstance().releaseSource('touchpad-scroll');
+    InputDispatcher.getInstance().releaseSource('touchpad-cursor');
+  }
+
+  private setTouchpadMode(enabled: boolean): void {
+    if (this.touchpadMode === enabled) return;
+    InputDispatcher.getInstance().releaseAll('touchpad-mode-switch');
+    this.directTouches.clear();
+    this.twoFinger = false;
+    this.twoFingerTapEligible = false;
+    this.resetTouchpadGesture();
+    this.touchpadMode = enabled;
+    if (enabled) {
+      this.ensureTouchpadCursor();
+      this.showCursorAt(this.cursorX, this.cursorY);
+    } else {
+      this.cursorVisible = false;
+      this.cancelCursorTimers();
+    }
+  }
+
+  private touchpadClick(button: number, source: string): void {
+    const x = vp2px(this.cursorX);
+    const y = vp2px(this.cursorY);
+    this.injectClick(source, x, y, button);
+    this.showCursorAt(this.cursorX, this.cursorY, true);
+  }
+
+  /** VintagePomelo full-screen touchpad: relative cursor, tap click, two-finger right/scroll. */
+  private handleTouchpadTouch(event: TouchEvent): void {
+    if (!this.eventGate.shouldHandleTouch(event.source, event.sourceTool)) return;
+    event.stopPropagation();
+    this.ensureTouchpadCursor();
+    this.showCursorAt(this.cursorX, this.cursorY);
+    const sensitivity = Math.max(0.5, Math.min(2, this.settings.virtualMouseConfig.mouseSensitivity / 100));
+    const scrollThreshold = Math.max(3, 8 / sensitivity);
+
+    for (let index = 0; index < event.changedTouches.length; index++) {
+      const touch = event.changedTouches[index];
+      const x = Number(touch.x);
+      const y = Number(touch.y);
+      if (event.type === TouchType.Down) {
+        this.touchpadFingers.set(touch.id, {
+          id: touch.id, startX: x, startY: y, lastX: x, lastY: y,
+          startTime: Date.now(), moved: false
+        });
+        if (this.touchpadFingers.size === 2) {
+          this.touchpadTwoFinger = true;
+          this.touchpadSuppressSingleTap = true;
+          this.touchpadTwoFingerTapEligible = true;
+          const midpoint = this.touchpadMidpoint();
+          this.touchpadLastMidX = midpoint[0];
+          this.touchpadLastMidY = midpoint[1];
+        } else if (this.touchpadFingers.size > 2) {
+          this.touchpadTwoFingerTapEligible = false;
+        }
+      } else if (event.type === TouchType.Move) {
+        const finger = this.touchpadFingers.get(touch.id);
+        if (!finger) continue;
+        const dx = x - finger.lastX;
+        const dy = y - finger.lastY;
+        if (Math.abs(x - finger.startX) > 10 || Math.abs(y - finger.startY) > 10) finger.moved = true;
+        finger.lastX = x;
+        finger.lastY = y;
+
+        if (this.touchpadTwoFinger && this.touchpadFingers.size >= 2) {
+          const midpoint = this.touchpadMidpoint();
+          const scrollX = this.touchpadLastMidX - midpoint[0];
+          const scrollY = this.touchpadLastMidY - midpoint[1];
+          if (Math.abs(scrollX) >= scrollThreshold) {
+            this.touchpadTwoFingerTapEligible = false;
+            InputDispatcher.getInstance().scroll('touchpad-scroll', 1, scrollX > 0 ? 1 : -1);
+            this.touchpadLastMidX = midpoint[0];
+          }
+          if (Math.abs(scrollY) >= scrollThreshold) {
+            this.touchpadTwoFingerTapEligible = false;
+            InputDispatcher.getInstance().scroll('touchpad-scroll', 0, scrollY > 0 ? 1 : -1);
+            this.touchpadLastMidY = midpoint[1];
+          }
+        } else if (this.touchpadFingers.size === 1) {
+          this.cursorX += dx * sensitivity;
+          this.cursorY += dy * sensitivity;
+          const maxX = Math.max(5, (this.overlayW > 0 ? this.overlayW : 720) - 5);
+          const maxY = Math.max(5, (this.overlayH > 0 ? this.overlayH : 480) - 5);
+          this.cursorX = Math.max(5, Math.min(maxX, this.cursorX));
+          this.cursorY = Math.max(5, Math.min(maxY, this.cursorY));
+          InputDispatcher.getInstance().pointerMove('touchpad-cursor', vp2px(this.cursorX), vp2px(this.cursorY), false);
+          this.showCursorAt(this.cursorX, this.cursorY);
+        }
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        const finger = this.touchpadFingers.get(touch.id);
+        if (!finger) continue;
+        const elapsed = Date.now() - finger.startTime;
+        const moved = finger.moved || Math.abs(x - finger.startX) > 10 || Math.abs(y - finger.startY) > 10;
+        const suppressed = this.touchpadSuppressSingleTap;
+        this.touchpadFingers.delete(touch.id);
+        if (suppressed) {
+          if (moved || elapsed >= this.TAP_TIMEOUT_MS || event.type === TouchType.Cancel) {
+            this.touchpadTwoFingerTapEligible = false;
+          }
+          if (this.touchpadFingers.size === 0) {
+            if (event.type === TouchType.Up && this.touchpadTwoFingerTapEligible) {
+              this.touchpadClick(273, 'touchpad-two-finger-right');
+            }
+            this.resetTouchpadGesture();
+          } else if (this.touchpadFingers.size < 2) {
+            this.touchpadTwoFinger = false;
+          }
+        } else {
+          if (!moved && elapsed < this.TAP_TIMEOUT_MS && event.type === TouchType.Up) {
+            this.touchpadClick(272, 'touchpad-left');
+          }
+          this.touchpadTwoFinger = false;
+        }
+      }
+    }
+  }
+
+  private handleOverlayTouch(event: TouchEvent): void {
+    if (this.touchpadMode) this.handleTouchpadTouch(event);
+    else this.handleDirectTouch(event);
+  }
+
   private hideForExternalInput(): void {
     const settings = AppSettingsStore.getInstance().getGlobalSettings();
     if (settings.autoHideVirtualControls && settings.showVirtualControls) {
@@ -267,17 +428,18 @@ struct InputOverlayPage {
     if (horizontal !== 0) InputDispatcher.getInstance().scroll('external-mouse', 1, horizontal, event.scrollStep ?? 40);
   }
 
-  private async openLayoutEditor(): Promise<void> {
+  private async openInputEditor(route: string): Promise<void> {
     const sessionId = this.snapshot.session.sessionId;
     const session = AppSessionService.getInstance().getSession(sessionId);
     const want: Want = {
       bundleName: 'com.vintage.pomelopro',
       abilityName: 'EntryAbility',
       parameters: {
-        overlayRoute: 'input-layout',
+        overlayRoute: route,
         profileId: this.snapshot.profileId || 'default',
         profileName: this.profile.name || '默认键鼠手柄',
-        appId: session?.appId ?? ''
+        appId: session?.appId ?? '',
+        baseProfileId: this.settings.desktopInputProfileId || 'default'
       }
     };
     const coordinator = InputOverlayWindowCoordinator.getInstance();
@@ -303,17 +465,20 @@ struct InputOverlayPage {
           opacityValue: this.snapshot.opacity,
           controlsVisible: this.snapshot.controlsVisible,
           controlBarDirection: this.settings.controlBarDirection,
-          onOpenLayoutEditor: (): void => { this.openLayoutEditor(); },
+          touchpadMode: this.touchpadMode,
+          onOpenLayoutEditor: (): void => { this.openInputEditor('input-layout'); },
+          onOpenKeyMappingEditor: (): void => { this.openInputEditor('key-mapping'); },
           onControlsVisibleChange: (visible: boolean): void => {
             InputOverlayWindowCoordinator.getInstance().setControlsVisible(visible);
           },
-          onUnhandledTouch: (event: TouchEvent): void => this.handleDirectTouch(event),
+          onTouchpadModeChange: (enabled: boolean): void => this.setTouchpadMode(enabled),
+          onUnhandledTouch: (event: TouchEvent): void => this.handleOverlayTouch(event),
           onUnhandledMouse: (event: MouseEvent): void => this.handleDirectMouse(event),
           onUnhandledAxis: (event?: AxisEvent): void => this.handleDirectAxis(event)
         })
         .zIndex(10)
       }
-      if (this.cursorVisible && this.settings.virtualMouseConfig.showCursor) {
+      if (this.touchpadMode && this.cursorVisible && this.settings.virtualMouseConfig.showCursor) {
         Stack({ alignContent: Alignment.Center }) {
           Circle()
             .width(this.cursorFlash ? 10 : 7)
@@ -344,16 +509,44 @@ struct InputOverlayPage {
           Text('events ' + this.inputDiagnostics.injectedEvents)
             .fontSize(9).fontColor('#C9D5E6FF').maxLines(1)
             .id('wine-overlay-input-events')
+          Text('stress ' + this.snapshot.stressCompleted + '/300' +
+            (this.snapshot.lastError.length > 0 ? ' · failed' : ''))
+            .fontSize(9)
+            .fontColor(this.snapshot.lastError.length > 0 ? '#FFFF8A80' : '#C9D5E6FF')
+            .maxLines(1)
+            .id('wine-overlay-stress-result')
           Button(this.snapshot.stressRunning ? '自检中 ' + this.snapshot.stressCompleted + '/300' : '诊断 300')
             .height(36).fontSize(10).fontColor('#FFF8FAFF').backgroundColor('#D8246BFD').borderRadius(18)
             .id('wine-overlay-diagnostics-run')
             .onClick(() => InputOverlayWindowCoordinator.getInstance().runRendererStress(300))
+            .onTouch((event: TouchEvent): void => {
+              event.stopPropagation();
+              if (event.type === TouchType.Up) {
+                InputOverlayWindowCoordinator.getInstance().runRendererStress(300);
+              }
+            })
+            .onMouse((event: MouseEvent): void => {
+              event.stopPropagation();
+              if (event.action === MouseAction.Release) {
+                InputOverlayWindowCoordinator.getInstance().runRendererStress(300);
+              }
+            })
         }
         .padding(8).backgroundColor('#C8162433').borderRadius(12)
         .position({ x: '2%', y: '3%' })
         .hitTestBehavior(HitTestMode.Block)
-        .onTouch((event: TouchEvent): void => event.stopPropagation())
-        .onMouse((event: MouseEvent): void => event.stopPropagation())
+        .onTouch((event: TouchEvent): void => {
+          event.stopPropagation();
+          if (event.type === TouchType.Up) {
+            InputOverlayWindowCoordinator.getInstance().runRendererStress(300);
+          }
+        })
+        .onMouse((event: MouseEvent): void => {
+          event.stopPropagation();
+          if (event.action === MouseAction.Release) {
+            InputOverlayWindowCoordinator.getInstance().runRendererStress(300);
+          }
+        })
         .id('wine-overlay-diagnostics-state')
         .zIndex(20)
       }
@@ -363,12 +556,16 @@ struct InputOverlayPage {
         .hitTestBehavior(HitTestMode.Block)
         .id('wine-input-direct-surface')
         .zIndex(0)
-        .onTouch((event: TouchEvent): void => this.handleDirectTouch(event))
+        .onTouch((event: TouchEvent): void => this.handleOverlayTouch(event))
         .onMouse((event: MouseEvent): void => this.handleDirectMouse(event))
         .onAxisEvent((event?: AxisEvent): void => this.handleDirectAxis(event))
     }
     .width('100%').height('100%')
     .backgroundColor('#00000000')
     .id('wine-input-overlay-page')
+    .onAreaChange((_oldValue: Area, area: Area): void => {
+      this.overlayW = area.width as number;
+      this.overlayH = area.height as number;
+    })
   }
 }

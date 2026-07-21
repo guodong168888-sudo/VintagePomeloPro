@@ -44,13 +44,15 @@ export default class EntryAbility extends UIAbility {
 
   onNewWant(want: Want): void {
     const parameters = want.parameters ?? {};
-    if (parameters.overlayRoute === 'input-layout') {
+    if (parameters.overlayRoute === 'input-layout' || parameters.overlayRoute === 'key-mapping') {
       // 覆盖层属于 Desktop/SingleApp Ability，不能直接把它的子窗口替换为
       // 编辑器。回到应用库主窗口再进入编辑页，Wine 会话则保持后台可恢复。
       AppStorage.setOrCreate('overlayEditorRequest', JSON.stringify({
+        route: String(parameters.overlayRoute),
         profileId: String(parameters.profileId ?? 'default'),
         profileName: String(parameters.profileName ?? '默认键鼠手柄'),
-        appId: String(parameters.appId ?? '')
+        appId: String(parameters.appId ?? ''),
+        baseProfileId: String(parameters.baseProfileId ?? 'default')
       }));
     }
   }

@@ -1,11 +1,13 @@
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
+import { common } from '@kit.AbilityKit';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import {
   ControlBarDirection,
   DisplayMode,
   EngineState,
   GlobalSettings,
+  InputProfile,
   ThemeMode,
   ViewMode,
   VirtualMouseConfig,
@@ -19,6 +21,7 @@ import { WineWindowManager } from '../service/WineWindowManager';
 import { AppSessionService } from '../service/AppSessionService';
 import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
 import { AppCatalogService } from '../service/AppCatalogService';
+import { InputProfileService } from '../service/InputProfileService';
 
 type SettingsSection = 'display' | 'appearance' | 'input' | 'engine' | 'about';
 
@@ -31,6 +34,8 @@ struct SystemSettingsPage {
   @State private engineMessage: string = 'Wine 引擎未启动';
   @State private engineBusy: boolean = false;
   @State private engineOperationMessage: string = '';
+  @State private inputProfiles: InputProfile[] = [];
+  private settingsScroller: Scroller = new Scroller();
   private callback: ((value: BreakpointType) => void) | null = null;
   private engineCallback: EngineStateListener | null = null;
 
@@ -45,6 +50,21 @@ struct SystemSettingsPage {
       this.engineMessage = message;
     };
     WineEngineService.getInstance().subscribe(this.engineCallback);
+    this.loadInputProfiles();
+  }
+
+  onPageShow(): void {
+    this.settings = ThemeSettingsService.getInstance().getSettings();
+    this.loadInputProfiles();
+  }
+
+  private loadInputProfiles(): void {
+    InputProfileService.getInstance().initialize(getContext(this) as common.UIAbilityContext).then((): void => {
+      this.inputProfiles = InputProfileService.getInstance().getDesktopProfiles();
+      if (!InputProfileService.getInstance().hasDesktopProfile(this.settings.desktopInputProfileId)) {
+        this.selectDesktopProfile('default');
+      }
+    }).catch((): void => {});
   }
 
   aboutToDisappear(): void {
@@ -105,9 +125,11 @@ struct SystemSettingsPage {
     scale: number = this.settings.outputScale,
     theme: ThemeMode = this.settings.themeMode,
     controlBarDirection: ControlBarDirection = this.settings.controlBarDirection,
-    virtualMouseConfig: VirtualMouseConfig = cloneVirtualMouseConfig(this.settings.virtualMouseConfig)): void {
+    virtualMouseConfig: VirtualMouseConfig = cloneVirtualMouseConfig(this.settings.virtualMouseConfig),
+    desktopInputProfileId: string = this.settings.desktopInputProfileId): void {
     this.settings = {
       defaultDisplayMode: mode,
+      desktopInputProfileId: desktopInputProfileId || 'default',
       viewMode: view,
       themeMode: theme,
       useGlassEffect: glass,
@@ -156,6 +178,25 @@ struct SystemSettingsPage {
       this.settings.controlBarDirection, mouse);
   }
 
+  private selectDesktopProfile(profileId: string): void {
+    this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
+      this.settings.useGlassEffect, this.settings.usePageBackground,
+      this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
+      this.settings.controlOpacity, this.settings.gamepadDeadzone,
+      this.settings.outputScale, this.settings.themeMode,
+      this.settings.controlBarDirection, this.settings.virtualMouseConfig, profileId);
+  }
+
+  private async saveDesktopProfileCopy(): Promise<void> {
+    const service = InputProfileService.getInstance();
+    const sourceId = this.settings.desktopInputProfileId || 'default';
+    const number = this.inputProfiles.filter((profile: InputProfile): boolean => profile.id !== 'default').length + 1;
+    const profile = await service.duplicateProfile(sourceId, '桌面方案 ' + number.toString());
+    this.inputProfiles = service.getDesktopProfiles();
+    this.selectDesktopProfile(profile.id);
+    promptAction.showToast({ message: '已保存并切换到 ' + profile.name });
+  }
+
   private restoreDefaults(): void {
     const defaults = createDefaultGlobalSettings();
     this.settings = defaults;
@@ -175,7 +216,31 @@ struct SystemSettingsPage {
     }
       .width('100%').height(46).padding({ left: 14, right: 14 }).borderRadius(14)
       .backgroundColor(this.section === section ? $r('app.color.selected_background') : $r('app.color.search_background'))
-      .onClick(() => this.section = section)
+      .onClick(() => this.selectSection(section))
+  }
+
+  private sectionIndex(section: SettingsSection): number {
+    if (section === 'display') return 0;
+    if (section === 'appearance') return 1;
+    if (section === 'input') return 2;
+    if (section === 'engine') return 3;
+    return 4;
+  }
+
+  private sectionAt(index: number): SettingsSection {
+    if (index <= 0) return 'display';
+    if (index === 1) return 'appearance';
+    if (index === 2) return 'input';
+    if (index === 3) return 'engine';
+    return 'about';
+  }
+
+  private selectSection(section: SettingsSection): void {
+    this.section = section;
+    try {
+      this.settingsScroller.scrollToIndex(this.sectionIndex(section), true, ScrollAlign.START);
+    } catch (_) {
+    }
   }
 
   @Builder
@@ -206,6 +271,54 @@ struct SystemSettingsPage {
       .onClick((): void => this.updateControlBarDirection(direction))
   }
 
+  private selectedProfileName(): string {
+    const selected = this.inputProfiles.find((profile: InputProfile): boolean =>
+      profile.id === this.settings.desktopInputProfileId);
+    return selected?.name ?? 'Vintage 默认手柄布局';
+  }
+
+  @Builder
+  private InputProfileChoice(profile: InputProfile) {
+    Row({ space: 10 }) {
+      SymbolGlyph(profile.id === this.settings.desktopInputProfileId ?
+        $r('sys.symbol.checkmark_circle_fill') : $r('sys.symbol.circle'))
+        .fontSize(20)
+        .fontColor([profile.id === this.settings.desktopInputProfileId ?
+          $r('app.color.accent') : $r('app.color.text_secondary')])
+      Column({ space: 3 }) {
+        Text(profile.name).fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+        Text(profile.id === 'default' ? '内建默认方案' : '已保存桌面方案')
+          .fontSize(10).fontColor($r('app.color.text_secondary'))
+      }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+      if (profile.id === this.settings.desktopInputProfileId) {
+        Text('使用中').fontSize(11).fontColor($r('app.color.accent'))
+      }
+    }
+    .width('100%').height(58).padding({ left: 12, right: 12 }).borderRadius(14)
+    .backgroundColor(profile.id === this.settings.desktopInputProfileId ?
+      $r('app.color.selected_background') : $r('app.color.search_background'))
+    .id('desktop-input-profile-' + profile.id)
+    .onClick((): void => this.selectDesktopProfile(profile.id))
+  }
+
+  @Builder
+  private DesktopInputProfiles() {
+    Column({ space: 9 }) {
+      Text('桌面模式输入方案').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
+      Text('桌面模式可同时运行多个程序，因此统一使用这里选择的全局方案；单应用模式可以在应用设置中使用专用方案。')
+        .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+      ForEach(this.inputProfiles, (profile: InputProfile): void => {
+        this.InputProfileChoice(profile)
+      }, (profile: InputProfile): string => profile.id)
+      Button('保存当前配置为新方案')
+        .width('100%').height(48).borderRadius(14)
+        .backgroundColor($r('app.color.selected_background')).fontColor($r('app.color.accent'))
+        .id('save-desktop-input-profile')
+        .onClick((): void => { this.saveDesktopProfileCopy(); })
+    }
+    .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
+  }
+
   @Builder
   private InputLayoutEntry() {
     Row({ space: 14 }) {
@@ -214,8 +327,8 @@ struct SystemSettingsPage {
       }
       .width(48).height(48).borderRadius(16).backgroundColor($r('app.color.selected_background'))
       Column({ space: 4 }) {
-        Text('自定义虚拟手柄布局').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
-        Text('设置十字键或摇杆、ABXY、肩键与辅助键的位置、大小和透明度').fontSize(11).fontColor($r('app.color.text_secondary')).maxLines(2)
+        Text('编辑当前桌面方案布局').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+        Text(this.selectedProfileName() + '：设置方向、ABXY、肩键与辅助键的位置、大小和透明度').fontSize(11).fontColor($r('app.color.text_secondary')).maxLines(2)
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
@@ -223,7 +336,14 @@ struct SystemSettingsPage {
     }
     .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
     .id('open-input-layout-editor')
-    .onClick((): void => { router.pushUrl({ url: 'pages/InputLayoutEditor' }); })
+    .onClick((): void => { router.pushUrl({
+      url: 'pages/InputLayoutEditor',
+      params: {
+        profileId: this.settings.desktopInputProfileId || 'default',
+        profileName: this.selectedProfileName(),
+        baseProfileId: this.settings.desktopInputProfileId || 'default'
+      }
+    }); })
   }
 
   @Builder
@@ -234,8 +354,8 @@ struct SystemSettingsPage {
       }
       .width(48).height(48).borderRadius(16).backgroundColor($r('app.color.selected_background'))
       Column({ space: 4 }) {
-        Text('全局按键映射与自由按键').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
-        Text('完整 PC 键盘映射；可选 VintagePomelo 的手柄模板或环形自由按键。应用可在自己的设置中覆盖。').fontSize(11).fontColor($r('app.color.text_secondary')).maxLines(2)
+        Text('当前桌面方案按键映射').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+        Text(this.selectedProfileName() + '：修改虚拟按键实际键值，并配置固定手柄或自由按键。').fontSize(11).fontColor($r('app.color.text_secondary')).maxLines(2)
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
@@ -243,13 +363,20 @@ struct SystemSettingsPage {
     }
     .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
     .id('open-global-key-mapping')
-    .onClick((): void => { router.pushUrl({ url: 'pages/AdvancedKeyMapping', params: { profileId: 'default', profileName: 'Vintage 默认手柄布局' } }); })
+    .onClick((): void => { router.pushUrl({
+      url: 'pages/AdvancedKeyMapping',
+      params: {
+        profileId: this.settings.desktopInputProfileId || 'default',
+        profileName: this.selectedProfileName(),
+        baseProfileId: this.settings.desktopInputProfileId || 'default'
+      }
+    }); })
   }
 
   @Builder
-  private Content() {
+  private Content(section: SettingsSection) {
     Column({ space: 14 }) {
-      if (this.section === 'display') {
+      if (section === 'display') {
         Column({ space: 16 }) {
           Text('Windows 显示').fontSize(20).fontWeight(FontWeight.Bold).width('100%')
           Text('全局默认模式').fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
@@ -272,7 +399,7 @@ struct SystemSettingsPage {
         .backgroundColor($r('app.color.card_glass_background'))
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         .borderRadius(20)
-      } else if (this.section === 'appearance') {
+      } else if (section === 'appearance') {
         Column({ space: 16 }) {
           Text('外观').fontSize(20).fontWeight(FontWeight.Bold).width('100%')
           Text('主题').fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
@@ -298,7 +425,7 @@ struct SystemSettingsPage {
         .backgroundColor($r('app.color.card_glass_background'))
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         .borderRadius(20)
-      } else if (this.section === 'input') {
+      } else if (section === 'input') {
         Column({ space: 16 }) {
           Text('输入与控制').fontSize(20).fontWeight(FontWeight.Bold).width('100%')
           this.SwitchRow('显示虚拟按键', '只控制十字键、摇杆、ABXY 和肩键；全屏鼠标与右上角控制栏不受影响', this.settings.showVirtualControls, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, value))
@@ -316,8 +443,8 @@ struct SystemSettingsPage {
           }
           .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
           Column({ space: 10 }) {
-            Text('全屏虚拟鼠标').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
-            Text('空白画面单指轻点为左键、连续轻点为双击、拖动为左键拖拽；双指轻点为右键，双指滑动为滚轮。')
+            Text('全屏触摸板模式').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
+            Text('从 Wine 画面右上角手指图标切换。开启后单指相对移动鼠标、轻点左键；双指轻点右键、双指滑动滚轮。')
               .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
             this.SwitchRow('显示触摸光标', '操作时短暂显示鼠标位置与点击反馈', this.settings.virtualMouseConfig.showCursor,
               (value: boolean): void => this.updateVirtualMouse(this.settings.virtualMouseConfig.mouseSensitivity, value))
@@ -332,6 +459,7 @@ struct SystemSettingsPage {
           Slider({ value: this.settings.controlOpacity, min: 25, max: 100, step: 1 }).onChange((value: number) => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, this.settings.autoHideVirtualControls, value))
           Text('手柄死区 ' + this.settings.gamepadDeadzone + '%').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
           Slider({ value: this.settings.gamepadDeadzone, min: 0, max: 40, step: 1 }).onChange((value: number) => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, this.settings.autoHideVirtualControls, this.settings.controlOpacity, value))
+          this.DesktopInputProfiles()
           this.InputLayoutEntry()
           this.KeyMappingEntry()
         }
@@ -340,7 +468,7 @@ struct SystemSettingsPage {
         .backgroundColor($r('app.color.card_glass_background'))
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         .borderRadius(20)
-      } else if (this.section === 'engine') {
+      } else if (section === 'engine') {
         Column({ space: 16 }) {
           Text('Wine 引擎').fontSize(20).fontWeight(FontWeight.Bold).width('100%')
           Text(this.engineMessage).fontSize(13).fontColor($r('app.color.text_secondary')).width('100%')
@@ -396,6 +524,29 @@ struct SystemSettingsPage {
     }.width('100%')
   }
 
+  @Builder
+  private SettingsList(maxWidth: number) {
+    List({ space: 14, scroller: this.settingsScroller }) {
+      ListItem() { this.Content('display') }.width('100%').id('settings-section-display')
+      ListItem() { this.Content('appearance') }.width('100%').id('settings-section-appearance')
+      ListItem() { this.Content('input') }.width('100%').id('settings-section-input')
+      ListItem() { this.Content('engine') }.width('100%').id('settings-section-engine')
+      ListItem() { this.Content('about') }.width('100%').id('settings-section-about')
+    }
+    .layoutWeight(1)
+    .width('100%')
+    .constraintSize({ maxWidth: maxWidth })
+    .padding({ right: 10, bottom: 16 })
+    .scrollBar(BarState.On)
+    .scrollBarWidth(6)
+    .scrollBarColor($r('app.color.accent'))
+    .edgeEffect(EdgeEffect.Spring)
+    .onScrollIndex((start: number): void => {
+      this.section = this.sectionAt(start);
+    })
+    .id('system-settings-list')
+  }
+
   build() {
     Stack() {
       Column() {
@@ -436,17 +587,7 @@ struct SystemSettingsPage {
           .backgroundColor($r('app.color.card_glass_background'))
           .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
           .borderRadius(20)
-          Scroll() {
-            Column() { this.Content() }
-              .width('100%')
-              // Scroll centres a short, unconstrained sole child.  Filling the
-              // viewport pins the settings card to the top of its scroll area.
-              .height('100%')
-              .justifyContent(FlexAlign.Start)
-              .alignItems(HorizontalAlign.Start)
-              .constraintSize({ maxWidth: 1080 })
-              .padding({ right: 8, top: 0 })
-          }.layoutWeight(1).height('100%').scrollBar(BarState.Auto)
+          this.SettingsList(1080)
         }
         .layoutWeight(1)
         .width('100%')
@@ -459,34 +600,26 @@ struct SystemSettingsPage {
               Button('显示').height(48).borderRadius(14)
                 .backgroundColor(this.section === 'display' ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.section === 'display' ? '#FFFFFFFF' : $r('app.color.text_primary'))
-                .onClick(() => this.section = 'display')
+                .onClick(() => this.selectSection('display'))
               Button('外观').height(48).borderRadius(14)
                 .backgroundColor(this.section === 'appearance' ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.section === 'appearance' ? '#FFFFFFFF' : $r('app.color.text_primary'))
-                .onClick(() => this.section = 'appearance')
+                .onClick(() => this.selectSection('appearance'))
               Button('输入').height(48).borderRadius(14)
                 .backgroundColor(this.section === 'input' ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.section === 'input' ? '#FFFFFFFF' : $r('app.color.text_primary'))
-                .onClick(() => this.section = 'input')
+                .onClick(() => this.selectSection('input'))
               Button('引擎').height(48).borderRadius(14)
                 .backgroundColor(this.section === 'engine' ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.section === 'engine' ? '#FFFFFFFF' : $r('app.color.text_primary'))
-                .onClick(() => this.section = 'engine')
+                .onClick(() => this.selectSection('engine'))
               Button('关于').height(48).borderRadius(14)
                 .backgroundColor(this.section === 'about' ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.section === 'about' ? '#FFFFFFFF' : $r('app.color.text_primary'))
-                .onClick(() => this.section = 'about')
+                .onClick(() => this.selectSection('about'))
             }
           }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%')
-          Scroll() {
-            Column() { this.Content() }
-              .width('100%')
-              .height('100%')
-              .justifyContent(FlexAlign.Start)
-              .alignItems(HorizontalAlign.Start)
-              .constraintSize({ maxWidth: 840 })
-              .padding({ top: 0 })
-          }.layoutWeight(1).scrollBar(BarState.Auto)
+          this.SettingsList(840)
         }
         .layoutWeight(1)
         .width('100%')

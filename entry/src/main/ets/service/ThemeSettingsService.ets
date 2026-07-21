@@ -25,7 +25,10 @@ export class ThemeSettingsService {
   }
 
   async update(settings: GlobalSettings): Promise<void> {
-    this.applyColorMode(settings.themeMode);
+    const previousTheme = AppSettingsStore.getInstance().getGlobalSettings().themeMode;
+    if (previousTheme !== settings.themeMode) {
+      this.applyColorMode(settings.themeMode);
+    }
     await AppSettingsStore.getInstance().saveGlobalSettings(settings);
     this.listeners.forEach((listener: ThemeSettingsListener) => listener(settings));
   }

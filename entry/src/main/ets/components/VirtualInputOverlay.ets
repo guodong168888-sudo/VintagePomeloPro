@@ -9,12 +9,13 @@ import {
   VirtualKeyColorScheme,
   computeGamepadPositions,
   computeRadialPositions,
-  createDefaultInputProfile
+  createDefaultInputProfile,
+  resolveVirtualKeyMapping
 } from '../model/AppModels';
 import { InputDispatcher } from '../service/InputDispatcher';
 
 type DirectionName = 'up' | 'down' | 'left' | 'right';
-type ToolbarAction = 'toolbar' | 'editor' | 'controls' | 'wake';
+type ToolbarAction = 'toolbar' | 'editor' | 'mapping' | 'controls' | 'mouse' | 'wake';
 
 interface OverlayPoint {
   x: number;
@@ -35,8 +36,11 @@ export struct VirtualInputOverlay {
   @Prop hideToolbar: boolean = false;
   @Prop @Watch('onControlsVisibleChanged') controlsVisible: boolean = true;
   @Prop @Watch('onControlBarDirectionChanged') controlBarDirection: ControlBarDirection = ControlBarDirection.AUTO;
+  @Prop touchpadMode: boolean = false;
   onOpenLayoutEditor: () => void = (): void => {};
+  onOpenKeyMappingEditor: () => void = (): void => {};
   onControlsVisibleChange: (visible: boolean) => void = (_visible: boolean): void => {};
+  onTouchpadModeChange: (enabled: boolean) => void = (_enabled: boolean): void => {};
   onUnhandledTouch: (event: TouchEvent) => void = (_event: TouchEvent): void => {};
   onUnhandledMouse: (event: MouseEvent) => void = (_event: MouseEvent): void => {};
   onUnhandledAxis: (event?: AxisEvent) => void = (_event?: AxisEvent): void => {};
@@ -146,7 +150,7 @@ export struct VirtualInputOverlay {
   }
 
   private mapping(key: VirtualKey, fallback: number): number {
-    return this.profile.virtualKeyMappings.find((item) => item.virtualKey === key)?.evdevCode ?? fallback;
+    return resolveVirtualKeyMapping(this.profile.virtualKeyMappings, key, fallback);
   }
 
   private freeButtonSize(): number {
@@ -232,7 +236,7 @@ export struct VirtualInputOverlay {
 
   private toolbarOriginX(): number {
     if (this.resolveToolbarVertical()) return Math.max(4, this.overlayW - 54);
-    return Math.max(4, this.overlayW - (this.toolbarExpanded ? 150 : 54));
+    return Math.max(4, this.overlayW - (this.toolbarExpanded ? 230 : 54));
   }
 
   private toolbarActionAt(x: number, y: number): ToolbarAction | null {
@@ -246,12 +250,16 @@ export struct VirtualInputOverlay {
     if (this.resolveToolbarVertical()) {
       if (this.rectContains(x, y, originX, 14, 44, 40)) return 'toolbar';
       if (this.rectContains(x, y, originX, 54, 44, 44)) return 'editor';
-      if (this.rectContains(x, y, originX, 98, 44, 44)) return 'controls';
+      if (this.rectContains(x, y, originX, 98, 44, 44)) return 'mapping';
+      if (this.rectContains(x, y, originX, 142, 44, 44)) return 'controls';
+      if (this.rectContains(x, y, originX, 186, 44, 44)) return 'mouse';
       return null;
     }
     if (this.rectContains(x, y, originX + 4, 14, 40, 48)) return 'toolbar';
     if (this.rectContains(x, y, originX + 44, 14, 44, 52)) return 'editor';
-    if (this.rectContains(x, y, originX + 88, 14, 44, 52)) return 'controls';
+    if (this.rectContains(x, y, originX + 88, 14, 44, 52)) return 'mapping';
+    if (this.rectContains(x, y, originX + 132, 14, 44, 52)) return 'controls';
+    if (this.rectContains(x, y, originX + 176, 14, 44, 52)) return 'mouse';
     return null;
   }
 
@@ -260,8 +268,16 @@ export struct VirtualInputOverlay {
       this.onOpenLayoutEditor();
       return;
     }
+    if (action === 'mapping') {
+      this.onOpenKeyMappingEditor();
+      return;
+    }
     if (action === 'controls') {
       this.onControlsVisibleChange(!this.controlsVisible);
+      return;
+    }
+    if (action === 'mouse') {
+      this.onTouchpadModeChange(!this.touchpadMode);
       return;
     }
     if (action === 'wake') {
@@ -920,12 +936,13 @@ export struct VirtualInputOverlay {
   }
 
   @Builder
-  private ControlBarButton(icon: Resource, id: string, highlighted: boolean = false) {
+  private ControlBarButton(icon: Resource, id: string, highlighted: boolean = false,
+    tint: string = '#FFFFFFFF', highlightedBackground: string = '#44FFFFFF') {
     Button({ type: ButtonType.Circle }) {
-      SymbolGlyph(icon).fontSize(16).fontColor(['#FFFFFFFF'])
+      SymbolGlyph(icon).fontSize(16).fontColor([tint])
     }
     .width(36).height(36)
-    .backgroundColor(highlighted ? '#44FFFFFF' : '#BF282828')
+    .backgroundColor(highlighted ? highlightedBackground : '#BF282828')
     .border({ width: 1, color: '#33FFFFFF' })
     .shadow({ radius: 8, color: '#66000000', offsetX: 0, offsetY: 2 })
     .id(id)
@@ -935,9 +952,12 @@ export struct VirtualInputOverlay {
   @Builder
   private ExpandedToolbarButtons() {
     this.ControlBarButton($r('sys.symbol.gearshape'), 'wine-input-layout-editor')
+    this.ControlBarButton($r('sys.symbol.keyboard'), 'wine-input-key-mapping-editor')
     this.ControlBarButton(
       this.controlsVisible ? $r('sys.symbol.gamecontroller') : $r('sys.symbol.eye_slash'),
       'wine-input-overlay-fold', this.controlsVisible)
+    this.ControlBarButton($r('sys.symbol.hand_tap'), 'wine-input-touchpad-mode', this.touchpadMode,
+      this.touchpadMode ? '#FFB9F6CA' : '#FFFFFFFF', '#B0267A48')
   }
 
   @Builder
@@ -965,9 +985,10 @@ export struct VirtualInputOverlay {
       Button({ type: ButtonType.Normal }) {}
         .width(48).height(48)
         .backgroundColor('#00000000').opacity(0)
-        .hitTestBehavior(HitTestMode.None)
+        .hitTestBehavior(HitTestMode.Block)
         .position({ x: Math.max(0, this.overlayW - 52), y: 8 })
         .id('wine-input-overlay-wake')
+        .onClick((): void => this.runToolbarAction('wake'))
         .zIndex(30)
     } else if (this.resolveToolbarVertical()) {
       Column({ space: 8 }) {

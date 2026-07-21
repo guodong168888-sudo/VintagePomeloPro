@@ -108,6 +108,8 @@ export interface AppSettings {
 
 export interface GlobalSettings {
   defaultDisplayMode: DisplayMode;
+  /** Desktop mode always uses this global profile; single-app may override it. */
+  desktopInputProfileId: string;
   viewMode: ViewMode;
   themeMode: ThemeMode;
   useGlassEffect: boolean;
@@ -235,6 +237,10 @@ export interface VirtualKeyMapping {
   virtualKey: VirtualKey;
   evdevCode: number;
   keyLabel: string;
+}
+
+export function resolveVirtualKeyMapping(mappings: VirtualKeyMapping[], key: VirtualKey, fallback: number): number {
+  return mappings.find((mapping: VirtualKeyMapping): boolean => mapping.virtualKey === key)?.evdevCode ?? fallback;
 }
 
 export interface ButtonGroupPosition {
@@ -437,6 +443,7 @@ export function stableAppId(source: AppSource, path: string): string {
 export function createDefaultGlobalSettings(): GlobalSettings {
   return {
     defaultDisplayMode: DisplayMode.DESKTOP,
+    desktopInputProfileId: 'default',
     viewMode: ViewMode.GRID,
     themeMode: ThemeMode.SYSTEM,
     useGlassEffect: true,
@@ -450,6 +457,13 @@ export function createDefaultGlobalSettings(): GlobalSettings {
     gamepadDeadzone: 18,
     outputScale: 100
   };
+}
+
+export function resolveInputProfileId(appProfileId: string, desktopProfileId: string): string {
+  const appValue = (appProfileId ?? '').trim();
+  if (appValue.length > 0 && appValue !== 'default') return appValue;
+  const desktopValue = (desktopProfileId ?? '').trim();
+  return desktopValue.length > 0 ? desktopValue : 'default';
 }
 
 export function createDefaultAppSettings(appId: string): AppSettings {

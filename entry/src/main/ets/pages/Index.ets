@@ -83,11 +83,12 @@ struct Index {
     try {
       const request = JSON.parse(raw) as Record<string, string>;
       router.pushUrl({
-        url: 'pages/InputLayoutEditor',
+        url: request.route === 'key-mapping' ? 'pages/AdvancedKeyMapping' : 'pages/InputLayoutEditor',
         params: {
           profileId: request.profileId || 'default',
           profileName: request.profileName || '默认键鼠手柄',
-          appId: request.appId || ''
+          appId: request.appId || '',
+          baseProfileId: request.baseProfileId || 'default'
         }
       });
     } catch (_) {

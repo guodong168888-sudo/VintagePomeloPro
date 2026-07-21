@@ -3,7 +3,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { OH2EVDEV } from '../common/KeyMap';
 import { mapMouseButton } from '../common/MouseMap';
 import { common } from '@kit.AbilityKit';
-import { GlobalSettings, InputProfile, createDefaultGlobalSettings, createDefaultInputProfile } from '../model/AppModels';
+import { GlobalSettings, InputProfile, createDefaultGlobalSettings, createDefaultInputProfile, resolveInputProfileId } from '../model/AppModels';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { InputRouter } from '../service/InputRouter';
 import { InputDispatcher } from '../service/InputDispatcher';
@@ -91,7 +91,8 @@ struct SingleAppWindow {
     this.settings = AppSettingsStore.getInstance().getGlobalSettings();
     InputProfileService.getInstance().initialize(getContext(this) as common.UIAbilityContext).then(() => {
       const session = AppSessionService.getInstance().getSession(this.sessionId);
-      const profileId = session ? AppSettingsStore.getInstance().getAppSettings(session.appId).inputProfileId : 'default';
+      const appProfileId = session ? AppSettingsStore.getInstance().getAppSettings(session.appId).inputProfileId : 'default';
+      const profileId = resolveInputProfileId(appProfileId, this.settings.desktopInputProfileId);
       const profile = InputProfileService.getInstance().getProfile(profileId);
       this.inputProfile = profile;
       GamepadManager.getInstance().setButtonMappings(profile.gamepadMappings);

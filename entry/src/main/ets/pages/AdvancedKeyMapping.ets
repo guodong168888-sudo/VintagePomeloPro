@@ -51,6 +51,7 @@ struct AdvancedKeyMappingPage {
   @State private profileId: string = 'default';
   @State private profileName: string = 'Vintage 默认手柄布局';
   @State private appId: string = '';
+  @State private baseProfileId: string = 'default';
   @State private tab: number = 0;
   @State private selectedKey: VirtualKey | null = null;
   @State private editingFreeIndex: number = -1;
@@ -62,8 +63,9 @@ struct AdvancedKeyMappingPage {
     this.profileId = params.profileId ?? 'default';
     this.profileName = params.profileName ?? (this.profileId === 'default' ? 'Vintage 默认手柄布局' : '应用专用按键映射');
     this.appId = params.appId ?? '';
+    this.baseProfileId = params.baseProfileId ?? 'default';
     InputProfileService.getInstance().initialize(this.context).then((): void => {
-      this.profile = InputProfileService.getInstance().ensureProfile(this.profileId, this.profileName);
+      this.profile = InputProfileService.getInstance().ensureProfile(this.profileId, this.profileName, this.baseProfileId);
       this.profileName = this.profile.name;
     }).catch((): void => {});
   }

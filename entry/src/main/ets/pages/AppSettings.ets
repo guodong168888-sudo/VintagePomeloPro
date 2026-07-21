@@ -32,6 +32,10 @@ struct AppSettingsPage {
     return title + ' 键鼠手柄布局';
   }
 
+  private globalProfileId(): string {
+    return AppSettingsStore.getInstance().getGlobalSettings().desktopInputProfileId || 'default';
+  }
+
   aboutToAppear(): void {
     const params = (router.getParams() as Record<string, string> | undefined) ?? {};
     const appId = params.appId ?? '';
@@ -156,7 +160,8 @@ struct AppSettingsPage {
       params: {
         appId: this.value.appId,
         profileId: profileId,
-        profileName: this.profileEditorName()
+        profileName: this.profileEditorName(),
+        baseProfileId: this.globalProfileId()
       }
     });
   }
@@ -178,7 +183,12 @@ struct AppSettingsPage {
     await AppSettingsStore.getInstance().saveAppSettings(this.value);
     router.pushUrl({
       url: 'pages/AdvancedKeyMapping',
-      params: { appId: this.value.appId, profileId: profileId, profileName: this.profileEditorName() }
+      params: {
+        appId: this.value.appId,
+        profileId: profileId,
+        profileName: this.profileEditorName(),
+        baseProfileId: this.globalProfileId()
+      }
     });
   }
 
@@ -293,7 +303,9 @@ struct AppSettingsPage {
 
           Column({ space: 12 }) {
             Text('输入映射').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
-            Text(this.currentProfileId() === 'default' ? '当前使用默认键鼠手柄布局' : '当前使用应用专用键鼠手柄布局')
+            Text('桌面模式始终使用系统设置中的桌面全局方案；这里的应用专用方案只在单应用模式启动时生效。')
+              .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+            Text(this.currentProfileId() === 'default' ? '当前跟随桌面全局输入方案' : '当前使用应用专用键鼠手柄布局')
               .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
             Button('编辑虚拟按键 / 虚拟鼠标 / 手柄映射')
               .width('100%')

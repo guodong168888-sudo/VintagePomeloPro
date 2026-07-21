@@ -135,7 +135,7 @@ struct DesktopPage {
   aboutToAppear(): void {
     this.settings = AppSettingsStore.getInstance().getGlobalSettings();
     InputProfileService.getInstance().initialize(getContext(this) as common.UIAbilityContext).then(() => {
-      const profile = InputProfileService.getInstance().getProfile('default');
+      const profile = InputProfileService.getInstance().getProfile(this.settings.desktopInputProfileId || 'default');
       this.inputProfile = profile;
       GamepadManager.getInstance().setButtonMappings(profile.gamepadMappings);
     });
