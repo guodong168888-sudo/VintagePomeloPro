@@ -38,6 +38,9 @@ constexpr const char* VIRGL_SERVER_PROGRAM = "virgl_test_server";
 constexpr const char* VIRGL_VTEST_LIBRARY = "libwinehua_vtest_server.so";
 constexpr const char* GUEST_GFX_DIRNAME = "guest_gfx";
 constexpr const char* GUEST_GFX_ENVFILE = "winehua-guest-gfx.env";
+#ifndef __aarch64__
+constexpr const char* X86_BUNDLED_GUEST_GFX_DIR = "/data/storage/el1/bundle/libs/x86_64";
+#endif
 constexpr const char* ZERO_COPY_READY_DIR = "/data/storage/el2/base/cache";
 constexpr const char* ZERO_COPY_READY_PREFIX = "winehua_zc_surface_";
 
@@ -80,6 +83,33 @@ bool DirExists(const std::string& path)
     if (path.empty()) return false;
     if (stat(path.c_str(), &st) != 0) return false;
     return S_ISDIR(st.st_mode);
+}
+
+bool EnsureExecutableTree(const std::string& path)
+{
+    struct stat st = {};
+
+    if (lstat(path.c_str(), &st) != 0) return false;
+    if (S_ISLNK(st.st_mode)) return true;
+    if (chmod(path.c_str(), 0755) != 0)
+    {
+        OH_LOG_WARN(LOG_APP,
+                    "[GraphicsBroker] chmod failed path=%{public}s errno=%{public}d",
+                    path.c_str(), errno);
+        return false;
+    }
+    if (!S_ISDIR(st.st_mode)) return true;
+
+    DIR* handle = opendir(path.c_str());
+    if (!handle) return false;
+    bool ok = true;
+    while (dirent* entry = readdir(handle))
+    {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+        if (!EnsureExecutableTree(path + "/" + entry->d_name)) ok = false;
+    }
+    closedir(handle);
+    return ok;
 }
 
 bool DirHasSharedObjectWithPrefix(const std::string& dir, const std::string& prefix)
@@ -730,15 +760,41 @@ void GraphicsBroker::AppendWineEnv(std::vector<std::string>& env) const
         if (!state.guestReceiverRuntimeDir.empty())
         {
             std::string guestLibDir = state.guestReceiverRuntimeDir + "/lib";
+            std::string guestDriverDir = guestLibDir + "/dri";
+#ifndef __aarch64__
+            // API 23's x86_64 linker namespace only permits executable shared
+            // objects from the HAP native-lib directory. Keep the extracted
+            // receiver for integrity checks, but load its immutable mirror.
+            const std::string bundledGuestLibDir = X86_BUNDLED_GUEST_GFX_DIR;
+            if (FileExists(bundledGuestLibDir + "/libwinehua_guest_EGL.so") &&
+                FileExists(bundledGuestLibDir + "/libgallium-25.0.1.so") &&
+                FileExists(bundledGuestLibDir + "/swrast_dri.so"))
+            {
+                guestLibDir = bundledGuestLibDir;
+                guestDriverDir = bundledGuestLibDir;
+                env.push_back("WINEHUA_GUEST_GFX_LOAD_SOURCE=hap-native-libs");
+            }
+            else
+            {
+                env.push_back("WINEHUA_GUEST_GFX_LOAD_SOURCE=runtime-fallback");
+            }
+#else
+            env.push_back("WINEHUA_GUEST_GFX_LOAD_SOURCE=box64-runtime");
+#endif
             env.push_back("EGL_PLATFORM=wayland");
-            if (FileExists(guestLibDir + "/libEGL.so"))
-                env.push_back("WINEHUA_EGL_LIBRARY_PATH=" + guestLibDir + "/libEGL.so");
+            std::string eglLibraryPath = guestLibDir + "/libEGL.so";
+#ifndef __aarch64__
+            if (guestLibDir == X86_BUNDLED_GUEST_GFX_DIR)
+                eglLibraryPath = guestLibDir + "/libwinehua_guest_EGL.so";
+#endif
+            if (FileExists(eglLibraryPath))
+                env.push_back("WINEHUA_EGL_LIBRARY_PATH=" + eglLibraryPath);
             env.push_back("BOX64_EMULATED_LIBS=libEGL.so:libEGL.so.1:libGLESv2.so:libGLESv2.so.2:"
                           "libGLESv1_CM.so:libGLESv1_CM.so.1:libGL.so:libGL.so.1:"
                           "libwayland-client.so:libwayland-client.so.0:libwayland-server.so:"
                           "libwayland-server.so.0:libwayland-egl.so:libwayland-egl.so.1:"
                           "libdrm.so:libdrm.so.2:libffi.so:libffi.so.8");
-            if (DirExists(guestLibDir + "/dri")) env.push_back("LIBGL_DRIVERS_PATH=" + guestLibDir + "/dri");
+            if (DirExists(guestDriverDir)) env.push_back("LIBGL_DRIVERS_PATH=" + guestDriverDir);
             if (DirExists(guestLibDir + "/egl")) env.push_back("EGL_DRIVERS_PATH=" + guestLibDir + "/egl");
         }
         env.push_back("WINEHUA_WAYLAND_READBACK=1");
@@ -888,6 +944,12 @@ void GraphicsBroker::RefreshGuestReceiverStateLocked()
         guestReceiverError_ = "guest receiver env missing: " + envPath;
         return;
     }
+    // zlib.decompressFile creates rawfile payloads as 0666. Repair modes from
+    // the owning app process so Box64 and runtime inspection can execute/map
+    // the receiver payload. API 23 x86_64 additionally requires the immutable
+    // HAP native-lib mirror selected in AppendWineEnv().
+    if (!EnsureExecutableTree(receiverDir))
+        OH_LOG_WARN(LOG_APP, "[GraphicsBroker] guest gfx executable-mode repair incomplete");
     if (!LoadGuestReceiverEnvFile(receiverDir, envPath, envLines, mode))
     {
         guestReceiverError_ = "failed to parse guest receiver env: " + envPath;

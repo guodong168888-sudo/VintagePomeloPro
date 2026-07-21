@@ -9,6 +9,8 @@ import {
   resolveDisplayMode,
   stableAppId
 } from '../main/ets/model/AppModels';
+import { InputStateTracker } from '../main/ets/service/InputStateTracker';
+import { InputEventGate } from '../main/ets/service/InputEventGate';
 
 export default function localUnitTest() {
   describe('WineEngineApplicationArchitecture', () => {
@@ -59,6 +61,43 @@ export default function localUnitTest() {
       expect(canTransitionEngineState(EngineState.PREPARING, EngineState.READY)).assertTrue();
       expect(canTransitionEngineState(EngineState.PREPARING, EngineState.SWITCHING)).assertTrue();
       expect(canTransitionEngineState(EngineState.STOPPED, EngineState.READY)).assertFalse();
+    });
+
+    it('keepsSharedVirtualKeyPressedUntilEverySourceReleases', 0, () => {
+      const tracker = new InputStateTracker();
+      expect(tracker.pressKey('touch-a', 28)).assertTrue();
+      expect(tracker.pressKey('gamepad-a', 28)).assertFalse();
+      expect(tracker.releaseKey('touch-a', 28)).assertFalse();
+      expect(tracker.releaseKey('gamepad-a', 28)).assertTrue();
+      expect(tracker.snapshot().heldKeys).assertEqual(0);
+    });
+
+    it('releasesPointersKeysAndButtonsOnSessionCancellation', 0, () => {
+      const tracker = new InputStateTracker();
+      tracker.markPointer('pointer-1');
+      tracker.pressKey('pointer-1', 57);
+      tracker.pressButton('pointer-1', 272);
+      const released = tracker.releaseAll();
+      expect(released.keys[0]).assertEqual(57);
+      expect(released.buttons[0]).assertEqual(272);
+      expect(tracker.snapshot().activePointers).assertEqual(0);
+      expect(tracker.snapshot().heldKeys).assertEqual(0);
+      expect(tracker.snapshot().heldButtons).assertEqual(0);
+    });
+
+    it('routesOnePhysicalActionThroughOnlyOnePointerChannel', 0, () => {
+      const gate = new InputEventGate(320);
+      expect(gate.shouldHandleTouch(2, 1, 1000)).assertTrue();
+      expect(gate.shouldHandleMouse(2, 1, 1001)).assertFalse();
+      expect(gate.shouldHandleTouch(1, 3, 2000)).assertFalse();
+      expect(gate.shouldHandleMouse(1, 3, 2000)).assertTrue();
+    });
+
+    it('suppressesUnknownSyntheticMouseAfterTouch', 0, () => {
+      const gate = new InputEventGate(320);
+      expect(gate.shouldHandleTouch(0, 0, 1000)).assertTrue();
+      expect(gate.shouldHandleMouse(0, 0, 1200)).assertFalse();
+      expect(gate.shouldHandleMouse(0, 0, 1400)).assertTrue();
     });
   });
 }

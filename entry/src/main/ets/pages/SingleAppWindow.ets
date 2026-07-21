@@ -1,15 +1,20 @@
 import testNapi from 'libentry.so';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { OH2EVDEV } from '../common/KeyMap';
 import { mapMouseButton } from '../common/MouseMap';
-import { VirtualControls } from '../components/VirtualControls';
 import { common } from '@kit.AbilityKit';
 import { GlobalSettings, InputProfile, createDefaultGlobalSettings, createDefaultInputProfile } from '../model/AppModels';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { InputRouter } from '../service/InputRouter';
+import { InputDispatcher } from '../service/InputDispatcher';
 import { GamepadActivityListener, GamepadConnectionListener, GamepadManager } from '../service/GamepadManager';
 import { InputProfileService } from '../service/InputProfileService';
 import { WineWindowManager } from '../service/WineWindowManager';
 import { AppSessionService } from '../service/AppSessionService';
+import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
+import { InputEventGate } from '../service/InputEventGate';
+
+const INPUT_DOMAIN = 0x0000;
 
 class SingleAppController extends XComponentController {
   toplevelId: number = 0;
@@ -22,13 +27,19 @@ class SingleAppController extends XComponentController {
     }
     this.toplevelId = value;
     if (this.surfaceId.length > 0) {
-      try { testNapi.createRenderer(this.toplevelId, BigInt(this.surfaceId)); } catch (_) {}
+      try {
+        testNapi.createRenderer(this.toplevelId, BigInt(this.surfaceId));
+        InputOverlayWindowCoordinator.getInstance().markRendererRebound();
+      } catch (_) {}
     }
   }
 
   onSurfaceCreated(surfaceId: string): void {
     this.surfaceId = surfaceId;
-    if (this.toplevelId > 0) testNapi.createRenderer(this.toplevelId, BigInt(surfaceId));
+    if (this.toplevelId > 0) {
+      testNapi.createRenderer(this.toplevelId, BigInt(surfaceId));
+      InputOverlayWindowCoordinator.getInstance().markRendererRebound();
+    }
   }
 
   onSurfaceChanged(_surfaceId: string, rect: SurfaceRect): void {
@@ -43,6 +54,19 @@ class SingleAppController extends XComponentController {
     if (this.toplevelId > 0) testNapi.destroyRenderer(this.toplevelId);
     this.surfaceId = '';
   }
+
+  rebindRenderer(): boolean {
+    if (this.toplevelId <= 0 || this.surfaceId.length === 0) return false;
+    try {
+      // 保持同一 NativeWindow/EGLContext，只要求 Wayland 重绘当前帧。
+      // 真正的 surface 重建只在 XComponent 生命周期回调中执行。
+      testNapi.refreshRenderer(this.toplevelId);
+      InputOverlayWindowCoordinator.getInstance().markRendererRebound();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 }
 
 @Entry
@@ -52,14 +76,19 @@ struct SingleAppWindow {
   @StorageLink('singleAppSessionId') private sessionId: string = '';
   @State private settings: GlobalSettings = createDefaultGlobalSettings();
   @State private inputProfile: InputProfile = createDefaultInputProfile();
-  @State private hardwareInputActive: boolean = false;
   private controller: SingleAppController = new SingleAppController();
   private gamepadConnectionCallback: GamepadConnectionListener | null = null;
   private gamepadActivityCallback: GamepadActivityListener | null = null;
+  private eventGate: InputEventGate = new InputEventGate();
+
+  private noteHardwareActivity(): void {
+    if (this.settings.autoHideVirtualControls && this.settings.showVirtualControls) {
+      InputOverlayWindowCoordinator.getInstance().setVisible(false).catch(() => {});
+    }
+  }
 
   aboutToAppear(): void {
     this.settings = AppSettingsStore.getInstance().getGlobalSettings();
-    this.hardwareInputActive = false;
     InputProfileService.getInstance().initialize(getContext(this) as common.UIAbilityContext).then(() => {
       const session = AppSessionService.getInstance().getSession(this.sessionId);
       const profileId = session ? AppSettingsStore.getInstance().getAppSettings(session.appId).inputProfileId : 'default';
@@ -69,15 +98,18 @@ struct SingleAppWindow {
     });
     GamepadManager.getInstance().initialize(this.settings.gamepadDeadzone);
     this.gamepadConnectionCallback = (connected: boolean): void => {
-      if (!connected) this.hardwareInputActive = false;
+      if (!connected && this.settings.autoHideVirtualControls && this.settings.showVirtualControls) {
+        InputOverlayWindowCoordinator.getInstance().setVisible(true).catch(() => {});
+      }
     };
     this.gamepadActivityCallback = (): void => {
-      this.hardwareInputActive = true;
+      this.noteHardwareActivity();
     };
     GamepadManager.getInstance().subscribeConnection(this.gamepadConnectionCallback);
     GamepadManager.getInstance().subscribeActivity(this.gamepadActivityCallback);
     this.controller.switchToplevel(this.toplevelId);
     InputRouter.getInstance().setActiveToplevel(this.toplevelId);
+    InputOverlayWindowCoordinator.getInstance().registerRendererStressDriver(() => this.controller.rebindRenderer());
   }
 
   aboutToDisappear(): void {
@@ -88,12 +120,15 @@ struct SingleAppWindow {
       GamepadManager.getInstance().unsubscribeActivity(this.gamepadActivityCallback);
     }
     GamepadManager.getInstance().releaseAll();
+    InputDispatcher.getInstance().releaseAll('single-app-page-disappear');
     InputRouter.getInstance().releaseAllKeys();
+    InputOverlayWindowCoordinator.getInstance().unregisterRendererStressDriver();
   }
 
   private onToplevelChanged(): void {
     this.controller.switchToplevel(this.toplevelId);
     InputRouter.getInstance().setActiveToplevel(this.toplevelId);
+    InputOverlayWindowCoordinator.getInstance().setActiveToplevel(this.toplevelId);
   }
 
   private pointerTarget(x: number, y: number): number {
@@ -101,12 +136,23 @@ struct SingleAppWindow {
     return found > 0 ? found : this.toplevelId;
   }
 
+  private handleHardwareKey(event: KeyEvent): void {
+    this.noteHardwareActivity();
+    event.stopPropagation();
+    hilog.info(INPUT_DOMAIN, 'KBD-PIPE', '[ArkTS] single-app key code=%{public}d type=%{public}d',
+      event.keyCode, event.type);
+    if (GamepadManager.getInstance().handleKey(event.keyCode, event.type === KeyType.Down)) return;
+    const code = OH2EVDEV[event.keyCode] ?? 0;
+    if (code > 0) InputRouter.getInstance().sendKey(code, event.type === KeyType.Down);
+  }
+
   build() {
     Stack() {
       XComponent({ id: 'wine_single_app_xc', type: XComponentType.SURFACE, controller: this.controller })
-        .width('100%').height('100%').backgroundColor('#000000').focusable(true).focusOnTouch(true)
+        .width('100%').height('100%').backgroundColor('#000000').focusable(false)
         .onMouse((event: MouseEvent) => {
-          this.hardwareInputActive = true;
+          if (!this.eventGate.shouldHandleMouse(event.source, event.sourceTool)) return;
+          this.noteHardwareActivity();
           const x = vp2px(event.x);
           const y = vp2px(event.y);
           const target = this.pointerTarget(x, y);
@@ -117,6 +163,7 @@ struct SingleAppWindow {
           InputRouter.getInstance().sendPointer(event.action, x, y, mapMouseButton(event.button));
         })
         .onTouch((event: TouchEvent) => {
+          if (!this.eventGate.shouldHandleTouch(event.source, event.sourceTool)) return;
           const point = event.changedTouches[0];
           if (!point) return;
           const x = vp2px(point.x);
@@ -127,15 +174,8 @@ struct SingleAppWindow {
           if (event.type === TouchType.Move) InputRouter.getInstance().sendPointer(MouseAction.Move, x, y, 0);
           if (event.type === TouchType.Up || event.type === TouchType.Cancel) InputRouter.getInstance().sendPointer(MouseAction.Release, x, y, mapMouseButton(1));
         })
-        .onKeyEvent((event: KeyEvent) => {
-          this.hardwareInputActive = true;
-          event.stopPropagation();
-          if (GamepadManager.getInstance().handleKey(event.keyCode, event.type === KeyType.Down)) return;
-          const code = OH2EVDEV[event.keyCode] ?? 0;
-          if (code > 0) InputRouter.getInstance().sendKey(code, event.type === KeyType.Down);
-        })
         .onAxisEvent((event?: AxisEvent) => {
-          this.hardwareInputActive = true;
+          this.noteHardwareActivity();
           if (!event) return;
           const x = vp2px(event.x);
           const y = vp2px(event.y);
@@ -147,11 +187,11 @@ struct SingleAppWindow {
           if (horizontal !== 0) InputRouter.getInstance().sendScroll(1, horizontal, event.scrollStep ?? 0, x, y);
         })
 
-      if (this.settings.showVirtualControls &&
-        !(this.settings.autoHideVirtualControls && this.hardwareInputActive)) {
-        VirtualControls({ opacityValue: this.settings.controlOpacity, profile: this.inputProfile })
-      }
     }
     .width('100%').height('100%').backgroundColor('#000000')
+    .id('wine-single-input-root')
+    .focusable(true)
+    .defaultFocus(true)
+    .onKeyEvent((event: KeyEvent): void => this.handleHardwareKey(event))
   }
 }

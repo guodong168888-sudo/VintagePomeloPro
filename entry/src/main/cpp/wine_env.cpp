@@ -15,6 +15,12 @@
 #define LOG_TAG "WL_NAPI"
 #include <hilog/log.h>
 
+#ifndef __aarch64__
+namespace {
+constexpr const char* X86_BUNDLED_GUEST_GFX_DIR = "/data/storage/el1/bundle/libs/x86_64";
+}
+#endif
+
 int CreateAudioBootstrapFd(const std::string& runtimeDir) {
     if (!winehua::AudioBroker::GetInstance().EnsureStarted(runtimeDir)) {
         OH_LOG_ERROR(LOG_APP, "[AudioBroker] failed to start for runtimeDir=%{public}s", runtimeDir.c_str());
@@ -44,7 +50,17 @@ std::vector<std::string> BuildWineEnv(const std::string& sockDir,
     bool useGuestReceiverRuntime = graphicsState.active == winehua::GraphicsBackend::Virgl;
 
     if (useGuestReceiverRuntime && graphicsState.guestReceiverPresent && !graphicsState.guestReceiverRuntimeDir.empty()) {
+#ifdef __aarch64__
         guestReceiverLibDir = graphicsState.guestReceiverRuntimeDir + "/lib";
+#else
+        const std::string bundledGuestLibDir = X86_BUNDLED_GUEST_GFX_DIR;
+        if (access((bundledGuestLibDir + "/libwinehua_guest_EGL.so").c_str(), R_OK) == 0 &&
+            access((bundledGuestLibDir + "/libgallium-25.0.1.so").c_str(), R_OK) == 0) {
+            guestReceiverLibDir = bundledGuestLibDir;
+        } else {
+            guestReceiverLibDir = graphicsState.guestReceiverRuntimeDir + "/lib";
+        }
+#endif
         if (access(guestReceiverLibDir.c_str(), F_OK) == 0) {
             runtimeLibPath = guestReceiverLibDir + ":" + runtimeLibPath;
         }

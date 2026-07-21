@@ -846,8 +846,20 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
             // 仅首次 commit 识别 explorer 桌面 (防止最大化误切 root)
             if (isFirstCommit) {
                 bool isExplorer = (sd->appId.find("explorer") != std::string::npos);
-                bool isFullSize = (contentW >= self->outputW_ * 8 / 10 &&
-                                   contentH >= self->outputH_ * 8 / 10);
+                bool logicalFullSize = (contentW >= self->outputW_ * 8 / 10 &&
+                                        contentH >= self->outputH_ * 8 / 10);
+                // With Wine DPI scaling enabled, xdg_window_geometry is in
+                // logical coordinates while outputW_/outputH_ remain the
+                // physical Wine desktop size. At the default 2.0 scale the
+                // desktop therefore reports 720x480 for a 1440x960 output,
+                // even though its committed buffer covers the whole output.
+                // Limit the buffer-size fallback to the explorer desktop
+                // shell title so a later maximized Explorer window cannot be
+                // promoted to the compositor root.
+                bool isDesktopShell = (sd->title.find("Wine Desktop") != std::string::npos);
+                bool bufferFullSize = (w >= self->outputW_ * 8 / 10 &&
+                                       h >= self->outputH_ * 8 / 10);
+                bool isFullSize = logicalFullSize || (isDesktopShell && bufferFullSize);
 
                 if (isExplorer && isFullSize) {
                     if (!self->desktopRootRecognitionEnabled_) {

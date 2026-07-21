@@ -76,6 +76,11 @@ static const char *sdl_audio_diag_winedebug_profile(void)
            "warn+module,err+module";
 }
 
+static const char *graphics_diag_winedebug_profile(void)
+{
+    return "-all,trace+opengl,trace+wgl,trace+waylanddrv,warn+module,err+module";
+}
+
 static const char *basename_of_path(const char *path)
 {
     const char *slash;
@@ -88,12 +93,23 @@ static const char *basename_of_path(const char *path)
 
 static bool is_audio_test_exe(int argc, char *argv[])
 {
-    const char *base;
+    for (int i = 0; i < argc; ++i)
+    {
+        const char *base = basename_of_path(argv[i]);
+        if (!strcasecmp(base, "winehua_audio_test.exe") ||
+            !strcasecmp(base, "winehua_audio_test32.exe") ||
+            !strcasecmp(base, "winehua_audio_smoke.exe"))
+            return true;
+    }
+    return false;
+}
 
-    if (argc <= 0 || !argv[0]) return false;
-    base = basename_of_path(argv[0]);
-    return !strcasecmp(base, "winehua_audio_test.exe") ||
-           !strcasecmp(base, "winehua_audio_test32.exe");
+static bool is_graphics_smoke_exe(int argc, char *argv[])
+{
+    for (int i = 0; i < argc; ++i)
+        if (!strcasecmp(basename_of_path(argv[i]), "winehua_graphics_smoke.exe"))
+            return true;
+    return false;
 }
 
 static bool is_sdl_audio_test_exe(int argc, char *argv[])
@@ -235,6 +251,7 @@ static const char *select_winedebug_profile(int argc, char *argv[])
     const char *override = getenv("WINEHUA_WINEDEBUG");
 
     if (override && override[0]) return override;
+    if (is_graphics_smoke_exe(argc, argv)) return graphics_diag_winedebug_profile();
     if (is_audio_test_exe(argc, argv)) return midi_diag_winedebug_profile();
     if (is_sdl_audio_test_exe(argc, argv)) return sdl_audio_diag_winedebug_profile();
     return default_winedebug_profile();
@@ -391,6 +408,22 @@ extern "C" void Main(NativeChildProcess_Args args)
 
     // 应用 entryParams 中的 |__env=K=V| 覆盖 (覆盖 baseline)
     apply_entry_param_env_overrides(envOverrides);
+
+    // BuildWineEnv normally keeps Wine quiet.  Built-in smoke programs are
+    // diagnostics, so restore their scoped channels after the serialized
+    // WINEDEBUG override has been applied.  This never affects user programs.
+    if (is_graphics_smoke_exe(argc, argv))
+    {
+        setenv("WINEDEBUG", graphics_diag_winedebug_profile(), 1);
+        setenv("WINEHUA_OPENGL_DIAG", "1", 1);
+        OH_LOG_INFO(LOG_APP,
+                    "[WineChild] graphics diag readback=%{public}s eglPlatform=%{public}s eglLib=%{public}s",
+                    getenv("WINEHUA_WAYLAND_READBACK") ? getenv("WINEHUA_WAYLAND_READBACK") : "(unset)",
+                    getenv("EGL_PLATFORM") ? getenv("EGL_PLATFORM") : "(unset)",
+                    getenv("WINEHUA_EGL_LIBRARY_PATH") ? getenv("WINEHUA_EGL_LIBRARY_PATH") : "(unset)");
+    }
+    else if (is_audio_test_exe(argc, argv))
+        setenv("WINEDEBUG", midi_diag_winedebug_profile(), 1);
 
     // 覆盖 per-process fd 变量 (__env__ 中的是父进程 fd 号, 本进程无效)
     if (wsSockFd >= 0) {

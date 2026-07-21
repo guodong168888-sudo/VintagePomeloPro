@@ -34,11 +34,11 @@
     },
     {
       "name": "accent",
-      "value": "#FF7D8DFF"
+      "value": "#FF9CACFF"
     },
     {
       "name": "selected_background",
-      "value": "#557D8DFF"
+      "value": "#FF303B58"
     }
   ]
 }

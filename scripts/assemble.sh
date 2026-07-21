@@ -236,6 +236,33 @@ assemble_pad() {
         cp "$BUILD_DIR/wine-ohos/programs/winehua_graphics_smoke/x86_64-windows/winehua_graphics_smoke.exe" "$wine_data/bin/x86_64-windows/"
         log "  winehua_graphics_smoke.exe → x86_64-windows/"
     fi
+    # The built-in audio smoke must be self-contained and use a format accepted
+    # by wineohos.drv.  Wine's idw_testsound.wav is IMA ADPCM, while the native
+    # bridge accepts PCM/float input, so generate a deterministic PCM16 stereo
+    # fixture instead of depending on user media or an external codec tool.
+    python3 - "$wine_data/bin/Alarm01.wav" <<'PY'
+import math
+import struct
+import sys
+import wave
+
+output = sys.argv[1]
+rate = 48000
+seconds = 2
+amplitude = 7200
+with wave.open(output, 'wb') as wav:
+    wav.setnchannels(2)
+    wav.setsampwidth(2)
+    wav.setframerate(rate)
+    frames = bytearray()
+    for index in range(rate * seconds):
+        value = int(amplitude * (math.sin(2.0 * math.pi * 523.25 * index / rate) +
+                                 0.45 * math.sin(2.0 * math.pi * 659.25 * index / rate)))
+        sample = max(-32768, min(32767, value))
+        frames.extend(struct.pack('<hh', sample, sample))
+    wav.writeframes(frames)
+PY
+    log "  generated PCM16 stereo → bin/Alarm01.wav (audio smoke fixture)"
 
     # fonts
     cp "$WINE_SRC/fonts/"*.ttf "$wine_data/share/wine/fonts/"
@@ -318,6 +345,36 @@ HKLM,%FontSubStr%,"Lucida Console",,"Noto Sans Mono"' "$wine_data/share/wine/win
         mkdir -p "$wine_data/bin/guest_gfx"
         cp -a "$BUILD_DIR/guest_gfx/$guest_arch/"* "$wine_data/bin/guest_gfx/"
         log "  guest_gfx ($guest_arch): $(ls "$wine_data/bin/guest_gfx/lib"/*.so* 2>/dev/null | wc -l) .so files"
+
+        # On an x86_64 HarmonyOS device the platform linker rejects dlopen()
+        # from the writable app sandbox, even when the extracted files are
+        # executable. Put the Mesa receiver in the HAP native-lib namespace as
+        # well. The ARM package keeps the x86_64 receiver only in wine-data,
+        # because Box64 rather than the platform linker loads those files.
+        if [ "$NATIVE_ARCH" = "x86_64" ]; then
+            local guest_lib="$BUILD_DIR/guest_gfx/$guest_arch/lib"
+            local guest_name
+            # Never expose guest EGL/GLES/DRM under their standard names in
+            # the HAP. Those names can override the system libraries used by
+            # libentry/libvirglrenderer and crash the emulator host renderer.
+            rm -f "$NATIVE_LIBS"/libEGL.so "$NATIVE_LIBS"/libEGL.so.1 \
+                  "$NATIVE_LIBS"/libGLESv1_CM.so "$NATIVE_LIBS"/libGLESv1_CM.so.1 \
+                  "$NATIVE_LIBS"/libGLESv2.so "$NATIVE_LIBS"/libGLESv2.so.2 \
+                  "$NATIVE_LIBS"/libdrm.so "$NATIVE_LIBS"/libdrm.so.2 \
+                  "$NATIVE_LIBS"/libwinehua_guest_EGL.so
+            [ -f "$guest_lib/libEGL.so" ] || err "missing x86 bundled guest gfx library: libEGL.so"
+            [ -f "$guest_lib/libgallium-25.0.1.so" ] || err "missing x86 bundled guest gfx library: libgallium-25.0.1.so"
+            cp -a "$guest_lib/libEGL.so" "$NATIVE_LIBS/libwinehua_guest_EGL.so"
+            cp -a "$guest_lib/libgallium-25.0.1.so" "$NATIVE_LIBS/libgallium-25.0.1.so"
+            # Mesa selects swrast as its DRI frontend and GALLIUM_DRIVER=virpipe
+            # as the actual renderer. Keep all public filenames expected by
+            # Mesa even though these generated entrypoints are identical.
+            for guest_name in kms_swrast_dri.so swrast_dri.so virtio_gpu_dri.so; do
+                [ -f "$guest_lib/dri/$guest_name" ] || err "missing x86 bundled DRI driver: $guest_name"
+                cp -a "$guest_lib/dri/$guest_name" "$NATIVE_LIBS/$guest_name"
+            done
+            log "  guest_gfx (x86_64): uniquely named EGL + Mesa DRI mirrored into HAP native libs"
+        fi
     else
         if [ "${BUILD_GUEST_GFX:-0}" = "1" ]; then
             err "BUILD_GUEST_GFX=1 but build/guest_gfx/$guest_arch/lib is missing"

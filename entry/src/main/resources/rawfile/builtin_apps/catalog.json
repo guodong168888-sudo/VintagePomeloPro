@@ -10,6 +10,14 @@
       "displayMode": "desktop"
     },
     {
+      "id": "builtin-explorer",
+      "title": "文件资源管理器",
+      "launchKind": "wine-system",
+      "launchParams": { "executable": "explorer.exe", "arguments": [], "workingDirectory": "" },
+      "cover": "",
+      "displayMode": "desktop"
+    },
+    {
       "id": "builtin-winecfg",
       "title": "Wine 配置",
       "launchKind": "wine-system",
@@ -45,7 +53,23 @@
       "id": "builtin-cmd",
       "title": "命令提示符",
       "launchKind": "wine-system",
-      "launchParams": { "executable": "cmd.exe", "arguments": [], "workingDirectory": "" },
+      "launchParams": { "executable": "wineconsole.exe", "arguments": ["cmd.exe"], "workingDirectory": "" },
+      "cover": "",
+      "displayMode": "desktop"
+    },
+    {
+      "id": "builtin-graphics-smoke",
+      "title": "图形测试",
+      "launchKind": "wine-system",
+      "launchParams": { "executable": "winehua_graphics_smoke.exe", "arguments": [], "workingDirectory": "" },
+      "cover": "",
+      "displayMode": "desktop"
+    },
+    {
+      "id": "builtin-audio-smoke",
+      "title": "音频测试",
+      "launchKind": "wine-system",
+      "launchParams": { "executable": "winehua_audio_smoke.exe", "arguments": [], "workingDirectory": "" },
       "cover": "",
       "displayMode": "desktop"
     }

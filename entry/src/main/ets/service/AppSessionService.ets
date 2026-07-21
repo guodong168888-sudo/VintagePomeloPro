@@ -16,6 +16,7 @@ import {
 } from '../model/AppModels';
 import { WineEngineService } from './WineEngineService';
 import { WineWindowManager } from './WineWindowManager';
+import { InputOverlayWindowCoordinator } from './InputOverlayWindowCoordinator';
 
 export enum LaunchConflictKind {
   NONE = 'none',
@@ -88,7 +89,38 @@ export class AppSessionService {
   async launch(app: AppDescriptor, settings: GlobalSettings, homeDirectory: string): Promise<RuntimeSession | null> {
     if (!app.available) return null;
     const mode = this.resolveMode(app, settings);
-    const existing = this.findByExecutable(app.launchTarget.executable);
+
+    // “Wine 桌面”不是普通可执行文件：先检查实际 desktop root 是否仍存在。
+    // root 已被关闭时只补启 explorer desktop，不重置 prefix，也不结束其它窗口。
+    if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP && mode === DisplayMode.DESKTOP) {
+      const engine = WineEngineService.getInstance();
+      const wasDesktopReady = engine.isReady() && engine.getMode() === DisplayMode.DESKTOP;
+      const ready = await engine.ensureReady(mode, homeDirectory);
+      if (!ready) return null;
+      const currentDesktop = this.syncDesktopSessionFromNative();
+      if (currentDesktop && currentDesktop.toplevelId > 0) {
+        await this.resume(currentDesktop);
+        return currentDesktop;
+      }
+      // 首次启动时 native launch thread 正在创建 explorer，不能抢跑出第二个 shell。
+      if (!wasDesktopReady) return this.ensureDesktopSession();
+      // 已就绪引擎也给短暂的 surface 重建留出时间；稳定缺 root 才恢复 shell。
+      const settlingDesktop = await this.waitForDesktopRoot(8);
+      if (settlingDesktop && settlingDesktop.toplevelId > 0) return settlingDesktop;
+      const restarted = engine.restartDesktopShell();
+      if (!restarted || restarted.pid <= 0) return null;
+      return this.ensureDesktopSession();
+    }
+    let existing = this.findByAppId(app.id);
+    if (!existing) {
+      existing = this.findByExecutable(app.launchTarget.executable);
+      // The desktop shell is also explorer.exe, but it is not a File Explorer
+      // window.  Do not let path-singleton reuse turn the system Explorer card
+      // into a no-op that merely raises the desktop root.
+      if (existing && existing.sessionId === DESKTOP_SESSION_ID && app.id !== DESKTOP_APP_ID) {
+        existing = null;
+      }
+    }
     if (existing) {
       await this.resume(existing);
       return existing;
@@ -143,7 +175,8 @@ export class AppSessionService {
       if (session.toplevelId <= 0) return;
       const want: Want = {
         bundleName: 'com.vintage.pomelopro',
-        abilityName: 'DesktopAbility'
+        abilityName: 'DesktopAbility',
+        parameters: { toplevelId: session.toplevelId }
       };
       await this.context.startAbility(want);
     } else {
@@ -166,12 +199,21 @@ export class AppSessionService {
   async stopAll(): Promise<void> {
     this.sessions.clear();
     this.pendingToplevels = [];
+    await InputOverlayWindowCoordinator.getInstance().setVisible(false);
     await WineEngineService.getInstance().stopAll();
+  }
+
+  async restartEngine(mode: DisplayMode, homeDirectory: string): Promise<boolean> {
+    this.sessions.clear();
+    this.pendingToplevels = [];
+    await InputOverlayWindowCoordinator.getInstance().setVisible(false);
+    return WineEngineService.getInstance().restart(mode, homeDirectory);
   }
 
   async resetPrefix(): Promise<void> {
     this.sessions.clear();
     this.pendingToplevels = [];
+    await InputOverlayWindowCoordinator.getInstance().setVisible(false);
     await WineEngineService.getInstance().resetPrefix();
   }
 
@@ -203,6 +245,26 @@ export class AppSessionService {
     return result;
   }
 
+  getRunningAppIds(): Set<string> {
+    const result: Set<string> = new Set<string>();
+    this.reconcile();
+    this.sessions.forEach((session: RuntimeSession) => {
+      if (session.state !== SessionState.STOPPED && session.state !== SessionState.ERROR) {
+        result.add(session.appId);
+      }
+    });
+    return result;
+  }
+
+  findByAppId(appId: string): RuntimeSession | null {
+    this.reconcile();
+    let found: RuntimeSession | null = null;
+    this.sessions.forEach((session: RuntimeSession) => {
+      if (session.appId === appId && session.state !== SessionState.STOPPED) found = session;
+    });
+    return found;
+  }
+
   findByExecutable(path: string): RuntimeSession | null {
     const normalized = normalizeLaunchPath(path);
     this.reconcile();
@@ -225,9 +287,14 @@ export class AppSessionService {
       matched = this.upsertDesktopSession(toplevelId, clientPid);
     }
     if (matched) {
+      const shouldResumeSingleApp = matched.toplevelId === 0 && toplevelId > 0 &&
+        matched.displayMode === DisplayMode.SINGLE_APP;
       if (matched.pid <= 0 && clientPid > 0) matched.pid = clientPid;
       if (sessionId === DESKTOP_SESSION_ID || matched.toplevelId === 0) matched.toplevelId = toplevelId;
       matched.state = SessionState.RUNNING;
+      if (shouldResumeSingleApp) {
+        this.resume(matched).catch((_error: Error): void => {});
+      }
     } else if (toplevelId > 0) {
       this.pendingToplevels.push({ sessionId: sessionId, clientPid: clientPid, toplevelId: toplevelId });
       if (this.pendingToplevels.length > 16) this.pendingToplevels.shift();
@@ -257,6 +324,11 @@ export class AppSessionService {
   }
 
   private async ensureDesktopSession(): Promise<RuntimeSession | null> {
+    return this.waitForDesktopRoot(40);
+  }
+
+  /** 等待 explorer surface 关联为 desktop root；不创建或重置任何 Wine 资源。 */
+  private async waitForDesktopRoot(rounds: number): Promise<RuntimeSession | null> {
     const existing = this.sessions.get(DESKTOP_SESSION_ID) ?? null;
     if (existing && existing.toplevelId > 0) {
       await this.resume(existing);
@@ -268,7 +340,7 @@ export class AppSessionService {
       return session;
     }
     const pending = session;
-    for (let index = 0; index < 40; index++) {
+    for (let index = 0; index < rounds; index++) {
       await new Promise<void>((resolve: () => void): void => {
         setTimeout((): void => resolve(), 250);
       });

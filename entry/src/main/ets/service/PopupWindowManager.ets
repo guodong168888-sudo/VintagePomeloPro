@@ -1,6 +1,7 @@
 import { window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import testNapi from 'libentry.so';
+import { InputOverlayWindowCoordinator } from './InputOverlayWindowCoordinator';
 
 const DOMAIN = 0x0000;
 const TAG = 'PopupWM';
@@ -192,6 +193,8 @@ export class PopupWindowManager {
                             Math.max(1, Math.round(entry.h * scale)));
         await this.positionEntry(entry, parentWin, scale);
         await subWin.showWindow();
+        // API 23 上 zLevel 已固定为最高层；此处兼容不支持 zLevel 的设备。
+        InputOverlayWindowCoordinator.getInstance().raise().catch(() => {});
         hilog.info(DOMAIN, TAG, '[POPUP] #%{public}d shown', popupId);
       } catch (e) {
         hilog.error(DOMAIN, TAG, '[POPUP] #%{public}d show failed: %{public}s',

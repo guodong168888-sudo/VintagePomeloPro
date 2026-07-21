@@ -354,6 +354,21 @@ static napi_value ResizeRenderer(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
+// -- NAPI: refreshRenderer -- (Debug overlay 的安全重绘压测)
+static napi_value RefreshRenderer(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 1) {
+        OH_LOG_ERROR(LOG_APP, "[MW-NAPI] refreshRenderer: need toplevelId");
+        return nullptr;
+    }
+    uint32_t tid = 0;
+    napi_get_value_uint32(env, args[0], &tid);
+    PluginManager::GetInstance()->RefreshRenderer(tid);
+    return nullptr;
+}
+
 // -- NAPI: destroyRenderer -- (XComponentController.onSurfaceDestroyed 调用)
 static napi_value DestroyRenderer(napi_env env, napi_callback_info info) {
     size_t argc = 1;
@@ -711,6 +726,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         // surfaceId 驱动的渲染器管理 (XComponentController 回调)
         {"createRenderer",  nullptr, CreateRenderer,  nullptr, nullptr, nullptr, napi_default, nullptr},
         {"resizeRenderer",  nullptr, ResizeRenderer,  nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"refreshRenderer", nullptr, RefreshRenderer, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"destroyRenderer", nullptr, DestroyRenderer, nullptr, nullptr, nullptr, napi_default, nullptr},
 #ifdef DEBUG_MMAP_TEST
         {"runMmapTests",  nullptr, RunMmapTests,  nullptr, nullptr, nullptr, napi_default, nullptr},

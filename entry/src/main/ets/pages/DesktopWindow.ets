@@ -4,25 +4,29 @@ import testNapi from 'libentry.so';
 import { WineWindowManager } from '../service/WineWindowManager';
 import { OH2EVDEV } from '../common/KeyMap';
 import { mapMouseButton } from '../common/MouseMap';
-import { VirtualControls } from '../components/VirtualControls';
 import { GlobalSettings, InputProfile, createDefaultGlobalSettings, createDefaultInputProfile } from '../model/AppModels';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { InputRouter } from '../service/InputRouter';
+import { InputDispatcher } from '../service/InputDispatcher';
 import { GamepadActivityListener, GamepadConnectionListener, GamepadManager } from '../service/GamepadManager';
 import { InputProfileService } from '../service/InputProfileService';
+import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
+import { InputEventGate } from '../service/InputEventGate';
 
 const DOMAIN = 0x0000;
 
 class DesktopController extends XComponentController {
+  private surfaceId: string = '';
+  private rendererRootId: number = 0;
+
   onSurfaceCreated(surfaceId: string): void {
+    this.surfaceId = surfaceId;
     const rootId = WineWindowManager.getInstance().getDesktopRootId();
     hilog.info(DOMAIN, 'LIFE', '[XComp] onSurfaceCreated rootId=%{public}d surfaceId=%{public}s', rootId, surfaceId);
-    if (rootId > 0) {
-      try { testNapi.createRenderer(rootId, BigInt(surfaceId)); } catch (_) {}
-    }
+    this.bindDesktopRoot(rootId, true);
   }
   onSurfaceChanged(surfaceId: string, rect: SurfaceRect): void {
-    const rootId = WineWindowManager.getInstance().getDesktopRootId();
+    const rootId = this.rendererRootId || WineWindowManager.getInstance().getDesktopRootId();
     hilog.info(DOMAIN, 'LIFE', '[XComp] onSurfaceChanged rootId=%{public}d %{public}dx%{public}d', rootId, rect.surfaceWidth, rect.surfaceHeight);
     if (rootId > 0) {
       try {
@@ -34,10 +38,46 @@ class DesktopController extends XComponentController {
     }
   }
   onSurfaceDestroyed(_s: string): void {
-    const rootId = WineWindowManager.getInstance().getDesktopRootId();
+    const rootId = this.rendererRootId;
     hilog.warn(DOMAIN, 'LIFE', '[XComp] onSurfaceDestroyed rootId=%{public}d', rootId);
     if (rootId > 0) {
       try { testNapi.destroyRenderer(rootId); } catch (_) {}
+    }
+    this.rendererRootId = 0;
+    this.surfaceId = '';
+  }
+
+  switchDesktopRoot(rootId: number): boolean {
+    return this.bindDesktopRoot(rootId || WineWindowManager.getInstance().getDesktopRootId(), false);
+  }
+
+  rebindRenderer(): boolean {
+    const rootId = WineWindowManager.getInstance().getDesktopRootId();
+    if (rootId <= 0 || this.surfaceId.length === 0 || this.rendererRootId !== rootId) return false;
+    try {
+      // 调试压测保留 ArkUI 提供的 NativeWindow。真实 Surface 变化由
+      // onSurfaceCreated/onSurfaceDestroyed 走完整 renderer 生命周期。
+      testNapi.refreshRenderer(rootId);
+      InputOverlayWindowCoordinator.getInstance().markRendererRebound();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  private bindDesktopRoot(rootId: number, force: boolean): boolean {
+    if (rootId <= 0 || this.surfaceId.length === 0) return false;
+    try {
+      if (this.rendererRootId > 0 && (this.rendererRootId !== rootId || force)) {
+        testNapi.destroyRenderer(this.rendererRootId);
+      }
+      testNapi.createRenderer(rootId, BigInt(this.surfaceId));
+      this.rendererRootId = rootId;
+      InputOverlayWindowCoordinator.getInstance().setActiveToplevel(rootId);
+      InputOverlayWindowCoordinator.getInstance().markRendererRebound();
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 }
@@ -45,10 +85,10 @@ class DesktopController extends XComponentController {
 @Entry
 @Component
 struct DesktopPage {
+  @StorageLink('desktopToplevelId') @Watch('onDesktopToplevelChanged') private desktopToplevelId: number = 0;
   controller: DesktopController = new DesktopController();
   @State private settings: GlobalSettings = createDefaultGlobalSettings();
   @State private inputProfile: InputProfile = createDefaultInputProfile();
-  @State private hardwareInputActive: boolean = false;
   private gamepadConnectionCallback: GamepadConnectionListener | null = null;
   private gamepadActivityCallback: GamepadActivityListener | null = null;
   // 触控状态机: IDLE → PENDING → (DRAGGING | 长按 | 点击)
@@ -84,10 +124,16 @@ struct DesktopPage {
   private rightBtnTl: number = 0;
   // hover 移动抽样日志计数
   private hoverLogCounter: number = 0;
+  private eventGate: InputEventGate = new InputEventGate();
+
+  private noteHardwareActivity(): void {
+    if (this.settings.autoHideVirtualControls && this.settings.showVirtualControls) {
+      InputOverlayWindowCoordinator.getInstance().setVisible(false).catch(() => {});
+    }
+  }
 
   aboutToAppear(): void {
     this.settings = AppSettingsStore.getInstance().getGlobalSettings();
-    this.hardwareInputActive = false;
     InputProfileService.getInstance().initialize(getContext(this) as common.UIAbilityContext).then(() => {
       const profile = InputProfileService.getInstance().getProfile('default');
       this.inputProfile = profile;
@@ -95,14 +141,18 @@ struct DesktopPage {
     });
     GamepadManager.getInstance().initialize(this.settings.gamepadDeadzone);
     this.gamepadConnectionCallback = (connected: boolean): void => {
-      if (!connected) this.hardwareInputActive = false;
+      if (!connected && this.settings.autoHideVirtualControls && this.settings.showVirtualControls) {
+        InputOverlayWindowCoordinator.getInstance().setVisible(true).catch(() => {});
+      }
     };
     this.gamepadActivityCallback = (): void => {
-      this.hardwareInputActive = true;
+      this.noteHardwareActivity();
     };
     GamepadManager.getInstance().subscribeConnection(this.gamepadConnectionCallback);
     GamepadManager.getInstance().subscribeActivity(this.gamepadActivityCallback);
     InputRouter.getInstance().setActiveToplevel(WineWindowManager.getInstance().getDesktopRootId());
+    this.controller.switchDesktopRoot(this.desktopToplevelId);
+    InputOverlayWindowCoordinator.getInstance().registerRendererStressDriver(() => this.controller.rebindRenderer());
   }
 
   aboutToDisappear(): void {
@@ -113,7 +163,32 @@ struct DesktopPage {
       GamepadManager.getInstance().unsubscribeActivity(this.gamepadActivityCallback);
     }
     GamepadManager.getInstance().releaseAll();
+    InputDispatcher.getInstance().releaseAll('desktop-page-disappear');
     InputRouter.getInstance().releaseAllKeys();
+    InputOverlayWindowCoordinator.getInstance().unregisterRendererStressDriver();
+  }
+
+  private onDesktopToplevelChanged(): void {
+    const rootId = this.desktopToplevelId || WineWindowManager.getInstance().getDesktopRootId();
+    if (this.controller.switchDesktopRoot(rootId)) {
+      InputOverlayWindowCoordinator.getInstance().setActiveToplevel(rootId);
+    }
+  }
+
+  private handleHardwareKey(ev: KeyEvent): void {
+    this.noteHardwareActivity();
+    const rootId = WineWindowManager.getInstance().getDesktopRootId();
+    if (rootId <= 0) return;
+    ev.stopPropagation();
+    hilog.info(DOMAIN, 'KBD-PIPE', '[ArkTS] desktop key code=%{public}d type=%{public}d',
+      ev.keyCode, ev.type);
+    if (GamepadManager.getInstance().handleKey(ev.keyCode, ev.type === KeyType.Down)) return;
+    const code = OH2EVDEV[ev.keyCode] ?? 0;
+    if (code <= 0) return;
+    if (InputRouter.getInstance().getActiveToplevel() <= 0) {
+      InputRouter.getInstance().setActiveToplevel(rootId);
+    }
+    InputRouter.getInstance().sendKey(code, ev.type === KeyType.Down);
   }
 
   build() {
@@ -122,10 +197,11 @@ struct DesktopPage {
         id: 'wine_desktop_xc',
         type: XComponentType.SURFACE,
         controller: this.controller
-      }).width('100%').height('100%').backgroundColor('#000').focusable(true).focusOnTouch(true)
+      }).width('100%').height('100%').backgroundColor('#000').focusable(false)
 
       // ── 触控处理: 单指→左键/右键/拖拽, 双指→滚轮 ──
       .onTouch((ev: TouchEvent) => {
+        if (!this.eventGate.shouldHandleTouch(ev.source, ev.sourceTool)) return;
         try {
           // ── 双指滚动 ──
           if (ev.touches.length >= 2) {
@@ -318,22 +394,16 @@ struct DesktopPage {
         }
       })
 
-      // ── 物理鼠标: hover 移动 + 右键直通 ──
-      // 左键不在此处理: OHOS 把鼠标左键合成 touch 事件, 由 onTouch 手势状态机
-      // 处理 (此处再处理会双发); 右键不合成 touch 事件, 没有本处理器则物理
-      // 鼠标右键完全丢失 (触屏长按合成右键不受影响)。
+      // ── 物理鼠标: hover、按键与拖动直通 ──
       .onMouse((ev: MouseEvent) => {
-        this.hardwareInputActive = true;
+        if (!this.eventGate.shouldHandleMouse(ev.source, ev.sourceTool)) return;
+        this.noteHardwareActivity();
         try {
-          // ── hover 移动直通 (指针跟随/高亮/tooltip/光标形状依赖 WM_MOUSEMOVE) ──
+          // Physical mouse events are routed here exclusively. Touch-generated
+          // mouse events are rejected by InputEventGate above.
           if (ev.action === MouseAction.Move) {
-            // touch 手势进行中: 左键按住移动等由 onTouch 状态机发 motion
-            // (OHOS 对左键同时派发合成 touch 和 mouse 事件, 此处再发会双发)
-            if (this.touchPending || this.isDragging || this.twoFingerActive) return;
             const px = Math.round(vp2px(ev.x));
             const py = Math.round(vp2px(ev.y));
-            // 右键按住拖动: 发给按下捕获的 tl; 否则按当前位置找目标
-            // (跨窗口 enter/leave 由注入层 ACT_MOVE 的焦点判定处理)
             let tl = this.rightBtnTl;
             if (tl <= 0) {
               tl = testNapi.findToplevelAt(px, py) as number;
@@ -346,52 +416,35 @@ struct DesktopPage {
             testNapi.sendPointerEvent(tl, MouseAction.Move, px, py, 0);
             return;
           }
-          if (ev.button !== MouseButton.Right) return;
           if (ev.action !== MouseAction.Press && ev.action !== MouseAction.Release) return;
           const px = Math.round(vp2px(ev.x));
           const py = Math.round(vp2px(ev.y));
-          const btnRight = mapMouseButton(2);
+          const button = mapMouseButton(ev.button);
+          if (button <= 0) return;
           if (ev.action === MouseAction.Press) {
             const tl: number = testNapi.findToplevelAt(px, py) as number;
             if (tl <= 0) {
-              this.rightBtnTl = 0;
-              hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE-RIGHT skipped (no toplevel at %{public}d,%{public}d)', px, py);
+              if (ev.button === MouseButton.Right) this.rightBtnTl = 0;
               return;
             }
-            this.rightBtnTl = tl;
+            if (ev.button === MouseButton.Right) this.rightBtnTl = tl;
             testNapi.raiseToplevel(tl);
             InputRouter.getInstance().setActiveToplevel(tl);
-            hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE-RIGHT press tl=%{public}d px=(%{public}d,%{public}d)', tl, px, py);
-            testNapi.sendPointerEvent(tl, MouseAction.Press, px, py, btnRight);
+            testNapi.sendPointerEvent(tl, MouseAction.Press, px, py, button);
           } else {
-            if (this.rightBtnTl <= 0) return;
-            hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE-RIGHT release tl=%{public}d px=(%{public}d,%{public}d)', this.rightBtnTl, px, py);
-            testNapi.sendPointerEvent(this.rightBtnTl, MouseAction.Release, px, py, btnRight);
-            this.rightBtnTl = 0;
+            const hit = testNapi.findToplevelAt(px, py) as number;
+            const tl = ev.button === MouseButton.Right && this.rightBtnTl > 0 ? this.rightBtnTl : hit;
+            if (tl > 0) testNapi.sendPointerEvent(tl, MouseAction.Release, px, py, button);
+            if (ev.button === MouseButton.Right) this.rightBtnTl = 0;
           }
         } catch (e) {
           hilog.error(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE handler exception: %{public}s', JSON.stringify(e));
         }
       })
 
-      // ── 键盘事件 ──
-      .onKeyEvent((ev: KeyEvent) => {
-        this.hardwareInputActive = true;
-        const rootId = WineWindowManager.getInstance().getDesktopRootId();
-        if (rootId <= 0) return;
-        ev.stopPropagation();
-        if (GamepadManager.getInstance().handleKey(ev.keyCode, ev.type === KeyType.Down)) return;
-        const code = OH2EVDEV[ev.keyCode] ?? 0;
-        if (code <= 0) return;
-        if (InputRouter.getInstance().getActiveToplevel() <= 0) {
-          InputRouter.getInstance().setActiveToplevel(rootId);
-        }
-        InputRouter.getInstance().sendKey(code, ev.type === KeyType.Down);
-      })
-
       // ── 滚轮事件 ──
       .onAxisEvent((ev?: AxisEvent) => {
-        this.hardwareInputActive = true;
+        this.noteHardwareActivity();
         const rootId = WineWindowManager.getInstance().getDesktopRootId();
         if (rootId <= 0 || !ev) return;
         const wpx = Math.round(vp2px(ev.x));
@@ -405,11 +458,11 @@ struct DesktopPage {
         if (horiz !== 0) testNapi.sendScrollEvent(tl, 1, horiz, step, wpx, wpy);
       })
 
-      if (this.settings.showVirtualControls &&
-        !(this.settings.autoHideVirtualControls && this.hardwareInputActive)) {
-        VirtualControls({ opacityValue: this.settings.controlOpacity, profile: this.inputProfile })
-      }
     }
     .width('100%').height('100%').backgroundColor('#000')
+    .id('wine-desktop-input-root')
+    .focusable(true)
+    .defaultFocus(true)
+    .onKeyEvent((ev: KeyEvent): void => this.handleHardwareKey(ev))
   }
 }

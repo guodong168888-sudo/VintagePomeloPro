@@ -1,0 +1,328 @@
+import { window } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { DisplayMode, WineInputSession } from '../model/AppModels';
+import { InputDispatcher } from './InputDispatcher';
+
+export interface InputOverlaySnapshot {
+  session: WineInputSession;
+  profileId: string;
+  visible: boolean;
+  opacity: number;
+  createdCount: number;
+  destroyedCount: number;
+  rendererRebinds: number;
+  zLevel: number;
+  stressRunning: boolean;
+  stressCompleted: number;
+  lastError: string;
+}
+
+export type InputOverlayListener = (snapshot: InputOverlaySnapshot) => void;
+
+const OVERLAY_DOMAIN = 0x0000;
+const OVERLAY_TAG = 'InputOverlay';
+
+/** 透明 ArkTS 子窗口的生命周期所有者，不受 Wine XComponent 帧提交影响。 */
+export class InputOverlayWindowCoordinator {
+  private static instance: InputOverlayWindowCoordinator | null = null;
+  private overlayWindow: window.Window | null = null;
+  private stage: window.WindowStage | null = null;
+  private parentWindow: window.Window | null = null;
+  private listeners: Set<InputOverlayListener> = new Set<InputOverlayListener>();
+  private rendererStressDriver: (() => boolean) | null = null;
+  private stressRemaining: number = 0;
+  private attaching: boolean = false;
+  private snapshot: InputOverlaySnapshot = {
+    session: { sessionId: '', displayMode: DisplayMode.DESKTOP, toplevelId: 0, active: false },
+    profileId: 'default', visible: false, opacity: 72,
+    createdCount: 0, destroyedCount: 0, rendererRebinds: 0, zLevel: 0,
+    stressRunning: false, stressCompleted: 0, lastError: ''
+  };
+
+  static getInstance(): InputOverlayWindowCoordinator {
+    if (!InputOverlayWindowCoordinator.instance) {
+      InputOverlayWindowCoordinator.instance = new InputOverlayWindowCoordinator();
+    }
+    return InputOverlayWindowCoordinator.instance;
+  }
+
+  subscribe(listener: InputOverlayListener): void {
+    this.listeners.add(listener);
+    listener(this.getSnapshot());
+  }
+
+  unsubscribe(listener: InputOverlayListener): void {
+    this.listeners.delete(listener);
+  }
+
+  getSnapshot(): InputOverlaySnapshot {
+    return {
+      session: {
+        sessionId: this.snapshot.session.sessionId,
+        displayMode: this.snapshot.session.displayMode,
+        toplevelId: this.snapshot.session.toplevelId,
+        active: this.snapshot.session.active
+      },
+      profileId: this.snapshot.profileId,
+      visible: this.snapshot.visible,
+      opacity: this.snapshot.opacity,
+      createdCount: this.snapshot.createdCount,
+      destroyedCount: this.snapshot.destroyedCount,
+      rendererRebinds: this.snapshot.rendererRebinds,
+      zLevel: this.snapshot.zLevel,
+      stressRunning: this.snapshot.stressRunning,
+      stressCompleted: this.snapshot.stressCompleted,
+      lastError: this.snapshot.lastError
+    };
+  }
+
+  async attach(stage: window.WindowStage, parentWindow: window.Window,
+    sessionId: string, displayMode: DisplayMode, toplevelId: number,
+    profileId: string = 'default', visible: boolean = true, opacity: number = 72): Promise<void> {
+    const session: WineInputSession = { sessionId, displayMode, toplevelId, active: true };
+    if (this.overlayWindow && this.stage === stage) {
+      this.parentWindow = parentWindow;
+      this.update(session, profileId, visible, opacity);
+      await this.setVisible(visible);
+      await this.syncBounds();
+      await this.raise();
+      return;
+    }
+
+    // DesktopAbility 的 onForeground / onNewWant 在首个窗口布局完成前可能
+    // 紧邻触发。第一轮尚未 showWindow 时不能再创建同名窗口，否则第二轮会
+    // 收到 1300002 并把已创建的覆盖层遗弃。
+    if (this.attaching && this.stage === stage) {
+      this.parentWindow = parentWindow;
+      this.update(session, profileId, visible, opacity);
+      return;
+    }
+
+    await this.detach('replace-overlay');
+    this.stage = stage;
+    this.parentWindow = parentWindow;
+    this.update(session, profileId, visible, opacity);
+    this.attaching = true;
+    try {
+      // 必须在创建时写入尺寸和 zLevel。部分 API 23 WindowManager 会在
+      // showWindow 后忽略对零尺寸子窗口的层级调整，导致 Wine 的直连
+      // Surface 完全盖住 ArkTS 控件。
+      const initialRect = parentWindow.getWindowProperties().windowRect;
+      hilog.info(OVERLAY_DOMAIN, OVERLAY_TAG,
+        'attach session=%{public}s visible=%{public}s rect=%{public}d,%{public}d %{public}dx%{public}d',
+        sessionId, visible ? 'true' : 'false', initialRect.left, initialRect.top,
+        initialRect.width, initialRect.height);
+      let overlay: window.Window | null = null;
+      let configuredCreateError: string = '';
+      try {
+        overlay = await stage.createSubWindowWithOptions('wine_input_overlay', {
+          title: '', decorEnabled: false, isModal: false, zLevel: 9000,
+          maximizeSupported: true,
+          windowRect: {
+            left: Math.round(initialRect.left), top: Math.round(initialRect.top),
+            width: Math.max(1, Math.round(initialRect.width)),
+            height: Math.max(1, Math.round(initialRect.height))
+          }
+        });
+        hilog.info(OVERLAY_DOMAIN, OVERLAY_TAG, 'configured subwindow created');
+      } catch (error) {
+        // 有些 API 23 平板在全屏 Ability 中拒绝带 options 的子窗口，但
+        // 基础 createSubWindow 仍可用。不能因为第一次创建被拒绝就放弃
+        // 整个输入层，否则 Wine surface 会把所有 ArkTS 控件完全盖住。
+        configuredCreateError = JSON.stringify(error);
+        hilog.warn(OVERLAY_DOMAIN, OVERLAY_TAG, 'configured subwindow rejected: %{public}s', configuredCreateError);
+      }
+      if (!overlay) {
+        try {
+          overlay = await stage.createSubWindow('wine_input_overlay_fallback');
+          hilog.info(OVERLAY_DOMAIN, OVERLAY_TAG, 'fallback subwindow created');
+        } catch (fallbackError) {
+          throw new Error('InputOverlayWindow unavailable: configured=' +
+            configuredCreateError + '; fallback=' + JSON.stringify(fallbackError));
+        }
+      }
+      if (!overlay) {
+        throw new Error('InputOverlayWindow was not created');
+      }
+      this.overlayWindow = overlay;
+      try { await overlay.setWindowFocusable(false); } catch (_) {}
+      await overlay.loadContent('pages/InputOverlay');
+      hilog.info(OVERLAY_DOMAIN, OVERLAY_TAG, 'overlay content loaded');
+      await this.syncBounds();
+      await overlay.showWindow();
+      hilog.info(OVERLAY_DOMAIN, OVERLAY_TAG, 'overlay shown');
+      // API 23 对刚 create 的子窗口调用该接口会返回 1300002；窗口 show 后
+      // 再设透明背景才进入合法状态，也避免 create 成功却没有页面的假失败。
+      try {
+        overlay.setWindowBackgroundColor('#00000000');
+      } catch (error) {
+        this.snapshot.lastError = 'setWindowBackgroundColor: ' + JSON.stringify(error);
+        hilog.warn(OVERLAY_DOMAIN, OVERLAY_TAG, 'set transparent background failed: %{public}s', this.snapshot.lastError);
+      }
+      try {
+        await overlay.setSubWindowZLevel(9000);
+        this.snapshot.zLevel = overlay.getSubWindowZLevel();
+        hilog.info(OVERLAY_DOMAIN, OVERLAY_TAG, 'overlay zLevel=%{public}d', this.snapshot.zLevel);
+      } catch (error) {
+        this.snapshot.lastError = 'setSubWindowZLevel: ' + JSON.stringify(error);
+        hilog.error(OVERLAY_DOMAIN, OVERLAY_TAG, 'set zLevel failed: %{public}s', this.snapshot.lastError);
+      }
+      try { await overlay.setRaiseByClickEnabled(false); } catch (_) {}
+      this.snapshot.createdCount++;
+      overlay.on('windowEvent', (eventType: number) => {
+        if (eventType === window.WindowEventType.WINDOW_DESTROYED) {
+          this.overlayWindow = null;
+          this.snapshot.destroyedCount++;
+          this.snapshot.visible = false;
+          this.publish();
+        }
+      });
+      await this.setVisible(visible);
+      await this.raise();
+      this.publish();
+    } catch (error) {
+      this.snapshot.lastError = 'create InputOverlayWindow: ' + JSON.stringify(error);
+      this.overlayWindow = null;
+      hilog.error(OVERLAY_DOMAIN, OVERLAY_TAG, 'attach failed: %{public}s', this.snapshot.lastError);
+      this.publish();
+    } finally {
+      this.attaching = false;
+    }
+  }
+
+  update(session: WineInputSession, profileId: string, visible: boolean, opacity: number): void {
+    this.snapshot.session = session;
+    this.snapshot.profileId = profileId || 'default';
+    this.snapshot.visible = visible;
+    this.snapshot.opacity = Math.max(25, Math.min(100, opacity));
+    InputDispatcher.getInstance().setSession(session);
+    this.publish();
+  }
+
+  async setVisible(visible: boolean): Promise<void> {
+    this.snapshot.visible = visible;
+    if (this.overlayWindow) {
+      try { await this.overlayWindow.setWindowTouchable(visible); } catch (error) {
+        this.snapshot.lastError = 'setWindowTouchable: ' + JSON.stringify(error);
+      }
+    }
+    if (!visible) InputDispatcher.getInstance().releaseAll('overlay-hidden');
+    this.publish();
+  }
+
+  setOpacity(opacity: number): void {
+    this.snapshot.opacity = Math.max(25, Math.min(100, opacity));
+    this.publish();
+  }
+
+  async raise(): Promise<void> {
+    if (!this.overlayWindow) return;
+    try { await this.overlayWindow.raiseToAppTop(); } catch (error) {
+      this.snapshot.lastError = 'raiseToAppTop: ' + JSON.stringify(error);
+      this.publish();
+    }
+  }
+
+  async syncBounds(): Promise<void> {
+    if (!this.overlayWindow || !this.parentWindow) return;
+    try {
+      const rect = this.parentWindow.getWindowProperties().windowRect;
+      await this.overlayWindow.resize(Math.max(1, Math.round(rect.width)), Math.max(1, Math.round(rect.height)));
+      await this.overlayWindow.moveWindowToGlobal(Math.round(rect.left), Math.round(rect.top));
+    } catch (error) {
+      this.snapshot.lastError = 'syncBounds: ' + JSON.stringify(error);
+      this.publish();
+    }
+  }
+
+  setActiveToplevel(toplevelId: number): void {
+    if (toplevelId <= 0) return;
+    const previous = this.snapshot.session;
+    // DesktopAbility 可能先于 explorer toplevel 创建。拿到真实 root 后补全
+    // 会话 ID，保证 diagnostics、恢复和输入归属使用同一个实际会话。
+    const sessionId = previous.displayMode === DisplayMode.DESKTOP &&
+      (previous.sessionId.length === 0 || previous.sessionId === 'desktop-0')
+      ? 'desktop-' + toplevelId : previous.sessionId;
+    this.snapshot.session = {
+      sessionId: sessionId,
+      displayMode: previous.displayMode,
+      toplevelId: toplevelId,
+      active: previous.active
+    };
+    InputDispatcher.getInstance().setSession(this.snapshot.session);
+    this.publish();
+  }
+
+  markRendererRebound(): void {
+    this.snapshot.rendererRebinds++;
+    this.publish();
+  }
+
+  registerRendererStressDriver(driver: () => boolean): void {
+    this.rendererStressDriver = driver;
+  }
+
+  unregisterRendererStressDriver(): void {
+    this.rendererStressDriver = null;
+    this.stressRemaining = 0;
+    this.snapshot.stressRunning = false;
+    this.publish();
+  }
+
+  /** Debug HAP 自检入口：异步重绑定，避免阻塞 ArkTS UI 线程。 */
+  runRendererStress(rounds: number = 300): boolean {
+    if (!this.rendererStressDriver || this.snapshot.stressRunning || rounds <= 0) return false;
+    this.stressRemaining = Math.min(300, Math.max(1, Math.round(rounds)));
+    this.snapshot.stressRunning = true;
+    this.snapshot.stressCompleted = 0;
+    this.snapshot.lastError = '';
+    this.publish();
+    this.runNextStressFrame();
+    return true;
+  }
+
+  private runNextStressFrame(): void {
+    if (!this.snapshot.stressRunning) return;
+    if (!this.rendererStressDriver || this.stressRemaining <= 0) {
+      this.snapshot.stressRunning = false;
+      this.publish();
+      return;
+    }
+    try {
+      if (!this.rendererStressDriver()) {
+        this.snapshot.lastError = 'renderer stress driver rejected rebind';
+        this.snapshot.stressRunning = false;
+        this.publish();
+        return;
+      }
+      this.snapshot.stressCompleted++;
+      this.stressRemaining--;
+    } catch (error) {
+      this.snapshot.lastError = 'renderer stress: ' + JSON.stringify(error);
+      this.snapshot.stressRunning = false;
+      this.publish();
+      return;
+    }
+    this.publish();
+    setTimeout(() => this.runNextStressFrame(), 16);
+  }
+
+  async detach(reason: string): Promise<void> {
+    InputDispatcher.getInstance().releaseAll(reason);
+    const overlay = this.overlayWindow;
+    this.overlayWindow = null;
+    this.stage = null;
+    this.parentWindow = null;
+    this.snapshot.visible = false;
+    this.snapshot.session.active = false;
+    if (overlay) {
+      try { await overlay.destroyWindow(); } catch (_) {}
+    }
+    this.publish();
+  }
+
+  private publish(): void {
+    const snapshot = this.getSnapshot();
+    this.listeners.forEach((listener: InputOverlayListener): void => listener(snapshot));
+  }
+}

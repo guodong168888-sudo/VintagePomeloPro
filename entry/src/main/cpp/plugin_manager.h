@@ -30,6 +30,9 @@ public:
     // surfaceId 驱动的渲染器生命周期
     void CreateRenderer(uint32_t toplevelId, int64_t surfaceId);
     void ResizeRenderer(uint32_t toplevelId, int w, int h);
+    // 保留 NativeWindow/EGLContext 的安全重绑定路径。仅请求 Wayland 重新提交
+    // 当前帧；XComponent 的真实 surface 销毁/创建仍必须走 Create/Destroy 生命周期。
+    void RefreshRenderer(uint32_t toplevelId);
     void DestroyToplevel(uint32_t toplevelId);
 
     // pending toplevelId 队列: Ability 在 loadContent 前入队

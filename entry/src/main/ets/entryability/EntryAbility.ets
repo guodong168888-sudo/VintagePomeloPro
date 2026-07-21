@@ -1,17 +1,58 @@
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
+import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
 import { WineWindowManager } from '../service/WineWindowManager';
 
 const DOMAIN = 0x0000;
+const DOWNLOAD_LIBRARY_URI = 'file://docs/storage/Users/currentUser/Download/com.vintage.pomelopro';
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
+    // 与 VintagePomelo 相同，使用 docs FileUri 而非 Environment 的可选能力。
+    // 这会在冷启动就创建 Download/包名/games，不依赖扫描或目录授权。
+    this.ensureDownloadGamesDirectory();
+  }
+
+  private ensureDirectoryExists(path: string): void {
+    try {
+      if (fs.statSync(path).isDirectory()) return;
+    } catch (_) {
+      try {
+        fs.mkdirSync(path, true);
+      } catch (error) {
+        hilog.error(DOMAIN, 'EntryAbility', 'Failed to create %{public}s: %{public}s', path, JSON.stringify(error));
+      }
+    }
+  }
+
+  private ensureDownloadGamesDirectory(): void {
+    try {
+      const libraryPath = new fileUri.FileUri(DOWNLOAD_LIBRARY_URI).path;
+      this.ensureDirectoryExists(libraryPath);
+      this.ensureDirectoryExists(libraryPath + '/games');
+      hilog.info(DOMAIN, 'EntryAbility', 'Download games directory ready: %{public}s', libraryPath + '/games');
+    } catch (error) {
+      hilog.error(DOMAIN, 'EntryAbility', 'Failed to resolve Download games directory: %{public}s', JSON.stringify(error));
+    }
   }
 
   onDestroy(): void {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy');
+  }
+
+  onNewWant(want: Want): void {
+    const parameters = want.parameters ?? {};
+    if (parameters.overlayRoute === 'input-layout') {
+      // 覆盖层属于 Desktop/SingleApp Ability，不能直接把它的子窗口替换为
+      // 编辑器。回到应用库主窗口再进入编辑页，Wine 会话则保持后台可恢复。
+      AppStorage.setOrCreate('overlayEditorRequest', JSON.stringify({
+        profileId: String(parameters.profileId ?? 'default'),
+        profileName: String(parameters.profileName ?? '默认键鼠手柄'),
+        appId: String(parameters.appId ?? '')
+      }));
+    }
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {

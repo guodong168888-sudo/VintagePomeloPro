@@ -2,15 +2,15 @@
   "color": [
     {
       "name": "start_window_background",
-      "value": "#F1F3F5"
+      "value": "#F6F8FB"
     },
     {
       "name": "page_background",
-      "value": "#F1F3F5"
+      "value": "#F6F8FB"
     },
     {
       "name": "sidebar_background",
-      "value": "#E4EBF4"
+      "value": "#EEF2F7"
     },
     {
       "name": "card_background",
@@ -22,7 +22,7 @@
     },
     {
       "name": "search_background",
-      "value": "#FFF9FBFF"
+      "value": "#FFFFFFFF"
     },
     {
       "name": "text_primary",
@@ -30,15 +30,15 @@
     },
     {
       "name": "text_secondary",
-      "value": "#99606A78"
+      "value": "#FF5E6B7C"
     },
     {
       "name": "accent",
-      "value": "#FF5569D8"
+      "value": "#FF246BFD"
     },
     {
       "name": "selected_background",
-      "value": "#325569D8"
+      "value": "#FFE2ECFF"
     }
   ]
 }

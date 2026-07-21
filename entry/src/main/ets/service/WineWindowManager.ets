@@ -697,8 +697,10 @@ export class WineWindowManager {
 
     // Desktop 模式: root 销毁 → 等新 root 出现 (不销毁渲染器, 不关 Ability)
     if (this.isDesktopMode && id === this.desktopRootId) {
-      hilog.info(DOMAIN, TAG, '[MW] desktop root #%{public}d destroyed, keep old ID for input', id);
-      // 保留旧 rootId 用于输入, 不调 destroyToplevel, 等 C++ 侧自动切换
+      hilog.info(DOMAIN, TAG, '[MW] desktop root #%{public}d destroyed, clear stale input target', id);
+      // C++ 已移除 native surface/session 关联。ArkTS 侧也必须清掉旧 ID：
+      // 否则再次点“Wine 桌面”会把已销毁的 renderer 当作可恢复会话。
+      this.desktopRootId = 0;
       return;
     }
     // Desktop 模式: 非 root toplevel 销毁, C++ 自动停止合成
@@ -794,4 +796,17 @@ export class WineWindowManager {
 
   getDesktopRootId(): number { return this.desktopRootId; }
   getSingleAppRootId(): number { return this.singleAppRootId; }
+
+  /** 与 native 启动路径相同的 Wine 逻辑尺寸，用于重建 explorer desktop shell。 */
+  getDesktopShellArgument(): string {
+    try {
+      const currentDisplay = display.getDefaultDisplaySync();
+      const effectiveScale = this.displayScale * this.scaleBoost;
+      const width = Math.max(1, Math.round(currentDisplay.width / effectiveScale));
+      const height = Math.max(1, Math.round(currentDisplay.height / effectiveScale));
+      return '/desktop=shell,' + width + 'x' + height;
+    } catch (_) {
+      return '/desktop=shell,1280x720';
+    }
+  }
 }

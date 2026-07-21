@@ -67,6 +67,8 @@ export interface AppSettings {
   appId: string;
   customTitle: string;
   customCover: string;
+  /** Kept separately from catalog discovery so a moved game can stay starred. */
+  favorite: boolean;
   executable: string;
   arguments: string[];
   workingDirectory: string;
@@ -99,6 +101,22 @@ export interface RuntimeSession {
   startedAt: number;
 }
 
+/** ArkTS 覆盖层所使用的 Wine 会话视图，不等同于 Wine/NCP 子进程。 */
+export interface WineInputSession {
+  sessionId: string;
+  displayMode: DisplayMode;
+  toplevelId: number;
+  active: boolean;
+}
+
+export interface InputDiagnostics {
+  sessionId: string;
+  activePointers: number;
+  heldKeys: number;
+  heldButtons: number;
+  injectedEvents: number;
+}
+
 export interface NativeProcessInfo {
   pid: number;
   name: string;
@@ -124,30 +142,79 @@ export interface NativeWineSessionInfo {
 export interface InputProfile {
   id: string;
   name: string;
-  buttonOpacity: number;
-  stickDeadzone: number;
-  controls: VirtualControlDescriptor[];
+  schemaVersion: number;
+  virtualKeyConfig: VirtualKeyConfig;
+  layoutLandscape: VirtualGamepadLayout;
+  layoutPortrait: VirtualGamepadLayout;
+  virtualKeyMappings: VirtualKeyMapping[];
   gamepadMappings: GamepadButtonMapping[];
+  /** VintagePomelo-compatible optional free-key overlay. */
+  freeButtonsConfig: FreeButtonsConfig;
 }
 
-export enum VirtualControlKind {
-  BUTTON = 'button',
+// These models intentionally follow VintagePomelo's virtual gamepad contract.
+// A direction group has exactly one renderer: d-pad or joystick, never both.
+export enum DirectionControlMode {
   DPAD = 'dpad',
-  STICK = 'stick',
-  TOUCHPAD = 'touchpad',
-  MOUSE_BUTTON = 'mouse-button',
-  SCROLL = 'scroll'
+  JOYSTICK = 'joystick'
 }
 
-export interface VirtualControlDescriptor {
-  id: string;
-  label: string;
-  kind: VirtualControlKind;
+export enum VirtualKeyColorScheme {
+  DEFAULT = 'default',
+  WHITE = 'white'
+}
+
+export interface VirtualKeyConfig {
+  transparency: number;
+  joystickTransparency: number;
+  joystickSize: number;
+  buttonSize: number;
+  showButtonA: boolean;
+  showButtonB: boolean;
+  showButtonX: boolean;
+  showButtonY: boolean;
+  showButtonL: boolean;
+  showButtonR: boolean;
+  showButtonMenu: boolean;
+  showButtonShift: boolean;
+  showButtonCtrl: boolean;
+  joystickDeadzone: number;
+  eightDirectionJoystick: boolean;
+  dpadMode: DirectionControlMode;
+  colorScheme: VirtualKeyColorScheme;
+}
+
+export enum VirtualKey {
+  DPAD_UP = 'dpad_up',
+  DPAD_DOWN = 'dpad_down',
+  DPAD_LEFT = 'dpad_left',
+  DPAD_RIGHT = 'dpad_right',
+  BUTTON_A = 'button_a',
+  BUTTON_B = 'button_b',
+  BUTTON_X = 'button_x',
+  BUTTON_Y = 'button_y',
+  BUTTON_L = 'button_l',
+  BUTTON_R = 'button_r',
+  BUTTON_MENU = 'button_menu',
+  BUTTON_SHIFT = 'button_shift',
+  BUTTON_CTRL = 'button_ctrl'
+}
+
+export interface VirtualKeyMapping {
+  virtualKey: VirtualKey;
   evdevCode: number;
-  xPercent: number;
-  yPercent: number;
-  size: number;
-  opacity: number;
+  keyLabel: string;
+}
+
+export interface ButtonGroupPosition {
+  centerX: number;
+  centerY: number;
+}
+
+export interface VirtualGamepadLayout {
+  direction: ButtonGroupPosition;
+  action: ButtonGroupPosition;
+  aux: ButtonGroupPosition;
 }
 
 export interface GamepadButtonMapping {
@@ -155,6 +222,155 @@ export interface GamepadButtonMapping {
   label: string;
   buttonCode: number;
   evdevCode: number;
+}
+
+/**
+ * Free buttons deliberately remain a separate mode from the grouped gamepad.
+ * The fixed gamepad still moves and scales by group; free buttons use the
+ * familiar VintagePomelo gamepad/radial presets and never re-introduce the
+ * former per-control coordinate editor.
+ */
+export enum FreeButtonLayoutMode {
+  GAMEPAD = 'gamepad',
+  RADIAL = 'radial'
+}
+
+export interface FreeButton {
+  id: string;
+  evdevCode: number;
+  keyLabel: string;
+}
+
+export interface FreeButtonsConfig {
+  enabled: boolean;
+  layoutMode: FreeButtonLayoutMode;
+  buttons: FreeButton[];
+  radialScale: number;
+  gamepadSpacing: number;
+}
+
+export interface FreeButtonPosition {
+  offsetX: number;
+  offsetY: number;
+}
+
+export const DEFAULT_FREE_BUTTONS_CONFIG: FreeButtonsConfig = {
+  enabled: false,
+  layoutMode: FreeButtonLayoutMode.GAMEPAD,
+  buttons: [],
+  radialScale: 100,
+  gamepadSpacing: 100
+};
+
+export function cloneFreeButtonsConfig(config?: FreeButtonsConfig): FreeButtonsConfig {
+  const value = config ?? DEFAULT_FREE_BUTTONS_CONFIG;
+  return {
+    enabled: value.enabled ?? DEFAULT_FREE_BUTTONS_CONFIG.enabled,
+    layoutMode: value.layoutMode === FreeButtonLayoutMode.RADIAL ? FreeButtonLayoutMode.RADIAL : FreeButtonLayoutMode.GAMEPAD,
+    buttons: (value.buttons ?? []).slice(0, 8).map((button: FreeButton): FreeButton => ({
+      id: button.id,
+      evdevCode: button.evdevCode,
+      keyLabel: button.keyLabel
+    })),
+    radialScale: value.radialScale ?? DEFAULT_FREE_BUTTONS_CONFIG.radialScale,
+    gamepadSpacing: value.gamepadSpacing ?? DEFAULT_FREE_BUTTONS_CONFIG.gamepadSpacing
+  };
+}
+
+export function generateFreeButtonId(): string {
+  return 'free-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 0x10000).toString(36);
+}
+
+/** Same arrangement and scaling contract used by VintagePomelo's free mode. */
+export function computeGamepadPositions(count: number, spacing: number = 100): FreeButtonPosition[] {
+  const unit = 55 * Math.max(0.8, Math.min(1.5, spacing / 100));
+  const positions: FreeButtonPosition[] = [];
+  if (count <= 0) return positions;
+  if (count === 1) return [{ offsetX: 0, offsetY: 0 }];
+  if (count === 2) return [{ offsetX: -unit * 0.5, offsetY: 0 }, { offsetX: unit * 0.5, offsetY: 0 }];
+  if (count === 3) return [{ offsetX: -unit * 0.5, offsetY: -unit * 0.35 }, { offsetX: unit * 0.5, offsetY: -unit * 0.35 }, { offsetX: 0, offsetY: unit * 0.35 }];
+  positions.push(
+    { offsetX: unit * 0.82, offsetY: 0 }, { offsetX: 0, offsetY: unit * 0.82 },
+    { offsetX: -unit * 0.82, offsetY: 0 }, { offsetX: 0, offsetY: -unit * 0.82 }
+  );
+  if (count >= 5) positions.push({ offsetX: count === 5 ? unit * 0.6 : -unit * 0.6, offsetY: -unit * 1.85 });
+  if (count >= 6) positions.push({ offsetX: unit * 0.6, offsetY: -unit * 1.85 });
+  if (count >= 7) positions.push({ offsetX: -unit * 0.6, offsetY: -unit * 2.9 });
+  if (count >= 8) positions.push({ offsetX: unit * 0.6, offsetY: -unit * 2.9 });
+  return positions;
+}
+
+export function computeRadialPositions(count: number, radius: number): FreeButtonPosition[] {
+  const positions: FreeButtonPosition[] = [];
+  const safeCount = Math.max(1, count);
+  for (let index = 0; index < count; index++) {
+    const angle = -Math.PI / 2 + (Math.PI * 2 * index / safeCount);
+    positions.push({ offsetX: Math.cos(angle) * radius, offsetY: Math.sin(angle) * radius });
+  }
+  return positions;
+}
+
+export const DEFAULT_GAMEPAD_LAYOUT: VirtualGamepadLayout = {
+  direction: { centerX: 0.12, centerY: 0.65 },
+  action: { centerX: 0.88, centerY: 0.62 },
+  aux: { centerX: 0.50, centerY: 0.10 }
+};
+
+export const DEFAULT_GAMEPAD_LAYOUT_PORTRAIT: VirtualGamepadLayout = {
+  direction: { centerX: 0.15, centerY: 0.82 },
+  action: { centerX: 0.85, centerY: 0.78 },
+  aux: { centerX: 0.50, centerY: 0.65 }
+};
+
+export const DEFAULT_VIRTUAL_KEY_CONFIG: VirtualKeyConfig = {
+  transparency: 40,
+  joystickTransparency: 50,
+  joystickSize: 100,
+  buttonSize: 100,
+  showButtonA: true,
+  showButtonB: true,
+  showButtonX: true,
+  showButtonY: true,
+  showButtonL: true,
+  showButtonR: true,
+  showButtonMenu: true,
+  showButtonShift: true,
+  showButtonCtrl: true,
+  joystickDeadzone: 15,
+  eightDirectionJoystick: true,
+  dpadMode: DirectionControlMode.DPAD,
+  colorScheme: VirtualKeyColorScheme.DEFAULT
+};
+
+export function cloneVirtualKeyConfig(config: VirtualKeyConfig): VirtualKeyConfig {
+  return {
+    transparency: config.transparency ?? DEFAULT_VIRTUAL_KEY_CONFIG.transparency,
+    joystickTransparency: config.joystickTransparency ?? DEFAULT_VIRTUAL_KEY_CONFIG.joystickTransparency,
+    joystickSize: config.joystickSize ?? DEFAULT_VIRTUAL_KEY_CONFIG.joystickSize,
+    buttonSize: config.buttonSize ?? DEFAULT_VIRTUAL_KEY_CONFIG.buttonSize,
+    showButtonA: config.showButtonA ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonA,
+    showButtonB: config.showButtonB ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonB,
+    showButtonX: config.showButtonX ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonX,
+    showButtonY: config.showButtonY ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonY,
+    showButtonL: config.showButtonL ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonL,
+    showButtonR: config.showButtonR ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonR,
+    showButtonMenu: config.showButtonMenu ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonMenu,
+    showButtonShift: config.showButtonShift ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonShift,
+    showButtonCtrl: config.showButtonCtrl ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonCtrl,
+    joystickDeadzone: config.joystickDeadzone ?? DEFAULT_VIRTUAL_KEY_CONFIG.joystickDeadzone,
+    eightDirectionJoystick: config.eightDirectionJoystick ?? DEFAULT_VIRTUAL_KEY_CONFIG.eightDirectionJoystick,
+    dpadMode: config.dpadMode ?? DEFAULT_VIRTUAL_KEY_CONFIG.dpadMode,
+    colorScheme: config.colorScheme ?? DEFAULT_VIRTUAL_KEY_CONFIG.colorScheme
+  };
+}
+
+export function cloneGamepadLayout(layout: VirtualGamepadLayout,
+  defaults: VirtualGamepadLayout = DEFAULT_GAMEPAD_LAYOUT): VirtualGamepadLayout {
+  return {
+    direction: { centerX: layout.direction?.centerX ?? defaults.direction.centerX, centerY: layout.direction?.centerY ?? defaults.direction.centerY },
+    action: { centerX: layout.action?.centerX ?? defaults.action.centerX, centerY: layout.action?.centerY ?? defaults.action.centerY },
+    aux: { centerX: layout.aux?.centerX ?? defaults.aux.centerX, centerY: layout.aux?.centerY ?? defaults.aux.centerY }
+  };
 }
 
 export function normalizeLaunchPath(path: string): string {
@@ -179,7 +395,8 @@ export function createDefaultGlobalSettings(): GlobalSettings {
     useGlassEffect: true,
     usePageBackground: false,
     showVirtualControls: true,
-    autoHideVirtualControls: true,
+    // 独立 ArkTS 覆盖层默认保持可见，避免实体输入后无法恢复控制层。
+    autoHideVirtualControls: false,
     controlOpacity: 72,
     gamepadDeadzone: 18,
     outputScale: 100
@@ -191,6 +408,7 @@ export function createDefaultAppSettings(appId: string): AppSettings {
     appId: appId,
     customTitle: '',
     customCover: '',
+    favorite: false,
     executable: '',
     arguments: [],
     workingDirectory: '',
@@ -203,51 +421,46 @@ export function createDefaultAppSettings(appId: string): AppSettings {
 export function createDefaultInputProfile(): InputProfile {
   return {
     id: 'default',
-    name: '默认键鼠手柄',
-    buttonOpacity: 72,
-    stickDeadzone: 18,
+    name: 'Vintage 默认手柄布局',
+    schemaVersion: 2,
+    virtualKeyConfig: cloneVirtualKeyConfig(DEFAULT_VIRTUAL_KEY_CONFIG),
+    layoutLandscape: cloneGamepadLayout(DEFAULT_GAMEPAD_LAYOUT),
+    layoutPortrait: cloneGamepadLayout(DEFAULT_GAMEPAD_LAYOUT_PORTRAIT, DEFAULT_GAMEPAD_LAYOUT_PORTRAIT),
+    virtualKeyMappings: [
+      { virtualKey: VirtualKey.DPAD_UP, evdevCode: 103, keyLabel: '↑' },
+      { virtualKey: VirtualKey.DPAD_DOWN, evdevCode: 108, keyLabel: '↓' },
+      { virtualKey: VirtualKey.DPAD_LEFT, evdevCode: 105, keyLabel: '←' },
+      { virtualKey: VirtualKey.DPAD_RIGHT, evdevCode: 106, keyLabel: '→' },
+      { virtualKey: VirtualKey.BUTTON_A, evdevCode: 57, keyLabel: 'Space' },
+      { virtualKey: VirtualKey.BUTTON_B, evdevCode: 45, keyLabel: 'X' },
+      { virtualKey: VirtualKey.BUTTON_X, evdevCode: 30, keyLabel: 'A' },
+      { virtualKey: VirtualKey.BUTTON_Y, evdevCode: 31, keyLabel: 'S' },
+      { virtualKey: VirtualKey.BUTTON_L, evdevCode: 16, keyLabel: 'Q' },
+      { virtualKey: VirtualKey.BUTTON_R, evdevCode: 17, keyLabel: 'W' },
+      { virtualKey: VirtualKey.BUTTON_MENU, evdevCode: 1, keyLabel: 'Esc' },
+      { virtualKey: VirtualKey.BUTTON_SHIFT, evdevCode: 42, keyLabel: 'Shift' },
+      { virtualKey: VirtualKey.BUTTON_CTRL, evdevCode: 29, keyLabel: 'Ctrl' }
+    ],
     gamepadMappings: [
       { id: 'dpad-up', label: '方向键 ↑', buttonCode: 2012, evdevCode: 103 },
       { id: 'dpad-down', label: '方向键 ↓', buttonCode: 2013, evdevCode: 108 },
       { id: 'dpad-left', label: '方向键 ←', buttonCode: 2014, evdevCode: 105 },
       { id: 'dpad-right', label: '方向键 →', buttonCode: 2015, evdevCode: 106 },
-      { id: 'a', label: 'A / 确认', buttonCode: 2301, evdevCode: 28 },
-      { id: 'b', label: 'B / 返回', buttonCode: 2302, evdevCode: 1 },
-      { id: 'x', label: 'X', buttonCode: 2304, evdevCode: 42 },
-      { id: 'y', label: 'Y', buttonCode: 2305, evdevCode: 29 },
+      { id: 'a', label: 'A / 确认', buttonCode: 2301, evdevCode: 57 },
+      { id: 'b', label: 'B / 返回', buttonCode: 2302, evdevCode: 45 },
+      { id: 'x', label: 'X', buttonCode: 2304, evdevCode: 30 },
+      { id: 'y', label: 'Y', buttonCode: 2305, evdevCode: 31 },
       { id: 'l1', label: 'L1', buttonCode: 2307, evdevCode: 16 },
-      { id: 'r1', label: 'R1', buttonCode: 2308, evdevCode: 18 },
-      { id: 'l2', label: 'L2', buttonCode: 2309, evdevCode: 15 },
-      { id: 'r2', label: 'R2', buttonCode: 2310, evdevCode: 57 },
+      { id: 'r1', label: 'R1', buttonCode: 2308, evdevCode: 17 },
+      { id: 'l2', label: 'L2', buttonCode: 2309, evdevCode: 42 },
+      { id: 'r2', label: 'R2', buttonCode: 2310, evdevCode: 29 },
       { id: 'select', label: 'Select', buttonCode: 2311, evdevCode: 1 },
-      { id: 'start', label: 'Start', buttonCode: 2312, evdevCode: 28 },
-      { id: 'l3', label: 'L3', buttonCode: 2313, evdevCode: 1 },
-      { id: 'r3', label: 'R3', buttonCode: 2314, evdevCode: 56 },
-      { id: 'home', label: 'Home', buttonCode: 2315, evdevCode: 57 }
+      { id: 'start', label: 'Start', buttonCode: 2312, evdevCode: 1 },
+      { id: 'l3', label: 'L3', buttonCode: 2313, evdevCode: 28 },
+      { id: 'r3', label: 'R3', buttonCode: 2314, evdevCode: 57 },
+      { id: 'home', label: 'Home', buttonCode: 2315, evdevCode: 63 }
     ],
-    controls: [
-      { id: 'l2', label: 'L2', kind: VirtualControlKind.BUTTON, evdevCode: 15, xPercent: 3, yPercent: 4, size: 52, opacity: 78 },
-      { id: 'l1', label: 'L1', kind: VirtualControlKind.BUTTON, evdevCode: 16, xPercent: 10, yPercent: 4, size: 52, opacity: 78 },
-      { id: 'r1', label: 'R1', kind: VirtualControlKind.BUTTON, evdevCode: 18, xPercent: 78, yPercent: 4, size: 52, opacity: 78 },
-      { id: 'r2', label: 'R2', kind: VirtualControlKind.BUTTON, evdevCode: 57, xPercent: 85, yPercent: 4, size: 52, opacity: 78 },
-      { id: 'up', label: '↑', kind: VirtualControlKind.DPAD, evdevCode: 103, xPercent: 9, yPercent: 65, size: 44, opacity: 100 },
-      { id: 'left', label: '←', kind: VirtualControlKind.DPAD, evdevCode: 105, xPercent: 4, yPercent: 73, size: 44, opacity: 100 },
-      { id: 'down', label: '↓', kind: VirtualControlKind.DPAD, evdevCode: 108, xPercent: 9, yPercent: 73, size: 44, opacity: 100 },
-      { id: 'right', label: '→', kind: VirtualControlKind.DPAD, evdevCode: 106, xPercent: 14, yPercent: 73, size: 44, opacity: 100 },
-      { id: 'y', label: 'Y', kind: VirtualControlKind.BUTTON, evdevCode: 21, xPercent: 83, yPercent: 62, size: 48, opacity: 100 },
-      { id: 'b', label: 'B', kind: VirtualControlKind.BUTTON, evdevCode: 48, xPercent: 89, yPercent: 69, size: 48, opacity: 100 },
-      { id: 'x', label: 'X', kind: VirtualControlKind.BUTTON, evdevCode: 45, xPercent: 77, yPercent: 69, size: 48, opacity: 100 },
-      { id: 'a', label: 'A', kind: VirtualControlKind.BUTTON, evdevCode: 30, xPercent: 83, yPercent: 76, size: 48, opacity: 100 },
-      { id: 'esc', label: 'Esc', kind: VirtualControlKind.BUTTON, evdevCode: 1, xPercent: 41, yPercent: 87, size: 50, opacity: 100 },
-      { id: 'enter', label: 'Enter', kind: VirtualControlKind.BUTTON, evdevCode: 28, xPercent: 48, yPercent: 87, size: 58, opacity: 100 },
-      { id: 'space', label: 'Space', kind: VirtualControlKind.BUTTON, evdevCode: 57, xPercent: 56, yPercent: 87, size: 58, opacity: 100 },
-      { id: 'left-stick', label: 'L', kind: VirtualControlKind.STICK, evdevCode: 0, xPercent: 17, yPercent: 49, size: 88, opacity: 68 },
-      { id: 'right-stick', label: 'R', kind: VirtualControlKind.STICK, evdevCode: 1, xPercent: 70, yPercent: 49, size: 88, opacity: 68 },
-      { id: 'touchpad', label: '触控板', kind: VirtualControlKind.TOUCHPAD, evdevCode: 0, xPercent: 34, yPercent: 49, size: 150, opacity: 48 },
-      { id: 'mouse-left', label: 'L', kind: VirtualControlKind.MOUSE_BUTTON, evdevCode: 272, xPercent: 38, yPercent: 76, size: 48, opacity: 75 },
-      { id: 'mouse-right', label: 'R', kind: VirtualControlKind.MOUSE_BUTTON, evdevCode: 273, xPercent: 45, yPercent: 76, size: 48, opacity: 75 },
-      { id: 'scroll', label: '滚轮', kind: VirtualControlKind.SCROLL, evdevCode: 0, xPercent: 62, yPercent: 58, size: 78, opacity: 55 }
-    ]
+    freeButtonsConfig: cloneFreeButtonsConfig(DEFAULT_FREE_BUTTONS_CONFIG)
   };
 }
 

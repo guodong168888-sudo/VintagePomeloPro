@@ -24,6 +24,8 @@ export const findToplevelAt: (px: number, py: number) => number;
 export const raiseToplevel: (toplevelId: number) => void;
 export const createRenderer: (toplevelId: number, surfaceId: BigInt) => void;
 export const resizeRenderer: (toplevelId: number, width: number, height: number) => void;
+/** Requests a Wayland redraw while retaining the current NativeWindow/EGL surface. */
+export const refreshRenderer: (toplevelId: number) => void;
 export const destroyRenderer: (toplevelId: number) => void;
 export const sendPointerEvent: (toplevelId: number, action: number, px: number, py: number, button: number) => void;
 export const sendKeyEvent: (toplevelId: number, evdevCode: number, pressed: boolean) => void;

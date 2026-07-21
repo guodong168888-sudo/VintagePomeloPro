@@ -21,6 +21,8 @@ const WINE_LIB = WINE_BIN + '/x86_64-unix';
 const BOX64 = WINE_BIN + '/box64';
 const SOCK = FILES_BASE + '/.wine/wine-wayland';
 const PREFIX_MARKER = WINE_ROOT + '/share/wine/wine.inf';
+const RUNTIME_VERSION_RAWFILE = 'wine_runtime.version';
+const RUNTIME_VERSION_MARKER = WINE_ROOT + '/.winehua-runtime-version';
 
 interface RuntimePathRequirement {
   path: string;
@@ -31,6 +33,10 @@ interface RuntimePathRequirement {
 const REQUIRED_RUNTIME_PATHS: RuntimePathRequirement[] = [
   { path: PREFIX_MARKER, label: 'share/wine/wine.inf' },
   { path: WINE_BIN + '/explorer.exe', label: 'bin/explorer.exe' },
+  { path: WINE_BIN + '/Alarm01.wav', label: 'bin/Alarm01.wav' },
+  { path: WINE_BIN + '/guest_gfx/winehua-guest-gfx.env', label: 'bin/guest_gfx/winehua-guest-gfx.env' },
+  { path: WINE_BIN + '/guest_gfx/lib/libEGL.so', label: 'bin/guest_gfx/lib/libEGL.so' },
+  { path: WINE_BIN + '/guest_gfx/lib/dri/virtio_gpu_dri.so', label: 'bin/guest_gfx/lib/dri/virtio_gpu_dri.so' },
   { path: WINE_BIN + '/x86_64-windows', label: 'bin/x86_64-windows', directory: true },
   { path: WINE_BIN + '/i386-windows', label: 'bin/i386-windows', directory: true }
 ];
@@ -65,6 +71,7 @@ export class WineEngineService {
   private listeners: Set<EngineStateListener> = new Set<EngineStateListener>();
   private waiters: Array<(ready: boolean) => void> = [];
   private callbackInstalled: boolean = false;
+  private restartPromise: Promise<boolean> | null = null;
 
   static getInstance(): WineEngineService {
     if (!WineEngineService.instance) WineEngineService.instance = new WineEngineService();
@@ -153,15 +160,66 @@ export class WineEngineService {
     ) as NativeLaunchResult;
   }
 
+  /**
+   * Desktop root 被用户关闭后，只重启 Wine explorer shell。
+   * 不调用 stopAll，因而不会中断桌面模式中仍在运行的其它 Windows 程序。
+   */
+  restartDesktopShell(): NativeLaunchResult {
+    if (this.state !== EngineState.READY || this.mode !== DisplayMode.DESKTOP) {
+      return { pid: -1, sessionId: '', reused: false };
+    }
+    // Initial desktop startup uses Wine's `explorer` program name.  Reusing
+    // that same form is essential after users close the shell; `explorer.exe`
+    // is not guaranteed to resolve from a reconstructed Wayland session.
+    return this.launchExecutable('explorer', [
+      WineWindowManager.getInstance().getDesktopShellArgument()
+    ]);
+  }
+
   async stopAll(): Promise<void> {
     try {
       testNapi.stopAll();
     } catch (_) {
     }
     this.finishWaiters(false);
+    await this.waitForNativeShutdown();
     this.mode = null;
     this.setState(EngineState.STOPPED, 'Wine 引擎已停止');
-    await new Promise<void>((resolve: () => void) => setTimeout(resolve, 250));
+    // Leave a small socket-settle window after the process list becomes empty.
+    // Restarting the Wayland server immediately can otherwise race the old
+    // wine-wayland socket teardown on slower ARM tablets.
+    await new Promise<void>((resolve: () => void) => setTimeout(resolve, 300));
+  }
+
+  /**
+   * Rebuild Wine/Wayland services without deleting the prefix. Concurrent UI
+   * requests share one operation so two taps cannot start competing servers.
+   */
+  async restart(mode: DisplayMode, homeDirectory: string): Promise<boolean> {
+    if (this.restartPromise) return this.restartPromise;
+    const operation = this.performRestart(mode, homeDirectory);
+    this.restartPromise = operation;
+    const ready = await operation;
+    if (this.restartPromise === operation) this.restartPromise = null;
+    return ready;
+  }
+
+  private async performRestart(mode: DisplayMode, homeDirectory: string): Promise<boolean> {
+    if (this.state !== EngineState.STOPPED) {
+      this.setState(EngineState.SWITCHING, '正在重新启动 Wine 引擎');
+    }
+    await this.stopAll();
+    return this.ensureReady(mode, homeDirectory);
+  }
+
+  private async waitForNativeShutdown(): Promise<void> {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      let processes: NativeProcessInfo[] = [];
+      try { processes = testNapi.getProcessList() as NativeProcessInfo[]; } catch (_) {}
+      if (processes.length === 0) return;
+      await new Promise<void>((resolve: () => void) => setTimeout(resolve, 100));
+    }
+    hilog.warn(DOMAIN, TAG, 'native process list did not settle before restart timeout');
   }
 
   async switchDisplaySession(): Promise<void> {
@@ -242,12 +300,56 @@ export class WineEngineService {
     return missing;
   }
 
+  private getBundledRuntimeVersion(): Uint8Array {
+    if (!this.context) return new Uint8Array(0);
+    return this.context.resourceManager.getRawFileContentSync(RUNTIME_VERSION_RAWFILE);
+  }
+
+  private runtimeVersionMatches(expected: Uint8Array): boolean {
+    if (expected.byteLength === 0 || !pathExists(RUNTIME_VERSION_MARKER)) return false;
+    let input: fs.File | null = null;
+    try {
+      const stat = fs.statSync(RUNTIME_VERSION_MARKER);
+      if (stat.size !== expected.byteLength) return false;
+      input = fs.openSync(RUNTIME_VERSION_MARKER, fs.OpenMode.READ_ONLY);
+      const buffer = new ArrayBuffer(expected.byteLength);
+      const length = fs.readSync(input.fd, buffer, { length: expected.byteLength });
+      if (length !== expected.byteLength) return false;
+      const actual = new Uint8Array(buffer);
+      for (let index = 0; index < expected.byteLength; index++) {
+        if (actual[index] !== expected[index]) return false;
+      }
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      if (input) {
+        try { fs.closeSync(input); } catch (_) {}
+      }
+    }
+  }
+
+  private writeRuntimeVersion(expected: Uint8Array): void {
+    const output = fs.openSync(RUNTIME_VERSION_MARKER,
+      fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC);
+    try {
+      const buffer = new ArrayBuffer(expected.byteLength);
+      new Uint8Array(buffer).set(expected);
+      fs.writeSync(output.fd, buffer, { length: expected.byteLength });
+    } finally {
+      fs.closeSync(output);
+    }
+  }
+
   private async ensureRuntimeInstalled(): Promise<void> {
+    const bundledVersion = this.getBundledRuntimeVersion();
     const missingBefore = this.getMissingRuntimePaths();
-    if (missingBefore.length === 0) return;
+    const versionMatches = this.runtimeVersionMatches(bundledVersion);
+    if (missingBefore.length === 0 && versionMatches) return;
     if (!this.context) throw new Error('Ability context unavailable');
-    hilog.warn(DOMAIN, TAG, 'runtime incomplete, extracting wine-data.zip, missing=%{public}s',
-      missingBefore.join(','));
+    hilog.warn(DOMAIN, TAG,
+      'runtime refresh required, extracting wine-data.zip, versionMatch=%{public}s missing=%{public}s',
+      versionMatches ? 'true' : 'false', missingBefore.join(','));
     const rawFd = this.context.resourceManager.getRawFdSync('wine-data.zip');
     const temporaryZip = FILES_BASE + '/wine-data.zip';
     try {
@@ -272,6 +374,7 @@ export class WineEngineService {
       if (missingAfter.length > 0) {
         throw new Error('Wine runtime incomplete after extract: ' + missingAfter.join(', '));
       }
+      this.writeRuntimeVersion(bundledVersion);
     } finally {
       this.context.resourceManager.closeRawFdSync('wine-data.zip');
       try { fs.unlinkSync(temporaryZip); } catch (_) {}

@@ -66,10 +66,26 @@ export class AppSettingsStore {
     if (!raw) return;
     try {
       const values = JSON.parse(raw) as AppSettings[];
-      values.forEach((value: AppSettings) => this.appSettings.set(value.appId, value));
+      values.forEach((value: AppSettings) => this.appSettings.set(value.appId, this.normalizeAppSettings(value)));
     } catch (_) {
       this.appSettings.clear();
     }
+  }
+
+  private normalizeAppSettings(value: AppSettings): AppSettings {
+    const defaults = createDefaultAppSettings(value.appId);
+    return {
+      appId: value.appId,
+      customTitle: value.customTitle ?? defaults.customTitle,
+      customCover: value.customCover ?? defaults.customCover,
+      favorite: value.favorite ?? defaults.favorite,
+      executable: value.executable ?? defaults.executable,
+      arguments: value.arguments ?? defaults.arguments,
+      workingDirectory: value.workingDirectory ?? defaults.workingDirectory,
+      displayModeOverride: value.displayModeOverride ?? defaults.displayModeOverride,
+      inputProfileId: value.inputProfileId ?? defaults.inputProfileId,
+      prefixId: value.prefixId ?? defaults.prefixId
+    };
   }
 
   getGlobalSettings(): GlobalSettings {
@@ -120,7 +136,7 @@ export class AppSettingsStore {
   }
 
   async saveAppSettings(value: AppSettings): Promise<void> {
-    this.appSettings.set(value.appId, value);
+    this.appSettings.set(value.appId, this.normalizeAppSettings(value));
     if (!this.store) return;
     const values: AppSettings[] = [];
     this.appSettings.forEach((item: AppSettings) => values.push(item));

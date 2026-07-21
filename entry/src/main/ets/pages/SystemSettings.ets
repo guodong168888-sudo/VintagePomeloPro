@@ -1,11 +1,14 @@
 import router from '@ohos.router';
+import promptAction from '@ohos.promptAction';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
-import { DisplayMode, GlobalSettings, ThemeMode, ViewMode, createDefaultGlobalSettings } from '../model/AppModels';
+import { DisplayMode, EngineState, GlobalSettings, ThemeMode, ViewMode, createDefaultGlobalSettings } from '../model/AppModels';
 import { ThemeSettingsService } from '../service/ThemeSettingsService';
-import { WineEngineService } from '../service/WineEngineService';
+import { EngineStateListener, WineEngineService } from '../service/WineEngineService';
 import { GamepadManager } from '../service/GamepadManager';
 import { WineWindowManager } from '../service/WineWindowManager';
 import { AppSessionService } from '../service/AppSessionService';
+import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
+import { AppCatalogService } from '../service/AppCatalogService';
 
 type SettingsSection = 'display' | 'appearance' | 'input' | 'engine' | 'about';
 
@@ -15,7 +18,11 @@ struct SystemSettingsPage {
   @State private settings: GlobalSettings = createDefaultGlobalSettings();
   @State private breakpoint: BreakpointType = 'lg';
   @State private section: SettingsSection = 'display';
+  @State private engineMessage: string = 'Wine 引擎未启动';
+  @State private engineBusy: boolean = false;
+  @State private engineOperationMessage: string = '';
   private callback: ((value: BreakpointType) => void) | null = null;
+  private engineCallback: EngineStateListener | null = null;
 
   aboutToAppear(): void {
     this.settings = ThemeSettingsService.getInstance().getSettings();
@@ -24,10 +31,57 @@ struct SystemSettingsPage {
       this.breakpoint = value;
     };
     BreakpointSystem.subscribe(this.callback);
+    this.engineCallback = (_state: EngineState, message: string): void => {
+      this.engineMessage = message;
+    };
+    WineEngineService.getInstance().subscribe(this.engineCallback);
   }
 
   aboutToDisappear(): void {
     if (this.callback) BreakpointSystem.unsubscribe(this.callback);
+    if (this.engineCallback) WineEngineService.getInstance().unsubscribe(this.engineCallback);
+  }
+
+  onBackPress(): boolean {
+    return this.engineBusy;
+  }
+
+  private async runEngineOperation(message: string, task: () => Promise<boolean>, successMessage: string): Promise<void> {
+    if (this.engineBusy) return;
+    this.engineBusy = true;
+    this.engineOperationMessage = message;
+    try {
+      const succeeded = await task();
+      promptAction.showToast({ message: succeeded ? successMessage : WineEngineService.getInstance().getMessage() });
+    } catch (_) {
+      promptAction.showToast({ message: 'Wine 引擎操作失败，请查看引擎状态' });
+    } finally {
+      this.engineBusy = false;
+      this.engineOperationMessage = '';
+    }
+  }
+
+  private restartEngine(): void {
+    const engine = WineEngineService.getInstance();
+    const mode = engine.getMode() ?? this.settings.defaultDisplayMode;
+    const homeDirectory = AppCatalogService.getInstance().getWineHomeDirectory();
+    this.runEngineOperation('正在关闭 Windows 会话并重建 Wine/Wayland 服务…',
+      (): Promise<boolean> => AppSessionService.getInstance().restartEngine(mode, homeDirectory),
+      'Wine 引擎已重新启动');
+  }
+
+  private stopEngine(): void {
+    this.runEngineOperation('正在停止全部 Windows 会话…', async (): Promise<boolean> => {
+      await AppSessionService.getInstance().stopAll();
+      return true;
+    }, 'Wine 引擎已停止');
+  }
+
+  private resetPrefix(): void {
+    this.runEngineOperation('正在重置 Wine prefix，请勿退出应用…', async (): Promise<boolean> => {
+      await AppSessionService.getInstance().resetPrefix();
+      return true;
+    }, 'Wine 环境已重置');
   }
 
   private update(mode: DisplayMode = this.settings.defaultDisplayMode,
@@ -55,6 +109,8 @@ struct SystemSettingsPage {
     GamepadManager.getInstance().setDeadzone(deadzone);
     WineWindowManager.getInstance().setOutputScalePercent(scale);
     ThemeSettingsService.getInstance().update(this.settings);
+    InputOverlayWindowCoordinator.getInstance().setOpacity(opacity);
+    InputOverlayWindowCoordinator.getInstance().setVisible(controls).catch(() => {});
   }
 
   private updateTheme(theme: ThemeMode): void {
@@ -71,12 +127,14 @@ struct SystemSettingsPage {
     GamepadManager.getInstance().setDeadzone(defaults.gamepadDeadzone);
     WineWindowManager.getInstance().setOutputScalePercent(defaults.outputScale);
     ThemeSettingsService.getInstance().update(defaults);
+    InputOverlayWindowCoordinator.getInstance().setOpacity(defaults.controlOpacity);
+    InputOverlayWindowCoordinator.getInstance().setVisible(defaults.showVirtualControls).catch(() => {});
   }
 
   @Builder
-  private SectionButton(label: string, section: SettingsSection, icon: string) {
+  private SectionButton(label: string, section: SettingsSection, icon: Resource) {
     Row({ space: 12 }) {
-      Text(icon).fontSize(18).fontColor($r('app.color.text_primary'))
+      SymbolGlyph(icon).fontSize(18).fontColor([$r('app.color.text_primary')])
       Text(label).fontSize(14).fontColor($r('app.color.text_primary'))
         .fontWeight(this.section === section ? FontWeight.Medium : FontWeight.Regular)
     }
@@ -101,6 +159,46 @@ struct SystemSettingsPage {
   }
 
   @Builder
+  private InputLayoutEntry() {
+    Row({ space: 14 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph($r('sys.symbol.gamecontroller')).fontSize(22).fontColor([$r('app.color.accent')])
+      }
+      .width(48).height(48).borderRadius(16).backgroundColor($r('app.color.selected_background'))
+      Column({ space: 4 }) {
+        Text('自定义虚拟手柄布局').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+        Text('设置十字键或摇杆、ABXY、肩键与辅助键的位置、大小和透明度').fontSize(11).fontColor($r('app.color.text_secondary')).maxLines(2)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(18).fontColor([$r('app.color.text_secondary')])
+    }
+    .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
+    .id('open-input-layout-editor')
+    .onClick((): void => { router.pushUrl({ url: 'pages/InputLayoutEditor' }); })
+  }
+
+  @Builder
+  private KeyMappingEntry() {
+    Row({ space: 14 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph($r('sys.symbol.keyboard')).fontSize(22).fontColor([$r('app.color.accent')])
+      }
+      .width(48).height(48).borderRadius(16).backgroundColor($r('app.color.selected_background'))
+      Column({ space: 4 }) {
+        Text('全局按键映射与自由按键').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+        Text('完整 PC 键盘映射；可选 VintagePomelo 的手柄模板或环形自由按键。应用可在自己的设置中覆盖。').fontSize(11).fontColor($r('app.color.text_secondary')).maxLines(2)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(18).fontColor([$r('app.color.text_secondary')])
+    }
+    .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
+    .id('open-global-key-mapping')
+    .onClick((): void => { router.pushUrl({ url: 'pages/AdvancedKeyMapping', params: { profileId: 'default', profileName: 'Vintage 默认手柄布局' } }); })
+  }
+
+  @Builder
   private Content() {
     Column({ space: 14 }) {
       if (this.section === 'display') {
@@ -108,11 +206,11 @@ struct SystemSettingsPage {
           Text('Windows 显示').fontSize(20).fontWeight(FontWeight.Bold).width('100%')
           Text('全局默认模式').fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
           Row({ space: 8 }) {
-            Button('桌面模式').layoutWeight(1).height(40).borderRadius(14)
+            Button('桌面模式').layoutWeight(1).height(48).borderRadius(14)
               .backgroundColor(this.settings.defaultDisplayMode === DisplayMode.DESKTOP ? $r('app.color.accent') : $r('app.color.search_background'))
               .fontColor(this.settings.defaultDisplayMode === DisplayMode.DESKTOP ? '#FFFFFFFF' : $r('app.color.text_primary'))
               .onClick(() => this.update(DisplayMode.DESKTOP))
-            Button('单应用全屏').layoutWeight(1).height(40).borderRadius(14)
+            Button('单应用全屏').layoutWeight(1).height(48).borderRadius(14)
               .backgroundColor(this.settings.defaultDisplayMode === DisplayMode.SINGLE_APP ? $r('app.color.accent') : $r('app.color.search_background'))
               .fontColor(this.settings.defaultDisplayMode === DisplayMode.SINGLE_APP ? '#FFFFFFFF' : $r('app.color.text_primary'))
               .onClick(() => this.update(DisplayMode.SINGLE_APP))
@@ -131,15 +229,15 @@ struct SystemSettingsPage {
           Text('外观').fontSize(20).fontWeight(FontWeight.Bold).width('100%')
           Text('主题').fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
           Row({ space: 8 }) {
-            Button('跟随系统').layoutWeight(1).height(40).borderRadius(14)
+            Button('跟随系统').layoutWeight(1).height(48).borderRadius(14)
               .backgroundColor(this.settings.themeMode === ThemeMode.SYSTEM ? $r('app.color.accent') : $r('app.color.search_background'))
               .fontColor(this.settings.themeMode === ThemeMode.SYSTEM ? '#FFFFFFFF' : $r('app.color.text_primary'))
               .onClick(() => this.updateTheme(ThemeMode.SYSTEM))
-            Button('浅色').layoutWeight(1).height(40).borderRadius(14)
+            Button('浅色').layoutWeight(1).height(48).borderRadius(14)
               .backgroundColor(this.settings.themeMode === ThemeMode.LIGHT ? $r('app.color.accent') : $r('app.color.search_background'))
               .fontColor(this.settings.themeMode === ThemeMode.LIGHT ? '#FFFFFFFF' : $r('app.color.text_primary'))
               .onClick(() => this.updateTheme(ThemeMode.LIGHT))
-            Button('深色').layoutWeight(1).height(40).borderRadius(14)
+            Button('深色').layoutWeight(1).height(48).borderRadius(14)
               .backgroundColor(this.settings.themeMode === ThemeMode.DARK ? $r('app.color.accent') : $r('app.color.search_background'))
               .fontColor(this.settings.themeMode === ThemeMode.DARK ? '#FFFFFFFF' : $r('app.color.text_primary'))
               .onClick(() => this.updateTheme(ThemeMode.DARK))
@@ -155,16 +253,14 @@ struct SystemSettingsPage {
       } else if (this.section === 'input') {
         Column({ space: 16 }) {
           Text('输入与控制').fontSize(20).fontWeight(FontWeight.Bold).width('100%')
-          this.SwitchRow('虚拟键鼠与手柄', '为 Windows 桌面和单应用会话显示覆盖层', this.settings.showVirtualControls, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, value))
+          this.SwitchRow('全屏鼠标与虚拟手柄', '空白画面支持点击、双击和双指滚动；顶部图标可展开或收起手柄', this.settings.showVirtualControls, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, value))
           this.SwitchRow('自动隐藏', '连接实体键盘鼠标或手柄后收起覆盖层', this.settings.autoHideVirtualControls, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, value))
           Text('控制层透明度 ' + this.settings.controlOpacity + '%').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
           Slider({ value: this.settings.controlOpacity, min: 25, max: 100, step: 1 }).onChange((value: number) => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, this.settings.autoHideVirtualControls, value))
           Text('手柄死区 ' + this.settings.gamepadDeadzone + '%').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
           Slider({ value: this.settings.gamepadDeadzone, min: 0, max: 40, step: 1 }).onChange((value: number) => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, this.settings.autoHideVirtualControls, this.settings.controlOpacity, value))
-          Button('编辑虚拟按键布局').height(42).borderRadius(14)
-            .backgroundColor($r('app.color.search_background'))
-            .fontColor($r('app.color.text_primary'))
-            .onClick(() => router.pushUrl({ url: 'pages/InputLayoutEditor' }))
+          this.InputLayoutEntry()
+          this.KeyMappingEntry()
         }
         .width('100%')
         .padding(22)
@@ -174,15 +270,35 @@ struct SystemSettingsPage {
       } else if (this.section === 'engine') {
         Column({ space: 16 }) {
           Text('Wine 引擎').fontSize(20).fontWeight(FontWeight.Bold).width('100%')
-          Text(WineEngineService.getInstance().getMessage()).fontSize(13).fontColor($r('app.color.text_secondary')).width('100%')
-          Button('停止全部 Windows 会话').height(42).borderRadius(14)
+          Text(this.engineMessage).fontSize(13).fontColor($r('app.color.text_secondary')).width('100%')
+          Button('重启 Wine 引擎').height(48).borderRadius(14)
+            .backgroundColor($r('app.color.accent'))
+            .fontColor('#FFFFFFFF')
+            .enabled(!this.engineBusy)
+            .id('wine-engine-restart')
+            .onClick((): void => AlertDialog.show({
+              title: '重启 Wine 引擎',
+              message: '这会关闭所有 Windows 程序并重建 Wine 与 Wayland 服务，但不会删除 Wine prefix。重启期间画面将被锁定。',
+              primaryButton: { value: '取消', action: (): void => {} },
+              secondaryButton: { value: '立即重启', action: (): void => { this.restartEngine(); } }
+            }))
+          Button('停止全部 Windows 会话').height(48).borderRadius(14)
             .backgroundColor($r('app.color.search_background'))
             .fontColor($r('app.color.text_primary'))
-            .onClick(() => AppSessionService.getInstance().stopAll())
-          Button('重置 Wine prefix').height(42).borderRadius(14)
+            .enabled(!this.engineBusy)
+            .id('wine-engine-stop-all')
+            .onClick((): void => AlertDialog.show({
+              title: '停止全部 Windows 会话',
+              message: '正在运行的 Windows 程序会被关闭。',
+              primaryButton: { value: '取消', action: (): void => {} },
+              secondaryButton: { value: '停止', fontColor: '#D94848', action: (): void => { this.stopEngine(); } }
+            }))
+          Button('重置 Wine prefix').height(48).borderRadius(14)
             .backgroundColor('#25D94848')
             .fontColor('#D94848')
-            .onClick(() => AlertDialog.show({ title: '重置 Wine 环境', message: '这会删除当前 Wine prefix 中的应用数据。', primaryButton: { value: '取消', action: (): void => {} }, secondaryButton: { value: '重置', fontColor: '#D94848', action: (): void => { AppSessionService.getInstance().resetPrefix(); } } }))
+            .enabled(!this.engineBusy)
+            .id('wine-engine-reset-prefix')
+            .onClick(() => AlertDialog.show({ title: '重置 Wine 环境', message: '这会删除当前 Wine prefix 中的应用数据，且无法撤销。', primaryButton: { value: '取消', action: (): void => {} }, secondaryButton: { value: '重置', fontColor: '#D94848', action: (): void => { this.resetPrefix(); } } }))
         }
         .width('100%')
         .padding(22)
@@ -191,9 +307,12 @@ struct SystemSettingsPage {
         .borderRadius(20)
       } else {
         Column({ space: 12 }) {
-          Text('Vintage Pomelo Pro').fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+          Text('旧柚Pro').fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
           Text('Wine 作为按需启动的 Windows 兼容引擎。').fontSize(13).fontColor($r('app.color.text_secondary'))
           Text('当前阶段：主工程架构、应用目录、双显示模式和统一输入路由。').fontSize(13).fontColor($r('app.color.text_secondary'))
+          Button('打开帮助中心').height(48).borderRadius(14)
+            .backgroundColor($r('app.color.search_background')).fontColor($r('app.color.text_primary'))
+            .onClick((): void => { router.pushUrl({ url: 'pages/HelpCenter' }); })
         }
         .width('100%')
         .padding(24)
@@ -205,11 +324,14 @@ struct SystemSettingsPage {
   }
 
   build() {
-    Column() {
+    Stack() {
+      Column() {
       Row() {
-        Button('‹').type(ButtonType.Circle).width(38).height(38)
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(18).fontColor([$r('app.color.text_primary')])
+        }
+          .width(48).height(48)
           .backgroundColor($r('app.color.search_background'))
-          .fontColor($r('app.color.text_primary'))
           .onClick(() => router.back())
         Column({ space: 3 }) {
           Text('系统设置').fontSize(26).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
@@ -217,23 +339,23 @@ struct SystemSettingsPage {
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
-        Button('恢复默认').height(38).borderRadius(14)
+        Button('恢复默认').height(48).borderRadius(14)
           .backgroundColor($r('app.color.search_background'))
           .fontColor($r('app.color.text_primary'))
           .onClick(() => this.restoreDefaults())
       }
-      .height(78)
+      .height(64)
       .width('100%')
-      .padding({ left: 16, right: 16, top: 8, bottom: 4 })
+      .padding({ left: 16, right: 16, top: 4, bottom: 0 })
 
       if (this.breakpoint === 'lg' || this.breakpoint === 'xl') {
         Row({ space: 22 }) {
           Column({ space: 5 }) {
-            this.SectionButton('显示模式', 'display', '▣')
-            this.SectionButton('外观', 'appearance', '◐')
-            this.SectionButton('输入与手柄', 'input', '⌨')
-            this.SectionButton('Wine 引擎', 'engine', 'W')
-            this.SectionButton('关于', 'about', 'i')
+            this.SectionButton('显示模式', 'display', $r('sys.symbol.rectangle_grid_1x2'))
+            this.SectionButton('外观', 'appearance', $r('sys.symbol.square_grid_2x2'))
+            this.SectionButton('输入与手柄', 'input', $r('sys.symbol.list_bullet'))
+            this.SectionButton('Wine 引擎', 'engine', $r('sys.symbol.arrow_clockwise'))
+            this.SectionButton('关于', 'about', $r('sys.symbol.info_circle'))
           }
           .width(230)
           .height('100%')
@@ -241,36 +363,82 @@ struct SystemSettingsPage {
           .backgroundColor($r('app.color.card_glass_background'))
           .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
           .borderRadius(20)
-          Scroll() { this.Content() }.layoutWeight(1).height('100%').scrollBar(BarState.Auto)
-        }.layoutWeight(1).width('100%').padding({ left: 20, right: 20, bottom: 20 })
+          Scroll() {
+            Column() { this.Content() }
+              .width('100%')
+              // Scroll centres a short, unconstrained sole child.  Filling the
+              // viewport pins the settings card to the top of its scroll area.
+              .height('100%')
+              .justifyContent(FlexAlign.Start)
+              .alignItems(HorizontalAlign.Start)
+              .constraintSize({ maxWidth: 1080 })
+              .padding({ right: 8, top: 0 })
+          }.layoutWeight(1).height('100%').scrollBar(BarState.Auto)
+        }
+        .layoutWeight(1)
+        .width('100%')
+        .alignItems(VerticalAlign.Top)
+        .padding({ left: 20, right: 20, top: 0, bottom: 20 })
       } else {
         Column({ space: 12 }) {
           Scroll() {
             Row({ space: 8 }) {
-              Button('显示').height(38).borderRadius(14)
+              Button('显示').height(48).borderRadius(14)
                 .backgroundColor(this.section === 'display' ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.section === 'display' ? '#FFFFFFFF' : $r('app.color.text_primary'))
                 .onClick(() => this.section = 'display')
-              Button('外观').height(38).borderRadius(14)
+              Button('外观').height(48).borderRadius(14)
                 .backgroundColor(this.section === 'appearance' ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.section === 'appearance' ? '#FFFFFFFF' : $r('app.color.text_primary'))
                 .onClick(() => this.section = 'appearance')
-              Button('输入').height(38).borderRadius(14)
+              Button('输入').height(48).borderRadius(14)
                 .backgroundColor(this.section === 'input' ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.section === 'input' ? '#FFFFFFFF' : $r('app.color.text_primary'))
                 .onClick(() => this.section = 'input')
-              Button('引擎').height(38).borderRadius(14)
+              Button('引擎').height(48).borderRadius(14)
                 .backgroundColor(this.section === 'engine' ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.section === 'engine' ? '#FFFFFFFF' : $r('app.color.text_primary'))
                 .onClick(() => this.section = 'engine')
-              Button('关于').height(38).borderRadius(14)
+              Button('关于').height(48).borderRadius(14)
                 .backgroundColor(this.section === 'about' ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.section === 'about' ? '#FFFFFFFF' : $r('app.color.text_primary'))
                 .onClick(() => this.section = 'about')
             }
           }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%')
-          Scroll() { this.Content() }.layoutWeight(1).scrollBar(BarState.Auto)
-        }.layoutWeight(1).width('100%').padding({ left: 16, right: 16, bottom: 16 })
+          Scroll() {
+            Column() { this.Content() }
+              .width('100%')
+              .height('100%')
+              .justifyContent(FlexAlign.Start)
+              .alignItems(HorizontalAlign.Start)
+              .constraintSize({ maxWidth: 840 })
+              .padding({ top: 0 })
+          }.layoutWeight(1).scrollBar(BarState.Auto)
+        }
+        .layoutWeight(1)
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+        .padding({ left: 16, right: 16, top: 0, bottom: 16 })
+      }
+      }
+      .width('100%').height('100%').backgroundColor($r('app.color.page_background'))
+
+      if (this.engineBusy) {
+        Column({ space: 14 }) {
+          LoadingProgress().width(52).height(52).color('#FFFFFFFF')
+          Text('Wine 引擎维护中').fontSize(20).fontWeight(FontWeight.Bold).fontColor('#FFFFFFFF')
+          Text(this.engineOperationMessage).fontSize(13).fontColor('#DDE8F2FF').textAlign(TextAlign.Center).maxLines(3)
+          Text('请保持应用在前台，完成前所有操作已锁定。').fontSize(11).fontColor('#AFC2D4FF')
+        }
+        .width('100%').height('100%')
+        .justifyContent(FlexAlign.Center)
+        .padding(32)
+        .backgroundColor('#EE111827')
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .hitTestBehavior(HitTestMode.Block)
+        .focusable(true)
+        .zIndex(10000)
+        .id('wine-engine-operation-blocker')
       }
     }
     .width('100%').height('100%').backgroundColor($r('app.color.page_background'))
