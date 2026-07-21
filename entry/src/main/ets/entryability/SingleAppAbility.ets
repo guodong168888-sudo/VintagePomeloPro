@@ -95,6 +95,7 @@ export default class SingleAppAbility extends UIAbility {
     const profileId = resolveInputProfileId(appProfileId, settings.desktopInputProfileId);
     InputOverlayWindowCoordinator.getInstance().attach(
       this.stage, this.mainWindow, this.sessionId || ('single-' + this.toplevelId), DisplayMode.SINGLE_APP,
-      this.toplevelId, profileId, settings.showVirtualControls, settings.controlOpacity).catch(() => {});
+      this.toplevelId, profileId, settings.showVirtualControls, settings.controlOpacity,
+      settings.virtualInputEnabled).catch(() => {});
   }
 }

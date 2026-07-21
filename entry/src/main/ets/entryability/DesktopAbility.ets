@@ -110,6 +110,7 @@ export default class DesktopAbility extends UIAbility {
     const rootId = WineWindowManager.getInstance().getDesktopRootId() || this.toplevelId;
     InputOverlayWindowCoordinator.getInstance().attach(
       this.stage, this.mainWindow, 'desktop-' + rootId, DisplayMode.DESKTOP, rootId,
-      settings.desktopInputProfileId || 'default', settings.showVirtualControls, settings.controlOpacity).catch(() => {});
+      settings.desktopInputProfileId || 'default', settings.showVirtualControls, settings.controlOpacity,
+      settings.virtualInputEnabled).catch(() => {});
   }
 }

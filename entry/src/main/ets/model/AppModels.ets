@@ -114,6 +114,9 @@ export interface GlobalSettings {
   themeMode: ThemeMode;
   useGlassEffect: boolean;
   usePageBackground: boolean;
+  pageBackgroundUri: string;
+  /** Entire ArkTS screen-input layer, including controls, mouse mode and toolbar. */
+  virtualInputEnabled: boolean;
   showVirtualControls: boolean;
   autoHideVirtualControls: boolean;
   controlBarDirection: ControlBarDirection;
@@ -479,6 +482,8 @@ export function createDefaultGlobalSettings(): GlobalSettings {
     themeMode: ThemeMode.SYSTEM,
     useGlassEffect: true,
     usePageBackground: false,
+    pageBackgroundUri: '',
+    virtualInputEnabled: true,
     showVirtualControls: true,
     // 独立 ArkTS 覆盖层默认保持可见，避免实体输入后无法恢复控制层。
     autoHideVirtualControls: false,

@@ -129,6 +129,12 @@ struct Index {
     this.visibleApps = this.filterApps(this.searchQuery, this.filter, running);
   }
 
+  private pageBackgroundSource(): string {
+    const value = this.settings.pageBackgroundUri;
+    if (value.startsWith('file://')) return value;
+    return value.length > 0 ? 'file://' + value : '';
+  }
+
   private filterApps(searchQuery: string, filter: CatalogFilter,
     running: Set<string> = this.runningAppIds): AppDescriptor[] {
     const query = searchQuery.trim().toLowerCase();
@@ -548,6 +554,14 @@ struct Index {
 
   build() {
     Stack() {
+      if (this.settings.usePageBackground && this.settings.pageBackgroundUri.length > 0) {
+        Image(this.pageBackgroundSource())
+          .width('100%').height('100%')
+          .objectFit(ImageFit.Cover)
+          .opacity(0.34)
+          .hitTestBehavior(HitTestMode.None)
+          .id('library-page-background')
+      }
       Row() {
         if (this.breakpoint === 'lg' || this.breakpoint === 'xl') {
           this.SideBar()

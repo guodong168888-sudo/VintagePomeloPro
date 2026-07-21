@@ -84,6 +84,8 @@ export default function localUnitTest() {
 
     it('usesVintageControlBarAndFullScreenMouseDefaults', 0, () => {
       const settings = createDefaultGlobalSettings();
+      expect(settings.virtualInputEnabled).assertTrue();
+      expect(settings.pageBackgroundUri).assertEqual('');
       expect(settings.controlBarDirection).assertEqual(ControlBarDirection.AUTO);
       expect(settings.virtualMouseConfig.mouseSensitivity).assertEqual(100);
       expect(settings.virtualMouseConfig.doubleClickInterval).assertEqual(100);

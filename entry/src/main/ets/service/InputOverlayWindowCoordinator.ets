@@ -6,6 +6,7 @@ import { InputDispatcher } from './InputDispatcher';
 export interface InputOverlaySnapshot {
   session: WineInputSession;
   profileId: string;
+  enabled: boolean;
   visible: boolean;
   controlsVisible: boolean;
   opacity: number;
@@ -36,7 +37,7 @@ export class InputOverlayWindowCoordinator {
   private boundsSyncGeneration: number = 0;
   private snapshot: InputOverlaySnapshot = {
     session: { sessionId: '', displayMode: DisplayMode.DESKTOP, toplevelId: 0, active: false },
-    profileId: 'default', visible: false, controlsVisible: true, opacity: 72,
+    profileId: 'default', enabled: true, visible: false, controlsVisible: true, opacity: 72,
     createdCount: 0, destroyedCount: 0, rendererRebinds: 0, zLevel: 0,
     stressRunning: false, stressCompleted: 0, lastError: ''
   };
@@ -66,6 +67,7 @@ export class InputOverlayWindowCoordinator {
         active: this.snapshot.session.active
       },
       profileId: this.snapshot.profileId,
+      enabled: this.snapshot.enabled,
       visible: this.snapshot.visible,
       controlsVisible: this.snapshot.controlsVisible,
       opacity: this.snapshot.opacity,
@@ -81,8 +83,15 @@ export class InputOverlayWindowCoordinator {
 
   async attach(stage: window.WindowStage, parentWindow: window.Window,
     sessionId: string, displayMode: DisplayMode, toplevelId: number,
-    profileId: string = 'default', controlsVisible: boolean = true, opacity: number = 72): Promise<void> {
+    profileId: string = 'default', controlsVisible: boolean = true, opacity: number = 72,
+    enabled: boolean = true): Promise<void> {
     const session: WineInputSession = { sessionId, displayMode, toplevelId, active: true };
+    this.snapshot.enabled = enabled;
+    if (!enabled) {
+      this.update(session, profileId, controlsVisible, opacity);
+      await this.detach('virtual-input-disabled');
+      return;
+    }
     if (this.overlayWindow && this.stage === stage) {
       this.parentWindow = parentWindow;
       this.update(session, profileId, controlsVisible, opacity);
@@ -205,22 +214,33 @@ export class InputOverlayWindowCoordinator {
   }
 
   async setVisible(visible: boolean): Promise<void> {
-    this.snapshot.visible = visible;
+    const resolvedVisible = visible && this.snapshot.enabled;
+    this.snapshot.visible = resolvedVisible;
     if (this.overlayWindow) {
       // A subwindow is automatically hidden while its parent Ability is in the
       // background. Merely restoring touchability does not make it visible
       // again on API 23, so editor return must explicitly show the retained
       // single overlay window before enabling input.
-      if (visible) {
+      if (resolvedVisible) {
         try { await this.overlayWindow.showWindow(); } catch (error) {
           this.snapshot.lastError = 'showWindow: ' + JSON.stringify(error);
         }
       }
-      try { await this.overlayWindow.setWindowTouchable(visible); } catch (error) {
+      try { await this.overlayWindow.setWindowTouchable(resolvedVisible); } catch (error) {
         this.snapshot.lastError = 'setWindowTouchable: ' + JSON.stringify(error);
       }
     }
-    if (!visible) InputDispatcher.getInstance().releaseAll('overlay-hidden');
+    if (!resolvedVisible) InputDispatcher.getInstance().releaseAll('overlay-hidden');
+    this.publish();
+  }
+
+  async setEnabled(enabled: boolean): Promise<void> {
+    if (this.snapshot.enabled === enabled) return;
+    this.snapshot.enabled = enabled;
+    if (!enabled) {
+      await this.detach('virtual-input-disabled');
+      return;
+    }
     this.publish();
   }
 

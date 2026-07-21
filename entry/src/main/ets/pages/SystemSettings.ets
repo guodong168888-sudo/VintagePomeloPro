@@ -1,6 +1,7 @@
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import { common } from '@kit.AbilityKit';
+import { picker } from '@kit.CoreFileKit';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import {
   ControlBarDirection,
@@ -35,6 +36,7 @@ struct SystemSettingsPage {
   @State private engineBusy: boolean = false;
   @State private engineOperationMessage: string = '';
   @State private inputProfiles: InputProfile[] = [];
+  private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private settingsScroller: Scroller = new Scroller();
   private callback: ((value: BreakpointType) => void) | null = null;
   private engineCallback: EngineStateListener | null = null;
@@ -126,7 +128,10 @@ struct SystemSettingsPage {
     theme: ThemeMode = this.settings.themeMode,
     controlBarDirection: ControlBarDirection = this.settings.controlBarDirection,
     virtualMouseConfig: VirtualMouseConfig = cloneVirtualMouseConfig(this.settings.virtualMouseConfig),
-    desktopInputProfileId: string = this.settings.desktopInputProfileId): void {
+    desktopInputProfileId: string = this.settings.desktopInputProfileId,
+    pageBackgroundUri: string = this.settings.pageBackgroundUri,
+    virtualInputEnabled: boolean = this.settings.virtualInputEnabled): void {
+    const virtualInputChanged = this.settings.virtualInputEnabled !== virtualInputEnabled;
     this.settings = {
       defaultDisplayMode: mode,
       desktopInputProfileId: desktopInputProfileId || 'default',
@@ -134,6 +139,8 @@ struct SystemSettingsPage {
       themeMode: theme,
       useGlassEffect: glass,
       usePageBackground: background,
+      pageBackgroundUri: pageBackgroundUri,
+      virtualInputEnabled: virtualInputEnabled,
       showVirtualControls: controls,
       autoHideVirtualControls: autoHide,
       controlBarDirection: controlBarDirection,
@@ -147,6 +154,56 @@ struct SystemSettingsPage {
     ThemeSettingsService.getInstance().update(this.settings);
     InputOverlayWindowCoordinator.getInstance().setOpacity(opacity);
     InputOverlayWindowCoordinator.getInstance().setControlsVisible(controls);
+    if (virtualInputChanged) {
+      InputOverlayWindowCoordinator.getInstance().setEnabled(virtualInputEnabled).catch((): void => {});
+    }
+  }
+
+  private updatePageBackground(uri: string, enabled: boolean): void {
+    this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
+      this.settings.useGlassEffect, enabled,
+      this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
+      this.settings.controlOpacity, this.settings.gamepadDeadzone,
+      this.settings.outputScale, this.settings.themeMode,
+      this.settings.controlBarDirection, this.settings.virtualMouseConfig,
+      this.settings.desktopInputProfileId, uri, this.settings.virtualInputEnabled);
+  }
+
+  private updateVirtualInputEnabled(enabled: boolean): void {
+    this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
+      this.settings.useGlassEffect, this.settings.usePageBackground,
+      this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
+      this.settings.controlOpacity, this.settings.gamepadDeadzone,
+      this.settings.outputScale, this.settings.themeMode,
+      this.settings.controlBarDirection, this.settings.virtualMouseConfig,
+      this.settings.desktopInputProfileId, this.settings.pageBackgroundUri, enabled);
+  }
+
+  private togglePageBackground(enabled: boolean): void {
+    if (enabled && this.settings.pageBackgroundUri.length === 0) {
+      this.selectPageBackground();
+      return;
+    }
+    this.updatePageBackground(this.settings.pageBackgroundUri, enabled);
+  }
+
+  private async selectPageBackground(): Promise<void> {
+    try {
+      const documentPicker = new picker.DocumentViewPicker(this.context);
+      const options = new picker.DocumentSelectOptions();
+      options.fileSuffixFilters = ['图片|.png,.jpg,.jpeg,.webp,.bmp'];
+      options.maxSelectNumber = 1;
+      const result = await documentPicker.select(options);
+      if (!result || result.length === 0) return;
+      this.updatePageBackground(result[0], true);
+      promptAction.showToast({ message: '页面背景已更新' });
+    } catch (_) {
+      promptAction.showToast({ message: '未选择背景图片' });
+    }
+  }
+
+  private clearPageBackground(): void {
+    this.updatePageBackground('', false);
   }
 
   private updateTheme(theme: ThemeMode): void {
@@ -205,6 +262,7 @@ struct SystemSettingsPage {
     ThemeSettingsService.getInstance().update(defaults);
     InputOverlayWindowCoordinator.getInstance().setOpacity(defaults.controlOpacity);
     InputOverlayWindowCoordinator.getInstance().setControlsVisible(defaults.showVirtualControls);
+    InputOverlayWindowCoordinator.getInstance().setEnabled(defaults.virtualInputEnabled).catch((): void => {});
   }
 
   @Builder
@@ -244,7 +302,8 @@ struct SystemSettingsPage {
   }
 
   @Builder
-  private SwitchRow(title: string, description: string, enabled: boolean, onChange: (value: boolean) => void) {
+  private SwitchRow(title: string, description: string, enabled: boolean,
+    onChange: (value: boolean) => void, id: string = '') {
     Row() {
       Column({ space: 4 }) {
         Text(title).fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
@@ -256,6 +315,48 @@ struct SystemSettingsPage {
     .padding({ left: 14, right: 14, top: 13, bottom: 13 })
     .backgroundColor($r('app.color.search_background'))
     .borderRadius(14)
+    .id(id)
+  }
+
+  @Builder
+  private PageBackgroundChooser() {
+    Column({ space: 12 }) {
+      Row({ space: 14 }) {
+        Stack({ alignContent: Alignment.Center }) {
+          if (this.settings.pageBackgroundUri.length > 0) {
+            Image(this.settings.pageBackgroundUri)
+              .width('100%').height('100%').objectFit(ImageFit.Cover)
+          } else {
+            SymbolGlyph($r('sys.symbol.rectangle_grid_1x2')).fontSize(26)
+              .fontColor([$r('app.color.text_secondary')])
+          }
+        }
+        .width(112).height(72).borderRadius(12).clip(true)
+        .backgroundColor($r('app.color.search_background'))
+        .border({ width: 1, color: '#1F000000' })
+        .id('page-background-preview')
+        Column({ space: 4 }) {
+          Text(this.settings.pageBackgroundUri.length > 0 ? '已选择背景图片' : '尚未选择背景')
+            .fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+          Text('建议使用横向图片，应用库会自动裁切填充')
+            .fontSize(11).fontColor($r('app.color.text_secondary'))
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+      }.width('100%')
+      Row({ space: 10 }) {
+        Button('选择图片').height(44).borderRadius(14)
+          .backgroundColor($r('app.color.selected_background')).fontColor($r('app.color.accent'))
+          .id('page-background-select')
+          .onClick((): void => { this.selectPageBackground(); })
+        if (this.settings.pageBackgroundUri.length > 0) {
+          Button('移除图片').height(44).borderRadius(14)
+            .backgroundColor($r('app.color.search_background')).fontColor('#D94848')
+            .id('page-background-clear')
+            .onClick((): void => this.clearPageBackground())
+        }
+      }.width('100%')
+    }
+    .width('100%')
+    .id('page-background-chooser')
   }
 
   @Builder
@@ -418,7 +519,10 @@ struct SystemSettingsPage {
               .onClick(() => this.updateTheme(ThemeMode.DARK))
           }.width('100%')
           this.SwitchRow('玻璃卡片', '默认使用 16vp 圆角和半透明材质', this.settings.useGlassEffect, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, value))
-          this.SwitchRow('自定义页面背景', '默认关闭，避免影响应用封面可读性', this.settings.usePageBackground, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, value))
+          this.SwitchRow('自定义页面背景', '选择图片后可随时开启或关闭，不会删除原图',
+            this.settings.usePageBackground, (value: boolean): void => this.togglePageBackground(value),
+            'page-background-enabled')
+          this.PageBackgroundChooser()
         }
         .width('100%')
         .padding(22)
@@ -428,35 +532,40 @@ struct SystemSettingsPage {
       } else if (section === 'input') {
         Column({ space: 16 }) {
           Text('输入与控制').fontSize(20).fontWeight(FontWeight.Bold).width('100%')
-          this.SwitchRow('显示虚拟按键', '只控制十字键、摇杆、ABXY 和肩键；全屏鼠标与右上角控制栏不受影响', this.settings.showVirtualControls, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, value))
-          this.SwitchRow('外设接管时隐藏按键', '检测到实体键盘、鼠标或手柄操作后，仅隐藏虚拟按键', this.settings.autoHideVirtualControls, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, value))
-          Column({ space: 10 }) {
-            Text('控制栏方向').fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
-            Text('自动会根据横竖屏切换；自动隐藏会在控制栏收起 3 秒后完全隐藏，点击右上角热区即可唤出。')
-              .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
-            Flex({ wrap: FlexWrap.Wrap }) {
-              this.ControlBarDirectionChip('自动', ControlBarDirection.AUTO)
-              this.ControlBarDirectionChip('横向', ControlBarDirection.HORIZONTAL)
-              this.ControlBarDirectionChip('纵向', ControlBarDirection.VERTICAL)
-              this.ControlBarDirectionChip('自动隐藏', ControlBarDirection.AUTO_HIDE)
-            }.width('100%')
+          this.SwitchRow('启用屏幕虚拟输入', '关闭后不显示虚拟按键、全屏鼠标和右上角控制栏；实体外设仍可使用',
+            this.settings.virtualInputEnabled, (value: boolean): void => this.updateVirtualInputEnabled(value),
+            'virtual-input-enabled')
+          if (this.settings.virtualInputEnabled) {
+            this.SwitchRow('显示虚拟按键', '只控制十字键、摇杆、ABXY 和肩键；全屏鼠标与右上角控制栏不受影响', this.settings.showVirtualControls, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, value))
+            this.SwitchRow('外设接管时隐藏按键', '检测到实体键盘、鼠标或手柄操作后，仅隐藏虚拟按键', this.settings.autoHideVirtualControls, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, value))
+            Column({ space: 10 }) {
+              Text('控制栏方向').fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
+              Text('自动会根据横竖屏切换；自动隐藏会在控制栏收起 3 秒后完全隐藏，点击右上角热区即可唤出。')
+                .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+              Flex({ wrap: FlexWrap.Wrap }) {
+                this.ControlBarDirectionChip('自动', ControlBarDirection.AUTO)
+                this.ControlBarDirectionChip('横向', ControlBarDirection.HORIZONTAL)
+                this.ControlBarDirectionChip('纵向', ControlBarDirection.VERTICAL)
+                this.ControlBarDirectionChip('自动隐藏', ControlBarDirection.AUTO_HIDE)
+              }.width('100%')
+            }
+            .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
+            Column({ space: 10 }) {
+              Text('全屏触摸板模式').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
+              Text('从 Wine 画面右上角手指图标切换。开启后单指相对移动鼠标、轻点左键；双指轻点右键、双指滑动滚轮。')
+                .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+              this.SwitchRow('显示触摸光标', '操作时短暂显示鼠标位置与点击反馈', this.settings.virtualMouseConfig.showCursor,
+                (value: boolean): void => this.updateVirtualMouse(this.settings.virtualMouseConfig.mouseSensitivity, value))
+              Text('滚动灵敏度 ' + this.settings.virtualMouseConfig.mouseSensitivity + '%')
+                .fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
+              Slider({ value: this.settings.virtualMouseConfig.mouseSensitivity, min: 50, max: 200, step: 10 })
+                .id('virtual-mouse-sensitivity')
+                .onChange((value: number): void => this.updateVirtualMouse(value))
+            }
+            .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
+            Text('控制层透明度 ' + this.settings.controlOpacity + '%').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
+            Slider({ value: this.settings.controlOpacity, min: 25, max: 100, step: 1 }).onChange((value: number) => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, this.settings.autoHideVirtualControls, value))
           }
-          .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
-          Column({ space: 10 }) {
-            Text('全屏触摸板模式').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
-            Text('从 Wine 画面右上角手指图标切换。开启后单指相对移动鼠标、轻点左键；双指轻点右键、双指滑动滚轮。')
-              .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
-            this.SwitchRow('显示触摸光标', '操作时短暂显示鼠标位置与点击反馈', this.settings.virtualMouseConfig.showCursor,
-              (value: boolean): void => this.updateVirtualMouse(this.settings.virtualMouseConfig.mouseSensitivity, value))
-            Text('滚动灵敏度 ' + this.settings.virtualMouseConfig.mouseSensitivity + '%')
-              .fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
-            Slider({ value: this.settings.virtualMouseConfig.mouseSensitivity, min: 50, max: 200, step: 10 })
-              .id('virtual-mouse-sensitivity')
-              .onChange((value: number): void => this.updateVirtualMouse(value))
-          }
-          .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
-          Text('控制层透明度 ' + this.settings.controlOpacity + '%').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
-          Slider({ value: this.settings.controlOpacity, min: 25, max: 100, step: 1 }).onChange((value: number) => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, this.settings.autoHideVirtualControls, value))
           Text('手柄死区 ' + this.settings.gamepadDeadzone + '%').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
           Slider({ value: this.settings.gamepadDeadzone, min: 0, max: 40, step: 1 }).onChange((value: number) => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, this.settings.autoHideVirtualControls, this.settings.controlOpacity, value))
           this.DesktopInputProfiles()
