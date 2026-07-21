@@ -4,12 +4,18 @@ import {
   DirectionControlMode,
   FreeButton,
   FreeButtonLayoutMode,
+  GamepadButtonMapping,
   InputProfile,
   VirtualKey,
   VirtualKeyColorScheme,
+  VirtualKeyMapping,
+  cloneFreeButtonsConfig,
+  cloneGamepadLayout,
+  cloneVirtualKeyConfig,
   computeGamepadPositions,
   computeRadialPositions,
   createDefaultInputProfile,
+  resolveVirtualJoystickDirection,
   resolveVirtualKeyMapping
 } from '../model/AppModels';
 import { InputDispatcher } from '../service/InputDispatcher';
@@ -22,6 +28,29 @@ interface OverlayPoint {
   y: number;
 }
 
+function cloneInputProfile(profile: InputProfile): InputProfile {
+  return {
+    id: profile.id,
+    name: profile.name,
+    schemaVersion: profile.schemaVersion,
+    virtualKeyConfig: cloneVirtualKeyConfig(profile.virtualKeyConfig),
+    layoutLandscape: cloneGamepadLayout(profile.layoutLandscape),
+    layoutPortrait: cloneGamepadLayout(profile.layoutPortrait),
+    virtualKeyMappings: profile.virtualKeyMappings.map((item: VirtualKeyMapping): VirtualKeyMapping => ({
+      virtualKey: item.virtualKey,
+      evdevCode: item.evdevCode,
+      keyLabel: item.keyLabel
+    })),
+    gamepadMappings: profile.gamepadMappings.map((item: GamepadButtonMapping): GamepadButtonMapping => ({
+      id: item.id,
+      label: item.label,
+      buttonCode: item.buttonCode,
+      evdevCode: item.evdevCode
+    })),
+    freeButtonsConfig: cloneFreeButtonsConfig(profile.freeButtonsConfig)
+  };
+}
+
 /**
  * Wine adapter of VintagePomelo's VirtualGamepad overlay.  Its layout contract
  * is intentionally group based: direction, action and auxiliary.  Individual
@@ -30,13 +59,15 @@ interface OverlayPoint {
  */
 @Component
 export struct VirtualInputOverlay {
-  @Prop profile: InputProfile = createDefaultInputProfile();
+  @Prop @Watch('onProfileChanged') profile: InputProfile = createDefaultInputProfile();
+  /** Forces editor previews to rebuild when a group is dragged in-place. */
+  @Prop @Watch('onRenderRevisionChanged') renderRevision: number = 0;
   @Prop opacityValue: number = 100;
   @Prop interactive: boolean = true;
   @Prop hideToolbar: boolean = false;
   @Prop @Watch('onControlsVisibleChanged') controlsVisible: boolean = true;
   @Prop @Watch('onControlBarDirectionChanged') controlBarDirection: ControlBarDirection = ControlBarDirection.AUTO;
-  @Prop touchpadMode: boolean = false;
+  @Prop @Watch('onTouchpadModeChanged') touchpadMode: boolean = false;
   onOpenLayoutEditor: () => void = (): void => {};
   onOpenKeyMappingEditor: () => void = (): void => {};
   onControlsVisibleChange: (visible: boolean) => void = (_visible: boolean): void => {};
@@ -61,6 +92,9 @@ export struct VirtualInputOverlay {
   // by the coordinator and never disables the full-screen mouse surface.
   @State private toolbarExpanded: boolean = true;
   @State private toolbarAutoHidden: boolean = false;
+  @State private controlsVisibleVisual: boolean = true;
+  @State private touchpadModeVisual: boolean = false;
+  @State private renderedProfile: InputProfile = createDefaultInputProfile();
   private activeButtonTouches: Map<VirtualKey, number> = new Map<VirtualKey, number>();
   private joystickTouchId: number = -1;
   private joystickCenterX: number = 0;
@@ -74,10 +108,11 @@ export struct VirtualInputOverlay {
   private toolbarTouchAction: ToolbarAction | null = null;
   private toolbarMouseAction: ToolbarAction | null = null;
   private lastToolbarTouchAt: number = 0;
+  private lastToolbarButtonTouchAt: number = 0;
   private toolbarAutoHideTimer: number = -1;
 
   private config() {
-    return this.profile.virtualKeyConfig;
+    return this.renderedProfile.virtualKeyConfig;
   }
 
   private visibleOpacity(transparency: number): number {
@@ -146,11 +181,11 @@ export struct VirtualInputOverlay {
   }
 
   private layout() {
-    return this.overlayH > this.overlayW ? this.profile.layoutPortrait : this.profile.layoutLandscape;
+    return this.overlayH > this.overlayW ? this.renderedProfile.layoutPortrait : this.renderedProfile.layoutLandscape;
   }
 
   private mapping(key: VirtualKey, fallback: number): number {
-    return resolveVirtualKeyMapping(this.profile.virtualKeyMappings, key, fallback);
+    return resolveVirtualKeyMapping(this.renderedProfile.virtualKeyMappings, key, fallback);
   }
 
   private freeButtonSize(): number {
@@ -158,14 +193,14 @@ export struct VirtualInputOverlay {
   }
 
   private freeButtonPositions() {
-    const free = this.profile.freeButtonsConfig;
+    const free = this.renderedProfile.freeButtonsConfig;
     return free.layoutMode === FreeButtonLayoutMode.RADIAL ?
       computeRadialPositions(free.buttons.length, free.radialScale * 0.6) :
       computeGamepadPositions(free.buttons.length, free.gamepadSpacing);
   }
 
   private freeGroupSize(): number {
-    return Math.max(240, this.profile.freeButtonsConfig.layoutMode === FreeButtonLayoutMode.RADIAL ? this.profile.freeButtonsConfig.radialScale * 1.5 : 280);
+    return Math.max(240, this.renderedProfile.freeButtonsConfig.layoutMode === FreeButtonLayoutMode.RADIAL ? this.renderedProfile.freeButtonsConfig.radialScale * 1.5 : 280);
   }
 
   private freePositionX(index: number): number {
@@ -213,7 +248,23 @@ export struct VirtualInputOverlay {
     else this.startToolbarAutoHide();
   }
 
+  private onTouchpadModeChanged(): void {
+    this.touchpadModeVisual = this.touchpadMode;
+  }
+
+  private onProfileChanged(): void {
+    this.renderedProfile = cloneInputProfile(this.profile);
+  }
+
+  private onRenderRevisionChanged(): void {
+    // Editor drag updates replace the profile and increment this primitive in
+    // the same render pass. Copying here prevents ArkUI from retaining a stale
+    // nested layout object in the long-lived overlay component.
+    this.renderedProfile = cloneInputProfile(this.profile);
+  }
+
   private onControlsVisibleChanged(): void {
+    this.controlsVisibleVisual = this.controlsVisible;
     if (this.controlsVisible) return;
     this.activeButtonTouches.clear();
     this.activeFreeTouches.clear();
@@ -228,6 +279,12 @@ export struct VirtualInputOverlay {
     this.dpadDown = false;
     this.dpadLeft = false;
     this.dpadRight = false;
+  }
+
+  aboutToAppear(): void {
+    this.renderedProfile = cloneInputProfile(this.profile);
+    this.controlsVisibleVisual = this.controlsVisible;
+    this.touchpadModeVisual = this.touchpadMode;
   }
 
   aboutToDisappear(): void {
@@ -273,11 +330,15 @@ export struct VirtualInputOverlay {
       return;
     }
     if (action === 'controls') {
-      this.onControlsVisibleChange(!this.controlsVisible);
+      const nextVisible = !this.controlsVisibleVisual;
+      this.controlsVisibleVisual = nextVisible;
+      this.onControlsVisibleChange(nextVisible);
       return;
     }
     if (action === 'mouse') {
-      this.onTouchpadModeChange(!this.touchpadMode);
+      const nextTouchpadMode = !this.touchpadModeVisual;
+      this.touchpadModeVisual = nextTouchpadMode;
+      this.onTouchpadModeChange(nextTouchpadMode);
       return;
     }
     if (action === 'wake') {
@@ -289,6 +350,24 @@ export struct VirtualInputOverlay {
     this.toolbarAutoHidden = false;
     if (this.toolbarExpanded) this.cancelToolbarAutoHide();
     else this.startToolbarAutoHide();
+  }
+
+  private handleToolbarButtonTouch(event: TouchEvent, action: () => void): void {
+    event.stopPropagation();
+    if (event.type !== TouchType.Up) return;
+    this.invokeToolbarButtonAction(action);
+  }
+
+  private handleToolbarButtonMouse(event: MouseEvent, action: () => void): void {
+    event.stopPropagation();
+    if (event.action === MouseAction.Release) this.invokeToolbarButtonAction(action);
+  }
+
+  private invokeToolbarButtonAction(action: () => void): void {
+    const now = Date.now();
+    if (now - this.lastToolbarButtonTouchAt < 250) return;
+    this.lastToolbarButtonTouchAt = now;
+    action();
   }
 
   private handleToolbarOverlayTouch(event: TouchEvent): boolean {
@@ -473,14 +552,14 @@ export struct VirtualInputOverlay {
   private handleFreeOverlayTouch(event: TouchEvent, x: number, y: number): boolean {
     const touch = event.changedTouches[0];
     if (!touch) return false;
-    for (const button of this.profile.freeButtonsConfig.buttons) {
+    for (const button of this.renderedProfile.freeButtonsConfig.buttons) {
       if (this.activeFreeTouches.get(button.id) === touch.id) {
         this.handleFreeButtonTouch(event, button);
         return true;
       }
     }
-    for (const button of this.profile.freeButtonsConfig.buttons) {
-      const index = this.profile.freeButtonsConfig.buttons.indexOf(button);
+    for (const button of this.renderedProfile.freeButtonsConfig.buttons) {
+      const index = this.renderedProfile.freeButtonsConfig.buttons.indexOf(button);
       if (this.rectContains(x, y,
         this.groupPosition(this.layout().action.centerX, this.layout().action.centerY,
           this.freeGroupSize(), this.freeGroupSize()).x + this.freePositionX(index),
@@ -523,7 +602,7 @@ export struct VirtualInputOverlay {
       const active = this.activeButtonForTouch(touch.id);
       if (active) this.handleButtonTouch(event, active[0], active[1]);
       claimed = true;
-    } else if (this.profile.freeButtonsConfig.enabled && this.profile.freeButtonsConfig.buttons.length > 0) {
+    } else if (this.renderedProfile.freeButtonsConfig.enabled && this.renderedProfile.freeButtonsConfig.buttons.length > 0) {
       claimed = this.handleFreeOverlayTouch(event, x, y);
     } else if (this.rectContains(x, y, direction.x, direction.y, this.directionSize(), this.directionSize())) {
       if (this.config().dpadMode === DirectionControlMode.DPAD) this.handleDpadTouch(event);
@@ -544,7 +623,7 @@ export struct VirtualInputOverlay {
   private handleOverlayMouse(event: MouseEvent): void {
     if (!this.hideToolbar && this.handleToolbarOverlayMouse(event)) return;
     if (!this.interactive || !this.controlsVisible ||
-      this.profile.freeButtonsConfig.enabled || Date.now() - this.lastActionTouchAt <= 320) {
+      this.renderedProfile.freeButtonsConfig.enabled || Date.now() - this.lastActionTouchAt <= 320) {
       this.onUnhandledMouse(event);
       return;
     }
@@ -673,23 +752,9 @@ export struct VirtualInputOverlay {
   }
 
   private directionFor(dx: number, dy: number): [boolean, boolean, boolean, boolean] {
-    const distance = Math.sqrt(dx * dx + dy * dy);
-    if (distance < this.joystickRadius() * this.config().joystickDeadzone / 100) return [false, false, false, false];
-    const angle = Math.atan2(dy, dx) * 180 / Math.PI;
-    if (!this.config().eightDirectionJoystick) {
-      if (angle >= -45 && angle < 45) return [false, false, false, true];
-      if (angle >= 45 && angle < 135) return [false, true, false, false];
-      if (angle >= 135 || angle < -135) return [false, false, true, false];
-      return [true, false, false, false];
-    }
-    if (angle >= -22.5 && angle < 22.5) return [false, false, false, true];
-    if (angle >= 22.5 && angle < 67.5) return [false, true, false, true];
-    if (angle >= 67.5 && angle < 112.5) return [false, true, false, false];
-    if (angle >= 112.5 && angle < 157.5) return [false, true, true, false];
-    if (angle >= 157.5 || angle < -157.5) return [false, false, true, false];
-    if (angle >= -157.5 && angle < -112.5) return [true, false, true, false];
-    if (angle >= -112.5 && angle < -67.5) return [true, false, false, false];
-    return [true, false, false, true];
+    const direction = resolveVirtualJoystickDirection(dx, dy, this.joystickRadius(),
+      this.config().joystickDeadzone, this.config().eightDirectionJoystick);
+    return [direction.up, direction.down, direction.left, direction.right];
   }
 
   private handleJoystickTouch(event: TouchEvent): void {
@@ -916,7 +981,7 @@ export struct VirtualInputOverlay {
   @Builder
   private FreeButtonGroup() {
     Stack({ alignContent: Alignment.Center }) {
-      ForEach(this.profile.freeButtonsConfig.buttons, (button: FreeButton, index: number): void => {
+      ForEach(this.renderedProfile.freeButtonsConfig.buttons, (button: FreeButton, index: number): void => {
         Stack({ alignContent: Alignment.Center }) {
           Circle().width(this.freeButtonSize()).height(this.freeButtonSize())
             .fill(this.isFreePressed(button) ? '#FF2979FF' : '#8032323A')
@@ -937,27 +1002,87 @@ export struct VirtualInputOverlay {
 
   @Builder
   private ControlBarButton(icon: Resource, id: string, highlighted: boolean = false,
-    tint: string = '#FFFFFFFF', highlightedBackground: string = '#44FFFFFF') {
+    tint: string = '#FFFFFFFF', highlightedBackground: string = '#44FFFFFF', stateful: boolean = false,
+    action: () => void = (): void => {}) {
     Button({ type: ButtonType.Circle }) {
-      SymbolGlyph(icon).fontSize(16).fontColor([tint])
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph(icon).fontSize(stateful ? 14 : 16).fontColor([tint])
+          .translate({ y: stateful ? -3 : 0 })
+        if (stateful) {
+          Text(highlighted ? 'ON' : 'OFF')
+            .fontSize(6.5).fontWeight(FontWeight.Bold)
+            .fontColor(highlighted ? '#FFB9F6CA' : '#FFAAB0BA')
+            .position({ x: '50%', y: 24 }).translate({ x: '-50%' })
+        }
+      }.width(36).height(36)
     }
     .width(36).height(36)
     .backgroundColor(highlighted ? highlightedBackground : '#BF282828')
     .border({ width: 1, color: '#33FFFFFF' })
     .shadow({ radius: 8, color: '#66000000', offsetX: 0, offsetY: 2 })
     .id(id)
-    .hitTestBehavior(HitTestMode.None)
+    .hitTestBehavior(HitTestMode.Block)
+    .onTouch((event: TouchEvent): void => this.handleToolbarButtonTouch(event, action))
+    .onMouse((event: MouseEvent): void => this.handleToolbarButtonMouse(event, action))
+    .onClick((): void => this.invokeToolbarButtonAction(action))
+  }
+
+  @Builder
+  private ControlsVisibilityButton() {
+    Button({ type: ButtonType.Circle }) {
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph(this.controlsVisibleVisual ? $r('sys.symbol.gamecontroller') : $r('sys.symbol.eye_slash'))
+          .fontSize(14).fontColor(['#FFFFFFFF']).translate({ y: -3 })
+        Text(this.controlsVisibleVisual ? 'ON' : 'OFF')
+          .fontSize(6.5).fontWeight(FontWeight.Bold)
+          .fontColor(this.controlsVisibleVisual ? '#FFB9F6CA' : '#FFAAB0BA')
+          .position({ x: '50%', y: 24 }).translate({ x: '-50%' })
+      }.width(36).height(36)
+    }
+    .width(36).height(36)
+    .backgroundColor(this.controlsVisibleVisual ? '#384F7CFF' : '#BF282828')
+    .border({ width: 1, color: '#33FFFFFF' })
+    .shadow({ radius: 8, color: '#66000000', offsetX: 0, offsetY: 2 })
+    .id('wine-input-overlay-fold').hitTestBehavior(HitTestMode.Block)
+    .onTouch((event: TouchEvent): void => this.handleToolbarButtonTouch(event,
+      (): void => this.runToolbarAction('controls')))
+    .onMouse((event: MouseEvent): void => this.handleToolbarButtonMouse(event,
+      (): void => this.runToolbarAction('controls')))
+    .onClick((): void => this.invokeToolbarButtonAction((): void => this.runToolbarAction('controls')))
+  }
+
+  @Builder
+  private TouchpadModeButton() {
+    Button({ type: ButtonType.Circle }) {
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph($r('sys.symbol.hand_tap')).fontSize(14)
+          .fontColor([this.touchpadModeVisual ? '#FFB9F6CA' : '#FFFFFFFF']).translate({ y: -3 })
+        Text(this.touchpadModeVisual ? 'ON' : 'OFF')
+          .fontSize(6.5).fontWeight(FontWeight.Bold)
+          .fontColor(this.touchpadModeVisual ? '#FFB9F6CA' : '#FFAAB0BA')
+          .position({ x: '50%', y: 24 }).translate({ x: '-50%' })
+      }.width(36).height(36)
+    }
+    .width(36).height(36)
+    .backgroundColor(this.touchpadModeVisual ? '#B0267A48' : '#BF282828')
+    .border({ width: 1, color: '#33FFFFFF' })
+    .shadow({ radius: 8, color: '#66000000', offsetX: 0, offsetY: 2 })
+    .id('wine-input-touchpad-mode').hitTestBehavior(HitTestMode.Block)
+    .onTouch((event: TouchEvent): void => this.handleToolbarButtonTouch(event,
+      (): void => this.runToolbarAction('mouse')))
+    .onMouse((event: MouseEvent): void => this.handleToolbarButtonMouse(event,
+      (): void => this.runToolbarAction('mouse')))
+    .onClick((): void => this.invokeToolbarButtonAction((): void => this.runToolbarAction('mouse')))
   }
 
   @Builder
   private ExpandedToolbarButtons() {
-    this.ControlBarButton($r('sys.symbol.gearshape'), 'wine-input-layout-editor')
-    this.ControlBarButton($r('sys.symbol.keyboard'), 'wine-input-key-mapping-editor')
-    this.ControlBarButton(
-      this.controlsVisible ? $r('sys.symbol.gamecontroller') : $r('sys.symbol.eye_slash'),
-      'wine-input-overlay-fold', this.controlsVisible)
-    this.ControlBarButton($r('sys.symbol.hand_tap'), 'wine-input-touchpad-mode', this.touchpadMode,
-      this.touchpadMode ? '#FFB9F6CA' : '#FFFFFFFF', '#B0267A48')
+    this.ControlBarButton($r('sys.symbol.gearshape'), 'wine-input-layout-editor', false,
+      '#FFFFFFFF', '#44FFFFFF', false, (): void => this.runToolbarAction('editor'))
+    this.ControlBarButton($r('sys.symbol.keyboard'), 'wine-input-key-mapping-editor', false,
+      '#FFFFFFFF', '#44FFFFFF', false, (): void => this.runToolbarAction('mapping'))
+    this.ControlsVisibilityButton()
+    this.TouchpadModeButton()
   }
 
   @Builder
@@ -975,7 +1100,12 @@ export struct VirtualInputOverlay {
     .backgroundColor(this.toolbarExpanded ? '#1AFFFFFF' : '#BF282828')
     .border({ width: 1, color: '#33FFFFFF' })
     .id('wine-input-overlay-toggle')
-    .hitTestBehavior(HitTestMode.None)
+    .hitTestBehavior(HitTestMode.Block)
+    .onTouch((event: TouchEvent): void => this.handleToolbarButtonTouch(event,
+      (): void => this.runToolbarAction('toolbar')))
+    .onMouse((event: MouseEvent): void => this.handleToolbarButtonMouse(event,
+      (): void => this.runToolbarAction('toolbar')))
+    .onClick((): void => this.invokeToolbarButtonAction((): void => this.runToolbarAction('toolbar')))
   }
 
   /** Direct ArkTS adaptation of VintagePomelo's collapsible icon control bar. */
@@ -1001,7 +1131,7 @@ export struct VirtualInputOverlay {
       .padding(this.toolbarExpanded ? 8 : 4)
       .backgroundColor('#4D000000')
       .borderRadius(20)
-      .hitTestBehavior(HitTestMode.None)
+      .hitTestBehavior(HitTestMode.Transparent)
       .position({ x: this.toolbarOriginX(), y: 14 })
       .id('wine-input-toolbar-vertical')
       .zIndex(30)
@@ -1016,7 +1146,7 @@ export struct VirtualInputOverlay {
       .padding(this.toolbarExpanded ? 8 : 4)
       .backgroundColor('#4D000000')
       .borderRadius(20)
-      .hitTestBehavior(HitTestMode.None)
+      .hitTestBehavior(HitTestMode.Transparent)
       .position({ x: this.toolbarOriginX(), y: 14 })
       .id('wine-input-toolbar-horizontal')
       .zIndex(30)
@@ -1025,8 +1155,11 @@ export struct VirtualInputOverlay {
 
   build() {
     Stack() {
-      if (this.overlayW > 0 && this.overlayH > 0 && this.controlsVisible) {
-        if (this.profile.freeButtonsConfig.enabled && this.profile.freeButtonsConfig.buttons.length > 0) {
+      // Referencing the revision in the render tree makes ArkUI invalidate an
+      // editor preview while preserving stable production test IDs.
+      Text(this.renderRevision.toString()).width(0).height(0).opacity(0).hitTestBehavior(HitTestMode.None)
+      if (this.overlayW > 0 && this.overlayH > 0 && this.controlsVisibleVisual) {
+        if (this.renderedProfile.freeButtonsConfig.enabled && this.renderedProfile.freeButtonsConfig.buttons.length > 0) {
           this.FreeButtonGroup()
         } else {
           this.DirectionGroup()

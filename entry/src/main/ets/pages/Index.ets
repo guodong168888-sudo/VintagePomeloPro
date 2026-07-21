@@ -88,7 +88,10 @@ struct Index {
           profileId: request.profileId || 'default',
           profileName: request.profileName || '默认键鼠手柄',
           appId: request.appId || '',
-          baseProfileId: request.baseProfileId || 'default'
+          baseProfileId: request.baseProfileId || 'default',
+          returnAbilityName: request.returnAbilityName || '',
+          returnSessionId: request.returnSessionId || '',
+          returnToplevelId: request.returnToplevelId || '0'
         }
       });
     } catch (_) {
@@ -152,15 +155,15 @@ struct Index {
   }
 
   private filterTitle(): string {
-    if (this.filter === 'builtin') return 'Wine 应用库';
+    if (this.filter === 'builtin') return 'Wine 桌面';
     if (this.filter === 'windows') return 'Windows 程序';
     if (this.filter === 'running') return '运行中的应用';
     if (this.filter === 'favorite') return '收藏的应用';
-    return 'Wine 应用库';
+    return 'Wine 桌面';
   }
 
   private filterDescription(): string {
-    if (this.filter === 'builtin') return 'Wine 桌面、系统工具与内建测试程序';
+    if (this.filter === 'builtin') return '系统工具与内建测试程序';
     if (this.filter === 'windows') return '来自 Download/com.vintage.pomelopro/games';
     if (this.filter === 'running') return '点击卡片可恢复，长按可关闭会话';
     if (this.filter === 'favorite') return '已收藏的内建应用和 Windows 程序';
@@ -448,11 +451,14 @@ struct Index {
             onLongPress: (target: AppDescriptor): void => { this.showAppLongPressMenu(target); }
           })
         }
+        // Shadows extend beyond the card's measured bounds.  Without this
+        // inset Grid clips the last row's rounded bottom edge and shadow.
+        .padding({ left: 4, right: 4, top: 4, bottom: 12 })
       }, (app: AppDescriptor): string => app.id)
     }
     .columnsTemplate(this.settings.viewMode === ViewMode.COMPACT ? this.compactGridColumns() : this.gridColumns())
-    .columnsGap(16)
-    .rowsGap(this.settings.viewMode === ViewMode.COMPACT ? 12 : 16)
+    .columnsGap(8)
+    .rowsGap(4)
     .width('100%')
   }
 
@@ -470,7 +476,7 @@ struct Index {
       .width('100%')
       .constraintSize({ minHeight: '100%' })
       .justifyContent(FlexAlign.Start)
-      .padding({ top: 2, bottom: this.breakpoint === 'sm' ? 76 : 20 })
+      .padding({ top: 2, bottom: this.breakpoint === 'sm' ? 88 : 36 })
     }
     .layoutWeight(1)
     .width('100%')

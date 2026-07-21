@@ -20,16 +20,25 @@ export struct AppCard {
     return this.resolvedDisplayMode === DisplayMode.SINGLE_APP ? '单应用' : '桌面';
   }
 
-  private builtinSymbol(): Resource {
-    if (this.app.id === 'builtin-desktop') return $r('sys.symbol.rectangle_grid_1x2');
-    if (this.app.id === 'builtin-explorer') return $r('sys.symbol.folder');
-    if (this.app.id === 'builtin-winecfg' || this.app.id === 'builtin-control') return $r('sys.symbol.gearshape');
-    if (this.app.id === 'builtin-taskmgr') return $r('sys.symbol.list_bullet');
-    if (this.app.id === 'builtin-regedit') return $r('sys.symbol.square_grid_2x2');
-    if (this.app.id === 'builtin-cmd') return $r('sys.symbol.chevron_right');
-    if (this.app.id === 'builtin-graphics-smoke') return $r('sys.symbol.rectangle_grid_1x2');
-    if (this.app.id === 'builtin-audio-smoke') return $r('sys.symbol.play_fill');
-    return $r('sys.symbol.rectangle_grid_1x2');
+  /** Deterministic cover slices supplied with the built-in application manifest. */
+  private builtinCover(): Resource {
+    if (this.app.id === 'builtin-desktop') return $r('app.media.builtin_desktop');
+    if (this.app.id === 'builtin-explorer') return $r('app.media.builtin_explorer');
+    if (this.app.id === 'builtin-winecfg') return $r('app.media.builtin_winecfg');
+    if (this.app.id === 'builtin-control') return $r('app.media.builtin_control');
+    if (this.app.id === 'builtin-taskmgr') return $r('app.media.builtin_taskmgr');
+    if (this.app.id === 'builtin-regedit') return $r('app.media.builtin_regedit');
+    if (this.app.id === 'builtin-cmd') return $r('app.media.builtin_cmd');
+    if (this.app.id === 'builtin-graphics-smoke') return $r('app.media.builtin_graphics');
+    if (this.app.id === 'builtin-audio-smoke') return $r('app.media.builtin_audio');
+    return $r('app.media.builtin_desktop');
+  }
+
+  private executableText(): string {
+    // Explorer supplies both the desktop shell and the file manager.  Label the
+    // shell role explicitly while keeping explorer.exe as the actual launch target.
+    if (this.app.id === 'builtin-desktop') return 'desktop (explorer)';
+    return this.app.launchTarget.executable;
   }
 
   private handleCardTouch(event: TouchEvent): void {
@@ -40,12 +49,12 @@ export struct AppCard {
   @Builder
   private Badge(text: string, color: string) {
     Text(text)
-      .fontSize(10)
-      .fontWeight(FontWeight.Medium)
+      .fontSize(10.5)
+      .fontWeight(FontWeight.Bold)
       .fontColor('#FFFFFFFF')
-      .padding({ left: 7, right: 7, top: 3, bottom: 3 })
+      .padding({ left: 9, right: 9, top: 4, bottom: 4 })
       .backgroundColor(color)
-      .borderRadius(10)
+      .borderRadius(12)
   }
 
   @Builder
@@ -57,17 +66,19 @@ export struct AppCard {
           .height(height)
           .objectFit(ImageFit.Cover)
           .draggable(false)
+      } else if (this.app.source === AppSource.BUILTIN) {
+        Image(this.builtinCover())
+          .width('100%')
+          .height(height)
+          .objectFit(ImageFit.Cover)
+          .draggable(false)
       } else {
         Column({ space: 8 }) {
-          if (this.app.source === AppSource.BUILTIN) {
-            SymbolGlyph(this.builtinSymbol()).fontSize(58).fontColor(['#FFF8FAFF'])
-          } else {
-            Text('Windows 程序')
-              .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#FFF8FAFF')
-              .padding({ left: 13, right: 13, top: 8, bottom: 8 })
-              .backgroundColor('#2CFFFFFF').borderRadius(16)
-            Text('Download / games').fontSize(11).fontColor('#E3F0FAFF')
-          }
+          Text('Windows 程序')
+            .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#FFF8FAFF')
+            .padding({ left: 13, right: 13, top: 8, bottom: 8 })
+            .backgroundColor('#2CFFFFFF').borderRadius(16)
+          Text('Download / games').fontSize(11).fontColor('#E3F0FAFF')
         }
         .width('100%')
         .height(height)
@@ -76,8 +87,9 @@ export struct AppCard {
       }
 
       Row({ space: 5 }) {
-        this.Badge(this.app.source === AppSource.BUILTIN ? '内建' : 'Download', '#CC343B4D')
-        this.Badge(this.modeText(), '#CC4E68D8')
+        this.Badge(this.app.source === AppSource.BUILTIN ? '内建' : 'Download',
+          this.app.source === AppSource.BUILTIN ? '#DE2979B8' : '#DE2C7B64')
+        this.Badge(this.modeText(), '#D6525EC8')
         if (this.running) {
           this.Badge('运行中', '#CC22A06B')
         }
@@ -85,7 +97,7 @@ export struct AppCard {
           this.Badge('不可用', '#CCD64C4C')
         }
       }
-      .padding(8)
+      .padding(10)
     }
     .width(this.viewMode === ViewMode.COMPACT ? 120 : '100%')
     .height(height)
@@ -102,8 +114,8 @@ export struct AppCard {
           .fontColor($r('app.color.text_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(this.app.launchTarget.executable)
-          .fontSize(10)
+        Text(this.executableText())
+          .fontSize(11)
           .fontColor($r('app.color.text_secondary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -123,7 +135,7 @@ export struct AppCard {
         })
     }
     .width('100%')
-    .padding({ left: 12, right: 8, top: 9, bottom: 10 })
+    .padding({ left: 14, right: 8, top: 11, bottom: 12 })
   }
 
   build() {
@@ -136,7 +148,8 @@ export struct AppCard {
       .width('100%')
       .backgroundColor(this.useGlassEffect ? $r('app.color.card_glass_background') : $r('app.color.card_background'))
       .backgroundBlurStyle(this.useGlassEffect ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
-      .borderRadius(this.useGlassEffect ? 16 : 8)
+      .borderRadius(18)
+      .border({ width: 1, color: '#15FFFFFF' })
       .clip(true)
       .shadow({ radius: 10, color: '#18000000', offsetX: 0, offsetY: 4 })
       .opacity(this.app.available ? 1 : 0.62)
@@ -148,15 +161,16 @@ export struct AppCard {
       .id('wine-app-card-' + this.app.id)
     } else {
       Column() {
-        this.Cover(this.viewMode === ViewMode.LARGE ? 220 : 168)
+        this.Cover(this.viewMode === ViewMode.LARGE ? 246 : 220)
         this.TitleRow()
       }
       .width('100%')
       .backgroundColor(this.useGlassEffect ? $r('app.color.card_glass_background') : $r('app.color.card_background'))
       .backgroundBlurStyle(this.useGlassEffect ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
-      .borderRadius(this.useGlassEffect ? 16 : 8)
+      .borderRadius(20)
+      .border({ width: 1, color: '#14FFFFFF' })
       .clip(true)
-      .shadow({ radius: 10, color: '#18000000', offsetX: 0, offsetY: 5 })
+      .shadow({ radius: 16, color: '#22000000', offsetX: 0, offsetY: 7 })
       .opacity(this.app.available ? 1 : 0.62)
       .scale({ x: this.pressed ? 0.985 : 1, y: this.pressed ? 0.985 : 1 })
       .animation({ duration: 120, curve: Curve.EaseOut })

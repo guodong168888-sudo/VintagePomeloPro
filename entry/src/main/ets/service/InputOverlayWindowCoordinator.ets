@@ -33,6 +33,7 @@ export class InputOverlayWindowCoordinator {
   private rendererStressDriver: (() => boolean) | null = null;
   private stressRemaining: number = 0;
   private attaching: boolean = false;
+  private boundsSyncGeneration: number = 0;
   private snapshot: InputOverlaySnapshot = {
     session: { sessionId: '', displayMode: DisplayMode.DESKTOP, toplevelId: 0, active: false },
     profileId: 'default', visible: false, controlsVisible: true, opacity: 72,
@@ -88,6 +89,7 @@ export class InputOverlayWindowCoordinator {
       await this.setVisible(true);
       await this.syncBounds();
       await this.raise();
+      this.scheduleBoundsStabilization();
       return;
     }
 
@@ -181,6 +183,7 @@ export class InputOverlayWindowCoordinator {
       });
       await this.setVisible(true);
       await this.raise();
+      this.scheduleBoundsStabilization();
       this.publish();
     } catch (error) {
       this.snapshot.lastError = 'create InputOverlayWindow: ' + JSON.stringify(error);
@@ -204,6 +207,15 @@ export class InputOverlayWindowCoordinator {
   async setVisible(visible: boolean): Promise<void> {
     this.snapshot.visible = visible;
     if (this.overlayWindow) {
+      // A subwindow is automatically hidden while its parent Ability is in the
+      // background. Merely restoring touchability does not make it visible
+      // again on API 23, so editor return must explicitly show the retained
+      // single overlay window before enabling input.
+      if (visible) {
+        try { await this.overlayWindow.showWindow(); } catch (error) {
+          this.snapshot.lastError = 'showWindow: ' + JSON.stringify(error);
+        }
+      }
       try { await this.overlayWindow.setWindowTouchable(visible); } catch (error) {
         this.snapshot.lastError = 'setWindowTouchable: ' + JSON.stringify(error);
       }
@@ -242,6 +254,24 @@ export class InputOverlayWindowCoordinator {
       this.snapshot.lastError = 'syncBounds: ' + JSON.stringify(error);
       this.publish();
     }
+  }
+
+  /**
+   * Ability foreground animations can temporarily report the parent at the
+   * off-screen transition coordinate (for example x=2910 on a 2880px panel).
+   * Re-sample after the animation so the retained child window returns to the
+   * real parent bounds instead of remaining just outside the display.
+   */
+  private scheduleBoundsStabilization(): void {
+    const generation = ++this.boundsSyncGeneration;
+    setTimeout((): void => {
+      if (generation !== this.boundsSyncGeneration || !this.snapshot.visible) return;
+      this.syncBounds().then((): void => { this.raise().catch((): void => {}); }).catch((): void => {});
+    }, 120);
+    setTimeout((): void => {
+      if (generation !== this.boundsSyncGeneration || !this.snapshot.visible) return;
+      this.syncBounds().then((): void => { this.raise().catch((): void => {}); }).catch((): void => {});
+    }, 420);
   }
 
   setActiveToplevel(toplevelId: number): void {
@@ -317,6 +347,7 @@ export class InputOverlayWindowCoordinator {
   }
 
   async detach(reason: string): Promise<void> {
+    this.boundsSyncGeneration++;
     InputDispatcher.getInstance().releaseAll(reason);
     const overlay = this.overlayWindow;
     this.overlayWindow = null;

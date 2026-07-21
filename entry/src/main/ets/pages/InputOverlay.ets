@@ -2,6 +2,7 @@ import { common, Want } from '@kit.AbilityKit';
 import { DEBUG } from 'BuildProfile';
 import { mapMouseButton } from '../common/MouseMap';
 import {
+  DisplayMode,
   GlobalSettings,
   InputDiagnostics,
   InputProfile,
@@ -439,7 +440,11 @@ struct InputOverlayPage {
         profileId: this.snapshot.profileId || 'default',
         profileName: this.profile.name || '默认键鼠手柄',
         appId: session?.appId ?? '',
-        baseProfileId: this.settings.desktopInputProfileId || 'default'
+        baseProfileId: this.settings.desktopInputProfileId || 'default',
+        returnAbilityName: this.snapshot.session.displayMode === DisplayMode.SINGLE_APP ?
+          'SingleAppAbility' : 'DesktopAbility',
+        returnSessionId: this.snapshot.session.sessionId,
+        returnToplevelId: this.snapshot.session.toplevelId.toString()
       }
     };
     const coordinator = InputOverlayWindowCoordinator.getInstance();

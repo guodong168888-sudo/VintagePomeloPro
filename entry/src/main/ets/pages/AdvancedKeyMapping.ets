@@ -5,7 +5,7 @@
  */
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
-import { common } from '@kit.AbilityKit';
+import { common, Want } from '@kit.AbilityKit';
 import { KeyboardLayout } from '../components/KeyboardLayout';
 import { VirtualInputOverlay } from '../components/VirtualInputOverlay';
 import {
@@ -56,7 +56,12 @@ struct AdvancedKeyMappingPage {
   @State private selectedKey: VirtualKey | null = null;
   @State private editingFreeIndex: number = -1;
   @State private showKeyPicker: boolean = false;
+  @State private previewRevision: number = 0;
+  @State private returnAbilityName: string = '';
+  @State private returnSessionId: string = '';
+  @State private returnToplevelId: string = '0';
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+  private returnScheduled: boolean = false;
 
   aboutToAppear(): void {
     const params = (router.getParams() ?? {}) as Record<string, string>;
@@ -64,10 +69,18 @@ struct AdvancedKeyMappingPage {
     this.profileName = params.profileName ?? (this.profileId === 'default' ? 'Vintage 默认手柄布局' : '应用专用按键映射');
     this.appId = params.appId ?? '';
     this.baseProfileId = params.baseProfileId ?? 'default';
+    this.returnAbilityName = params.returnAbilityName ?? '';
+    this.returnSessionId = params.returnSessionId ?? '';
+    this.returnToplevelId = params.returnToplevelId ?? '0';
     InputProfileService.getInstance().initialize(this.context).then((): void => {
       this.profile = InputProfileService.getInstance().ensureProfile(this.profileId, this.profileName, this.baseProfileId);
       this.profileName = this.profile.name;
+      this.previewRevision++;
     }).catch((): void => {});
+  }
+
+  aboutToDisappear(): void {
+    this.resumeWineAbility();
   }
 
   private mappingFor(key: VirtualKey): VirtualKeyMapping | undefined {
@@ -92,6 +105,29 @@ struct AdvancedKeyMappingPage {
       gamepadMappings: this.profile.gamepadMappings,
       freeButtonsConfig: cloneFreeButtonsConfig(freeButtons)
     };
+    this.previewRevision++;
+  }
+
+  private finishEditor(): void {
+    router.back();
+    this.resumeWineAbility();
+  }
+
+  private resumeWineAbility(): void {
+    if (this.returnScheduled) return;
+    if (this.returnAbilityName !== 'DesktopAbility' && this.returnAbilityName !== 'SingleAppAbility') return;
+    this.returnScheduled = true;
+    const want: Want = {
+      bundleName: 'com.vintage.pomelopro',
+      abilityName: this.returnAbilityName,
+      parameters: {
+        sessionId: this.returnSessionId,
+        toplevelId: Number(this.returnToplevelId) || 0
+      }
+    };
+    setTimeout((): void => {
+      this.context.startAbility(want).catch((): void => {});
+    }, 80);
   }
 
   private setVirtualMapping(evdevCode: number, label: string): void {
@@ -163,6 +199,7 @@ struct AdvancedKeyMappingPage {
       gamepadMappings: defaults.gamepadMappings,
       freeButtonsConfig: defaults.freeButtonsConfig
     };
+    this.previewRevision++;
     this.selectedKey = null;
     promptAction.showToast({ message: '已恢复 VintagePomelo 默认按键方案' });
   }
@@ -185,7 +222,7 @@ struct AdvancedKeyMappingPage {
       });
     }
     promptAction.showToast({ message: this.appId ? '已保存此应用专用按键方案' : '已保存全局默认按键方案' });
-    router.back();
+    this.finishEditor();
   }
 
   @Builder
@@ -289,7 +326,7 @@ struct AdvancedKeyMappingPage {
           Text('实时预览').fontSize(16).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary')).width('100%')
           Stack() {
             Column().width('100%').height('100%').backgroundColor('#FF1A1A2E').borderRadius(16)
-            VirtualInputOverlay({ profile: this.profile, interactive: false, hideToolbar: true }).width('100%').height('100%').hitTestBehavior(HitTestMode.None)
+            VirtualInputOverlay({ profile: this.profile, renderRevision: this.previewRevision, interactive: false, hideToolbar: true }).width('100%').height('100%').hitTestBehavior(HitTestMode.None)
           }.height(300).width('100%')
         }.width('100%').padding(18).backgroundColor($r('app.color.card_background')).borderRadius(18)
         Column({ space: 8 }) {
@@ -308,7 +345,8 @@ struct AdvancedKeyMappingPage {
     Column({ space: 16 }) {
       Row() {
         Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(18).fontColor([$r('app.color.text_primary')]) }
-          .width(48).height(48).backgroundColor($r('app.color.search_background')).onClick((): void => router.back())
+          .width(48).height(48).backgroundColor($r('app.color.search_background')).id('key-mapping-back')
+          .onClick((): void => this.finishEditor())
         Column({ space: 3 }) {
           Text('按键映射').fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
           Text(this.appId ? '此应用专用输入方案：' + this.profileName : '全局默认输入方案：' + this.profileName).fontSize(11).fontColor($r('app.color.text_secondary'))

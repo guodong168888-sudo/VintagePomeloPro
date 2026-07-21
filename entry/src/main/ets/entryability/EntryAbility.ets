@@ -52,7 +52,10 @@ export default class EntryAbility extends UIAbility {
         profileId: String(parameters.profileId ?? 'default'),
         profileName: String(parameters.profileName ?? '默认键鼠手柄'),
         appId: String(parameters.appId ?? ''),
-        baseProfileId: String(parameters.baseProfileId ?? 'default')
+        baseProfileId: String(parameters.baseProfileId ?? 'default'),
+        returnAbilityName: String(parameters.returnAbilityName ?? ''),
+        returnSessionId: String(parameters.returnSessionId ?? ''),
+        returnToplevelId: String(parameters.returnToplevelId ?? '0')
       }));
     }
   }

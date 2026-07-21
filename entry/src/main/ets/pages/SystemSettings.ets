@@ -537,7 +537,7 @@ struct SystemSettingsPage {
     .width('100%')
     .constraintSize({ maxWidth: maxWidth })
     .padding({ right: 10, bottom: 16 })
-    .scrollBar(BarState.On)
+    .scrollBar(BarState.Auto)
     .scrollBarWidth(6)
     .scrollBarColor($r('app.color.accent'))
     .edgeEffect(EdgeEffect.Spring)

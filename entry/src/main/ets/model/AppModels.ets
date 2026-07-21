@@ -192,6 +192,37 @@ export enum DirectionControlMode {
   JOYSTICK = 'joystick'
 }
 
+export interface VirtualJoystickDirection {
+  up: boolean;
+  down: boolean;
+  left: boolean;
+  right: boolean;
+}
+
+/** VintagePomelo-compatible 4/8-way virtual joystick quantization. */
+export function resolveVirtualJoystickDirection(dx: number, dy: number, radius: number,
+  deadzonePercent: number, eightDirection: boolean): VirtualJoystickDirection {
+  const none: VirtualJoystickDirection = { up: false, down: false, left: false, right: false };
+  const safeRadius = Math.max(1, radius);
+  const deadzone = safeRadius * Math.max(0, Math.min(100, deadzonePercent)) / 100;
+  if (Math.sqrt(dx * dx + dy * dy) < deadzone) return none;
+  const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+  if (!eightDirection) {
+    if (angle >= -45 && angle < 45) return { up: false, down: false, left: false, right: true };
+    if (angle >= 45 && angle < 135) return { up: false, down: true, left: false, right: false };
+    if (angle >= 135 || angle < -135) return { up: false, down: false, left: true, right: false };
+    return { up: true, down: false, left: false, right: false };
+  }
+  if (angle >= -22.5 && angle < 22.5) return { up: false, down: false, left: false, right: true };
+  if (angle >= 22.5 && angle < 67.5) return { up: false, down: true, left: false, right: true };
+  if (angle >= 67.5 && angle < 112.5) return { up: false, down: true, left: false, right: false };
+  if (angle >= 112.5 && angle < 157.5) return { up: false, down: true, left: true, right: false };
+  if (angle >= 157.5 || angle < -157.5) return { up: false, down: false, left: true, right: false };
+  if (angle >= -157.5 && angle < -112.5) return { up: true, down: false, left: true, right: false };
+  if (angle >= -112.5 && angle < -67.5) return { up: true, down: false, left: false, right: false };
+  return { up: true, down: false, left: false, right: true };
+}
+
 export enum VirtualKeyColorScheme {
   DEFAULT = 'default',
   WHITE = 'white'

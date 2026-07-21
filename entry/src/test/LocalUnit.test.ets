@@ -14,6 +14,7 @@ import {
   normalizeLaunchPath,
   resolveDisplayMode,
   resolveInputProfileId,
+  resolveVirtualJoystickDirection,
   resolveVirtualKeyMapping,
   stableAppId
 } from '../main/ets/model/AppModels';
@@ -107,6 +108,18 @@ export default function localUnitTest() {
       const changed = profile.virtualKeyMappings.map((mapping) => mapping.virtualKey === VirtualKey.BUTTON_A ?
         { virtualKey: mapping.virtualKey, evdevCode: 28, keyLabel: 'Enter' } : mapping);
       expect(resolveVirtualKeyMapping(changed, VirtualKey.BUTTON_A, 57)).assertEqual(28);
+    });
+
+    it('quantizesVirtualJoystickDeadzoneAndEightDirections', 0, () => {
+      const centered = resolveVirtualJoystickDirection(8, 0, 100, 15, true);
+      expect(centered.up || centered.down || centered.left || centered.right).assertFalse();
+      const diagonal = resolveVirtualJoystickDirection(70, -70, 100, 15, true);
+      expect(diagonal.up).assertTrue();
+      expect(diagonal.right).assertTrue();
+      expect(diagonal.down || diagonal.left).assertFalse();
+      const fourWay = resolveVirtualJoystickDirection(70, -25, 100, 15, false);
+      expect(fourWay.right).assertTrue();
+      expect(fourWay.up).assertFalse();
     });
 
     it('keepsSharedVirtualKeyPressedUntilEverySourceReleases', 0, () => {

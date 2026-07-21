@@ -1,6 +1,7 @@
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
-import { common } from '@kit.AbilityKit';
+import { common, Want } from '@kit.AbilityKit';
+import { window } from '@kit.ArkUI';
 import {
   ButtonGroupPosition,
   DEFAULT_GAMEPAD_LAYOUT,
@@ -53,7 +54,14 @@ struct InputLayoutEditor {
   @State private isPortrait: boolean = false;
   @State private selectedGroup: ButtonGroupKey | null = null;
   @State private showConfig: boolean = false;
+  @State private previewRevision: number = 0;
+  @State private returnAbilityName: string = '';
+  @State private returnSessionId: string = '';
+  @State private returnToplevelId: string = '0';
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+  private originalOrientation: window.Orientation = window.Orientation.UNSPECIFIED;
+  private orientationRestored: boolean = false;
+  private returnScheduled: boolean = false;
   private dragStartX: number = 0;
   private dragStartY: number = 0;
   private readonly groups: GroupDisplayInfo[] = [
@@ -72,10 +80,69 @@ struct InputLayoutEditor {
     this.profileName = params.profileName ?? (this.profileId === 'default' ? 'Vintage 默认手柄布局' : '应用专用布局');
     this.appId = params.appId ?? '';
     this.baseProfileId = params.baseProfileId ?? 'default';
+    this.returnAbilityName = params.returnAbilityName ?? '';
+    this.returnSessionId = params.returnSessionId ?? '';
+    this.returnToplevelId = params.returnToplevelId ?? '0';
+    this.enterImmersive();
     InputProfileService.getInstance().initialize(this.context).then((): void => {
       this.profile = InputProfileService.getInstance().ensureProfile(this.profileId, this.profileName, this.baseProfileId);
       this.profileName = this.profile.name;
+      this.previewRevision++;
     }).catch(() => {});
+  }
+
+  aboutToDisappear(): void {
+    if (!this.orientationRestored) this.restoreEditorWindow();
+    this.resumeWineAbility();
+  }
+
+  /** Same full-screen editor contract as VintagePomelo's ButtonLayoutEditor. */
+  private async enterImmersive(): Promise<void> {
+    try {
+      const editorWindow = await window.getLastWindow(this.context);
+      this.originalOrientation = editorWindow.getPreferredOrientation();
+      await editorWindow.setWindowLayoutFullScreen(true);
+      await editorWindow.setSpecificSystemBarEnabled('status', false);
+      await editorWindow.setSpecificSystemBarEnabled('navigationIndicator', false);
+    } catch (_) {
+      // The editor remains usable on devices that reject one of the immersive calls.
+    }
+  }
+
+  private async restoreEditorWindow(): Promise<void> {
+    if (this.orientationRestored) return;
+    this.orientationRestored = true;
+    try {
+      const editorWindow = await window.getLastWindow(this.context);
+      // As in VintagePomelo, the destination Ability owns its system bars.
+      await editorWindow.setPreferredOrientation(this.originalOrientation);
+    } catch (_) {
+    }
+  }
+
+  private async finishEditor(): Promise<void> {
+    await this.restoreEditorWindow();
+    router.back();
+    this.resumeWineAbility();
+  }
+
+  private resumeWineAbility(): void {
+    if (this.returnScheduled) return;
+    if (this.returnAbilityName !== 'DesktopAbility' && this.returnAbilityName !== 'SingleAppAbility') return;
+    this.returnScheduled = true;
+    const want: Want = {
+      bundleName: 'com.vintage.pomelopro',
+      abilityName: this.returnAbilityName,
+      parameters: {
+        sessionId: this.returnSessionId,
+        toplevelId: Number(this.returnToplevelId) || 0
+      }
+    };
+    // Let EntryAbility remove the editor route before the retained Wine Ability
+    // comes forward. This keeps later overlay editor requests observable by Index.
+    setTimeout((): void => {
+      this.context.startAbility(want).catch((): void => {});
+    }, 80);
   }
 
   private currentLayout(): VirtualGamepadLayout {
@@ -101,6 +168,7 @@ struct InputLayoutEditor {
       gamepadMappings: this.profile.gamepadMappings.map((item: GamepadButtonMapping): GamepadButtonMapping => ({ id: item.id, label: item.label, buttonCode: item.buttonCode, evdevCode: item.evdevCode })),
       freeButtonsConfig: cloneFreeButtonsConfig(freeButtons)
     };
+    this.previewRevision++;
   }
 
   private groupPosition(key: ButtonGroupKey): ButtonGroupPosition {
@@ -189,7 +257,7 @@ struct InputLayoutEditor {
       });
     }
     promptAction.showToast({ message: '布局已保存' });
-    router.back();
+    await this.finishEditor();
   }
 
   @Builder
@@ -201,6 +269,7 @@ struct InputLayoutEditor {
       Text(info.label).fontSize(10).fontColor(info.color).position({ x: '50%', y: '100%' }).translate({ x: '-50%', y: 3 })
     }
     .width(this.groupSize(info.key)[0]).height(this.groupSize(info.key)[1])
+    .id('input-layout-group-' + info.key)
     .position({ x: this.previewW * this.groupPosition(info.key).centerX - this.groupSize(info.key)[0] / 2, y: this.previewH * this.groupPosition(info.key).centerY - this.groupSize(info.key)[1] / 2 })
     .gesture(PanGesture({ fingers: 1 })
       .onActionStart((): void => {
@@ -259,6 +328,9 @@ struct InputLayoutEditor {
         this.ToggleChip('高对比白色', this.config().colorScheme === VirtualKeyColorScheme.WHITE, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.colorScheme = VirtualKeyColorScheme.WHITE; }))
       }.width('100%')
       this.SliderRow('方向大小', this.config().joystickSize, 50, 200, '#FF4CAF50', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.joystickSize = value; }))
+      if (this.config().dpadMode === DirectionControlMode.JOYSTICK) {
+        this.SliderRow('摇杆死区', this.config().joystickDeadzone, 5, 50, '#FF66BB6A', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.joystickDeadzone = value; }))
+      }
       this.SliderRow('按键大小', this.config().buttonSize, 50, 200, '#FF2196F3', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.buttonSize = value; }))
       this.SliderRow('方向透明', this.config().joystickTransparency, 0, 100, '#FF4CAF50', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.joystickTransparency = value; }))
       this.SliderRow('按键透明', this.config().transparency, 0, 100, '#FF2196F3', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.transparency = value; }))
@@ -284,16 +356,34 @@ struct InputLayoutEditor {
     .position({ x: 16, y: 64 }).id('vintage-layout-config')
   }
 
+  @Builder
+  private DirectionModeSwitch() {
+    Row({ space: 4 }) {
+      this.ToggleChip('十字键', this.config().dpadMode === DirectionControlMode.DPAD,
+        (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.dpadMode = DirectionControlMode.DPAD; }))
+      this.ToggleChip('摇杆', this.config().dpadMode === DirectionControlMode.JOYSTICK,
+        (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.dpadMode = DirectionControlMode.JOYSTICK; }))
+    }
+    .padding(4).backgroundColor('#A6111111').borderRadius(18).border({ width: 1, color: '#33FFFFFF' })
+    .position({ x: 16, y: 14 }).id('input-layout-direction-mode')
+  }
+
   build() {
     Stack() {
       Column().width('100%').height('100%').backgroundColor('#FF1A1A2E')
-      VirtualInputOverlay({ profile: this.profile, interactive: false, hideToolbar: true })
-        .width('100%').height('100%').hitTestBehavior(HitTestMode.None)
+      // ArkUI keeps a custom component instance alive even when nested fields
+      // inside an object-valued @Prop are replaced. Key the editor-only preview
+      // by revision so the rendered control and its drag handle stay aligned.
+      ForEach([this.previewRevision], (_revision: number): void => {
+        VirtualInputOverlay({ profile: this.profile, renderRevision: this.previewRevision, interactive: false, hideToolbar: true })
+          .width('100%').height('100%').hitTestBehavior(HitTestMode.None)
+      }, (revision: number): string => revision.toString())
       if (this.previewW > 0) {
         ForEach(this.groups, (info: GroupDisplayInfo): void => this.DragHandle(info), (info: GroupDisplayInfo): string => info.key)
       }
       Text(this.isPortrait ? '竖屏布局' : '横屏布局').fontSize(11).fontColor('#FFFFFF66').padding({ left: 8, right: 8, top: 4, bottom: 4 })
-        .backgroundColor('#44000000').borderRadius(4).position({ x: 8, y: 8 }).id('vintage-layout-mode')
+        .backgroundColor('#44000000').borderRadius(4).position({ x: 16, y: 58 }).id('vintage-layout-mode')
+      this.DirectionModeSwitch()
       Row({ space: 10 }) {
         ForEach(this.groups, (info: GroupDisplayInfo): void => {
           Row({ space: 4 }) {
@@ -304,7 +394,7 @@ struct InputLayoutEditor {
         }, (info: GroupDisplayInfo): string => info.key)
       }.position({ x: '50%', y: '100%' }).translate({ x: '-50%', y: -36 })
       Row({ space: 8 }) {
-        this.FloatingButton('✕', '#FFFF5252', (): void => { router.back(); }, 'input-layout-back')
+        this.FloatingButton('✕', '#FFFF5252', (): void => { this.finishEditor(); }, 'input-layout-back')
         this.FloatingButton('↺', '#FFFFB74D', (): void => { this.reset(); }, 'input-layout-reset')
         this.FloatingButton('⊞', '#FF64B5F6', (): void => { this.showConfig = !this.showConfig; }, 'input-layout-config')
         this.FloatingButton('✓', '#FF81C784', () => { this.save(); }, 'input-layout-save')
