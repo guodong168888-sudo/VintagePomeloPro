@@ -10,6 +10,7 @@ import {
   GamepadButtonMapping,
   FreeButtonsConfig,
   InputProfile,
+  RightJoystickOutputMode,
   VirtualGamepadLayout,
   VirtualKeyConfig,
   VirtualKeyColorScheme,
@@ -23,7 +24,7 @@ import { VirtualInputOverlay } from '../components/VirtualInputOverlay';
 import { InputProfileService } from '../service/InputProfileService';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 
-type ButtonGroupKey = 'direction' | 'leftTrigger' | 'leftBumper' | 'action' |
+type ButtonGroupKey = 'direction' | 'leftTrigger' | 'leftBumper' | 'camera' | 'action' |
   'rightBumper' | 'rightTrigger' | 'aux';
 
 interface GroupDisplayInfo {
@@ -68,6 +69,7 @@ struct InputLayoutEditor {
     { key: 'direction', label: '方向', color: '#4CAF50' },
     { key: 'leftTrigger', label: 'LT', color: '#FFB74D' },
     { key: 'leftBumper', label: 'LB', color: '#FFCC80' },
+    { key: 'camera', label: '视角', color: '#8BC34A' },
     { key: 'action', label: '按键', color: '#2196F3' },
     { key: 'rightBumper', label: 'RB', color: '#90CAF9' },
     { key: 'rightTrigger', label: 'RT', color: '#64B5F6' },
@@ -160,7 +162,7 @@ struct InputLayoutEditor {
     this.profile = {
       id: this.profile.id,
       name: this.profile.name,
-      schemaVersion: 3,
+      schemaVersion: 4,
       virtualKeyConfig: cloneVirtualKeyConfig(config),
       layoutLandscape: cloneGamepadLayout(landscape),
       layoutPortrait: cloneGamepadLayout(portrait, DEFAULT_GAMEPAD_LAYOUT_PORTRAIT),
@@ -176,6 +178,7 @@ struct InputLayoutEditor {
     if (key === 'direction') return layout.direction;
     if (key === 'leftTrigger') return layout.leftTrigger;
     if (key === 'leftBumper') return layout.leftBumper;
+    if (key === 'camera') return layout.camera;
     if (key === 'action') return layout.action;
     if (key === 'rightBumper') return layout.rightBumper;
     if (key === 'rightTrigger') return layout.rightTrigger;
@@ -186,6 +189,10 @@ struct InputLayoutEditor {
     const config = this.config();
     if (key === 'direction') {
       const size = 60 * config.joystickSize / 100 * 2 + 20;
+      return [size, size];
+    }
+    if (key === 'camera') {
+      const size = 55 * config.rightJoystickSize / 100 * 2;
       return [size, size];
     }
     if (key === 'action') {
@@ -208,6 +215,7 @@ struct InputLayoutEditor {
       if (key === 'direction') portrait.direction = next;
       else if (key === 'leftTrigger') portrait.leftTrigger = next;
       else if (key === 'leftBumper') portrait.leftBumper = next;
+      else if (key === 'camera') portrait.camera = next;
       else if (key === 'action') portrait.action = next;
       else if (key === 'rightBumper') portrait.rightBumper = next;
       else if (key === 'rightTrigger') portrait.rightTrigger = next;
@@ -218,6 +226,7 @@ struct InputLayoutEditor {
       if (key === 'direction') landscape.direction = next;
       else if (key === 'leftTrigger') landscape.leftTrigger = next;
       else if (key === 'leftBumper') landscape.leftBumper = next;
+      else if (key === 'camera') landscape.camera = next;
       else if (key === 'action') landscape.action = next;
       else if (key === 'rightBumper') landscape.rightBumper = next;
       else if (key === 'rightTrigger') landscape.rightTrigger = next;
@@ -331,6 +340,27 @@ struct InputLayoutEditor {
       if (this.config().dpadMode === DirectionControlMode.JOYSTICK) {
         this.SliderRow('摇杆死区', this.config().joystickDeadzone, 5, 50, '#FF66BB6A', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.joystickDeadzone = value; }))
       }
+      Text('右摇杆视角').fontSize(11).fontColor('#FFFFFFAA').width('100%')
+      Row({ space: 8 }) {
+        this.ToggleChip('显示右摇杆', this.config().showRightJoystick,
+          (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showRightJoystick = !config.showRightJoystick; }))
+      }.width('100%')
+      if (this.config().showRightJoystick) {
+        Row({ space: 8 }) {
+          this.ToggleChip('鼠标视角', this.config().rightJoystickOutputMode === RightJoystickOutputMode.MOUSE,
+            (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.rightJoystickOutputMode = RightJoystickOutputMode.MOUSE; }))
+          this.ToggleChip('四向按键', this.config().rightJoystickOutputMode === RightJoystickOutputMode.KEYS,
+            (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.rightJoystickOutputMode = RightJoystickOutputMode.KEYS; }))
+        }.width('100%')
+        this.SliderRow('右摇杆大小', this.config().rightJoystickSize, 60, 200, '#FF8BC34A',
+          (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.rightJoystickSize = value; }))
+        this.SliderRow('右摇杆死区', this.config().rightJoystickDeadzone, 0, 50, '#FF9CCC65',
+          (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.rightJoystickDeadzone = value; }))
+        if (this.config().rightJoystickOutputMode === RightJoystickOutputMode.MOUSE) {
+          this.SliderRow('视角灵敏度', this.config().rightJoystickSensitivity, 25, 300, '#FFAED581',
+            (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.rightJoystickSensitivity = value; }))
+        }
+      }
       this.SliderRow('按键大小', this.config().buttonSize, 50, 200, '#FF2196F3', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.buttonSize = value; }))
       this.SliderRow('方向透明', this.config().joystickTransparency, 0, 100, '#FF4CAF50', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.joystickTransparency = value; }))
       this.SliderRow('按键透明', this.config().transparency, 0, 100, '#FF2196F3', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.transparency = value; }))
@@ -353,7 +383,7 @@ struct InputLayoutEditor {
       }.width('100%')
     }
     .width(260).padding(14).backgroundColor('#EE111111').borderRadius(14).border({ width: 1, color: '#44FFFFFF' })
-    .position({ x: 16, y: 64 }).id('vintage-layout-config')
+    .position({ x: 16, y: 64 }).zIndex(100).id('vintage-layout-config')
   }
 
   @Builder

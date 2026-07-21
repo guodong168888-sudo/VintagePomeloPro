@@ -231,6 +231,11 @@ export enum VirtualKeyColorScheme {
   WHITE = 'white'
 }
 
+export enum RightJoystickOutputMode {
+  MOUSE = 'mouse',
+  KEYS = 'keys'
+}
+
 export interface VirtualKeyConfig {
   transparency: number;
   joystickTransparency: number;
@@ -247,6 +252,11 @@ export interface VirtualKeyConfig {
   showButtonCtrl: boolean;
   joystickDeadzone: number;
   eightDirectionJoystick: boolean;
+  showRightJoystick: boolean;
+  rightJoystickSize: number;
+  rightJoystickDeadzone: number;
+  rightJoystickSensitivity: number;
+  rightJoystickOutputMode: RightJoystickOutputMode;
   dpadMode: DirectionControlMode;
   colorScheme: VirtualKeyColorScheme;
 }
@@ -256,6 +266,10 @@ export enum VirtualKey {
   DPAD_DOWN = 'dpad_down',
   DPAD_LEFT = 'dpad_left',
   DPAD_RIGHT = 'dpad_right',
+  RIGHT_STICK_UP = 'right_stick_up',
+  RIGHT_STICK_DOWN = 'right_stick_down',
+  RIGHT_STICK_LEFT = 'right_stick_left',
+  RIGHT_STICK_RIGHT = 'right_stick_right',
   BUTTON_A = 'button_a',
   BUTTON_B = 'button_b',
   BUTTON_X = 'button_x',
@@ -287,6 +301,7 @@ export interface VirtualGamepadLayout {
   leftTrigger: ButtonGroupPosition;
   leftBumper: ButtonGroupPosition;
   action: ButtonGroupPosition;
+  camera: ButtonGroupPosition;
   rightBumper: ButtonGroupPosition;
   rightTrigger: ButtonGroupPosition;
   aux: ButtonGroupPosition;
@@ -389,7 +404,8 @@ export const DEFAULT_GAMEPAD_LAYOUT: VirtualGamepadLayout = {
   direction: { centerX: 0.13, centerY: 0.70 },
   leftTrigger: { centerX: 0.075, centerY: 0.45 },
   leftBumper: { centerX: 0.16, centerY: 0.45 },
-  action: { centerX: 0.87, centerY: 0.70 },
+  action: { centerX: 0.88, centerY: 0.65 },
+  camera: { centerX: 0.70, centerY: 0.78 },
   rightBumper: { centerX: 0.84, centerY: 0.45 },
   rightTrigger: { centerX: 0.925, centerY: 0.45 },
   aux: { centerX: 0.50, centerY: 0.10 }
@@ -399,7 +415,8 @@ export const DEFAULT_GAMEPAD_LAYOUT_PORTRAIT: VirtualGamepadLayout = {
   direction: { centerX: 0.16, centerY: 0.83 },
   leftTrigger: { centerX: 0.09, centerY: 0.66 },
   leftBumper: { centerX: 0.23, centerY: 0.66 },
-  action: { centerX: 0.84, centerY: 0.81 },
+  action: { centerX: 0.84, centerY: 0.77 },
+  camera: { centerX: 0.60, centerY: 0.87 },
   rightBumper: { centerX: 0.77, centerY: 0.66 },
   rightTrigger: { centerX: 0.91, centerY: 0.66 },
   aux: { centerX: 0.50, centerY: 0.65 }
@@ -421,6 +438,11 @@ export const DEFAULT_VIRTUAL_KEY_CONFIG: VirtualKeyConfig = {
   showButtonCtrl: true,
   joystickDeadzone: 15,
   eightDirectionJoystick: true,
+  showRightJoystick: true,
+  rightJoystickSize: 100,
+  rightJoystickDeadzone: 12,
+  rightJoystickSensitivity: 100,
+  rightJoystickOutputMode: RightJoystickOutputMode.MOUSE,
   dpadMode: DirectionControlMode.DPAD,
   colorScheme: VirtualKeyColorScheme.DEFAULT
 };
@@ -442,6 +464,13 @@ export function cloneVirtualKeyConfig(config: VirtualKeyConfig): VirtualKeyConfi
     showButtonCtrl: config.showButtonCtrl ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonCtrl,
     joystickDeadzone: config.joystickDeadzone ?? DEFAULT_VIRTUAL_KEY_CONFIG.joystickDeadzone,
     eightDirectionJoystick: config.eightDirectionJoystick ?? DEFAULT_VIRTUAL_KEY_CONFIG.eightDirectionJoystick,
+    showRightJoystick: config.showRightJoystick ?? DEFAULT_VIRTUAL_KEY_CONFIG.showRightJoystick,
+    // Profiles saved before schema v4 had one joystick scale. Reuse it when
+    // introducing the right stick so upgraded layouts keep balanced controls.
+    rightJoystickSize: config.rightJoystickSize ?? config.joystickSize ?? DEFAULT_VIRTUAL_KEY_CONFIG.rightJoystickSize,
+    rightJoystickDeadzone: config.rightJoystickDeadzone ?? DEFAULT_VIRTUAL_KEY_CONFIG.rightJoystickDeadzone,
+    rightJoystickSensitivity: config.rightJoystickSensitivity ?? DEFAULT_VIRTUAL_KEY_CONFIG.rightJoystickSensitivity,
+    rightJoystickOutputMode: config.rightJoystickOutputMode ?? DEFAULT_VIRTUAL_KEY_CONFIG.rightJoystickOutputMode,
     dpadMode: config.dpadMode ?? DEFAULT_VIRTUAL_KEY_CONFIG.dpadMode,
     colorScheme: config.colorScheme ?? DEFAULT_VIRTUAL_KEY_CONFIG.colorScheme
   };
@@ -454,6 +483,7 @@ export function cloneGamepadLayout(layout: VirtualGamepadLayout,
     leftTrigger: { centerX: layout.leftTrigger?.centerX ?? defaults.leftTrigger.centerX, centerY: layout.leftTrigger?.centerY ?? defaults.leftTrigger.centerY },
     leftBumper: { centerX: layout.leftBumper?.centerX ?? defaults.leftBumper.centerX, centerY: layout.leftBumper?.centerY ?? defaults.leftBumper.centerY },
     action: { centerX: layout.action?.centerX ?? defaults.action.centerX, centerY: layout.action?.centerY ?? defaults.action.centerY },
+    camera: { centerX: layout.camera?.centerX ?? defaults.camera.centerX, centerY: layout.camera?.centerY ?? defaults.camera.centerY },
     rightBumper: { centerX: layout.rightBumper?.centerX ?? defaults.rightBumper.centerX, centerY: layout.rightBumper?.centerY ?? defaults.rightBumper.centerY },
     rightTrigger: { centerX: layout.rightTrigger?.centerX ?? defaults.rightTrigger.centerX, centerY: layout.rightTrigger?.centerY ?? defaults.rightTrigger.centerY },
     aux: { centerX: layout.aux?.centerX ?? defaults.aux.centerX, centerY: layout.aux?.centerY ?? defaults.aux.centerY }
@@ -521,7 +551,7 @@ export function createDefaultInputProfile(): InputProfile {
   return {
     id: 'default',
     name: 'Vintage 默认手柄布局',
-    schemaVersion: 3,
+    schemaVersion: 4,
     virtualKeyConfig: cloneVirtualKeyConfig(DEFAULT_VIRTUAL_KEY_CONFIG),
     layoutLandscape: cloneGamepadLayout(DEFAULT_GAMEPAD_LAYOUT),
     layoutPortrait: cloneGamepadLayout(DEFAULT_GAMEPAD_LAYOUT_PORTRAIT, DEFAULT_GAMEPAD_LAYOUT_PORTRAIT),
@@ -530,6 +560,10 @@ export function createDefaultInputProfile(): InputProfile {
       { virtualKey: VirtualKey.DPAD_DOWN, evdevCode: 108, keyLabel: '↓' },
       { virtualKey: VirtualKey.DPAD_LEFT, evdevCode: 105, keyLabel: '←' },
       { virtualKey: VirtualKey.DPAD_RIGHT, evdevCode: 106, keyLabel: '→' },
+      { virtualKey: VirtualKey.RIGHT_STICK_UP, evdevCode: 23, keyLabel: 'I' },
+      { virtualKey: VirtualKey.RIGHT_STICK_DOWN, evdevCode: 37, keyLabel: 'K' },
+      { virtualKey: VirtualKey.RIGHT_STICK_LEFT, evdevCode: 36, keyLabel: 'J' },
+      { virtualKey: VirtualKey.RIGHT_STICK_RIGHT, evdevCode: 38, keyLabel: 'L' },
       { virtualKey: VirtualKey.BUTTON_A, evdevCode: 57, keyLabel: 'Space' },
       { virtualKey: VirtualKey.BUTTON_B, evdevCode: 45, keyLabel: 'X' },
       { virtualKey: VirtualKey.BUTTON_X, evdevCode: 30, keyLabel: 'A' },

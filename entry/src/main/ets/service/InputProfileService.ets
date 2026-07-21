@@ -3,6 +3,7 @@ import { common } from '@kit.AbilityKit';
 import {
   GamepadButtonMapping,
   InputProfile,
+  VirtualKey,
   VirtualKeyMapping,
   cloneFreeButtonsConfig,
   cloneGamepadLayout,
@@ -13,7 +14,7 @@ import {
 
 const STORE_NAME = 'vintage_pomelo_input_profiles';
 const PROFILES_KEY = 'profiles_v2';
-const INPUT_PROFILE_SCHEMA_VERSION = 3;
+const INPUT_PROFILE_SCHEMA_VERSION = 4;
 
 /**
  * Persists the VintagePomelo-compatible grouped layout contract.  Version one
@@ -39,12 +40,11 @@ export class InputProfileService {
       virtualKeyConfig: cloneVirtualKeyConfig(profile.virtualKeyConfig ?? defaults.virtualKeyConfig),
       layoutLandscape: cloneGamepadLayout(profile.layoutLandscape ?? defaults.layoutLandscape),
       layoutPortrait: cloneGamepadLayout(profile.layoutPortrait ?? defaults.layoutPortrait, DEFAULT_GAMEPAD_LAYOUT_PORTRAIT),
-      virtualKeyMappings: (profile.virtualKeyMappings ?? defaults.virtualKeyMappings)
-        .map((mapping: VirtualKeyMapping): VirtualKeyMapping => ({
-          virtualKey: mapping.virtualKey,
-          evdevCode: mapping.evdevCode,
-          keyLabel: mapping.keyLabel
-        })),
+      virtualKeyMappings: defaults.virtualKeyMappings.map((defaultMapping: VirtualKeyMapping): VirtualKeyMapping => {
+        const saved = (profile.virtualKeyMappings ?? []).find((mapping: VirtualKeyMapping): boolean =>
+          mapping.virtualKey === defaultMapping.virtualKey) ?? defaultMapping;
+        return { virtualKey: saved.virtualKey, evdevCode: saved.evdevCode, keyLabel: saved.keyLabel };
+      }),
       gamepadMappings: (profile.gamepadMappings ?? defaults.gamepadMappings)
         .map((mapping: GamepadButtonMapping): GamepadButtonMapping => ({
           id: mapping.id,
@@ -73,10 +73,15 @@ export class InputProfileService {
     let changed = false;
     this.profiles.forEach((value: InputProfile, id: string): void => {
       if (value.schemaVersion !== INPUT_PROFILE_SCHEMA_VERSION ||
+        !value.layoutLandscape.camera || !value.layoutPortrait.camera ||
+        value.virtualKeyConfig.showRightJoystick === undefined ||
+        value.virtualKeyConfig.rightJoystickOutputMode === undefined ||
+        !(value.virtualKeyMappings ?? []).some((mapping: VirtualKeyMapping): boolean =>
+          mapping.virtualKey === VirtualKey.RIGHT_STICK_UP) ||
         !value.layoutLandscape.leftTrigger || !value.layoutLandscape.leftBumper ||
         !value.layoutLandscape.rightBumper || !value.layoutLandscape.rightTrigger) {
-        // Version three separates all four shoulder controls while retaining
-        // every existing direction/action/aux position and key mapping.
+        // Version four adds an independently configurable camera joystick while
+        // retaining every existing control position and key mapping.
         this.profiles.set(id, this.cloneProfile(value));
         changed = true;
       }

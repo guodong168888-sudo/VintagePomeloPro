@@ -3,11 +3,18 @@ import { chooseCoverFileName, chooseExecutablePath } from '../main/ets/model/App
 import {
   AppSource,
   ControlBarDirection,
+  DEFAULT_GAMEPAD_LAYOUT,
+  DEFAULT_VIRTUAL_KEY_CONFIG,
   DEFAULT_VIRTUAL_MOUSE_CONFIG,
   DisplayMode,
   EngineState,
+  RightJoystickOutputMode,
+  VirtualGamepadLayout,
   VirtualKey,
+  VirtualKeyConfig,
   canTransitionEngineState,
+  cloneGamepadLayout,
+  cloneVirtualKeyConfig,
   cloneVirtualMouseConfig,
   createDefaultGlobalSettings,
   createDefaultInputProfile,
@@ -80,6 +87,42 @@ export default function localUnitTest() {
       expect(layout.rightTrigger.centerX > 0.5).assertTrue();
       expect(layout.leftTrigger.centerY < layout.direction.centerY).assertTrue();
       expect(layout.rightTrigger.centerY < layout.action.centerY).assertTrue();
+    });
+
+    it('placesIndependentRightJoystickBesideTheActionButtons', 0, () => {
+      const profile = createDefaultInputProfile();
+      const layout = profile.layoutLandscape;
+      expect(profile.virtualKeyConfig.showRightJoystick).assertTrue();
+      expect(profile.virtualKeyConfig.rightJoystickSize).assertEqual(100);
+      expect(profile.virtualKeyConfig.rightJoystickDeadzone).assertEqual(12);
+      expect(profile.virtualKeyConfig.rightJoystickSensitivity).assertEqual(100);
+      expect(profile.virtualKeyConfig.rightJoystickOutputMode).assertEqual(RightJoystickOutputMode.MOUSE);
+      expect(resolveVirtualKeyMapping(profile.virtualKeyMappings, VirtualKey.RIGHT_STICK_UP, 0)).assertEqual(23);
+      expect(resolveVirtualKeyMapping(profile.virtualKeyMappings, VirtualKey.RIGHT_STICK_DOWN, 0)).assertEqual(37);
+      expect(resolveVirtualKeyMapping(profile.virtualKeyMappings, VirtualKey.RIGHT_STICK_LEFT, 0)).assertEqual(36);
+      expect(resolveVirtualKeyMapping(profile.virtualKeyMappings, VirtualKey.RIGHT_STICK_RIGHT, 0)).assertEqual(38);
+      expect(layout.camera.centerX > 0.5).assertTrue();
+      expect(layout.camera.centerX < layout.action.centerX).assertTrue();
+      expect(layout.camera.centerY > layout.action.centerY).assertTrue();
+    });
+
+    it('migratesSavedProfilesWithRightJoystickDefaults', 0, () => {
+      const legacyConfig = cloneVirtualKeyConfig(JSON.parse('{"transparency":40,"joystickTransparency":50,' +
+        '"joystickSize":175,"buttonSize":100,"showButtonA":true,"showButtonB":true,"showButtonX":true,' +
+        '"showButtonY":true,"showButtonL":true,"showButtonR":true,"showButtonMenu":true,' +
+        '"showButtonShift":true,"showButtonCtrl":true,"joystickDeadzone":15,"eightDirectionJoystick":true,' +
+        '"dpadMode":"dpad","colorScheme":"default"}') as VirtualKeyConfig);
+      const legacyLayout = cloneGamepadLayout(JSON.parse('{"direction":{"centerX":0.13,"centerY":0.7},' +
+        '"leftTrigger":{"centerX":0.075,"centerY":0.45},"leftBumper":{"centerX":0.16,"centerY":0.45},' +
+        '"action":{"centerX":0.88,"centerY":0.65},"rightBumper":{"centerX":0.84,"centerY":0.45},' +
+        '"rightTrigger":{"centerX":0.925,"centerY":0.45},"aux":{"centerX":0.5,"centerY":0.1}}') as VirtualGamepadLayout);
+      expect(legacyConfig.showRightJoystick).assertTrue();
+      expect(legacyConfig.rightJoystickSize).assertEqual(175);
+      expect(legacyConfig.rightJoystickSensitivity).assertEqual(100);
+      expect(legacyConfig.rightJoystickOutputMode).assertEqual(RightJoystickOutputMode.MOUSE);
+      expect(legacyLayout.camera.centerX).assertEqual(DEFAULT_GAMEPAD_LAYOUT.camera.centerX);
+      legacyLayout.camera.centerX = 0.62;
+      expect(DEFAULT_GAMEPAD_LAYOUT.camera.centerX).assertEqual(0.70);
     });
 
     it('usesVintageControlBarAndFullScreenMouseDefaults', 0, () => {

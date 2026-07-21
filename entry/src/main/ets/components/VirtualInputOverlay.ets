@@ -6,6 +6,7 @@ import {
   FreeButtonLayoutMode,
   GamepadButtonMapping,
   InputProfile,
+  RightJoystickOutputMode,
   VirtualKey,
   VirtualKeyColorScheme,
   VirtualKeyMapping,
@@ -53,9 +54,9 @@ function cloneInputProfile(profile: InputProfile): InputProfile {
 
 /**
  * Wine adapter of VintagePomelo's VirtualGamepad overlay.  Its layout contract
- * is intentionally group based: direction, action and auxiliary.  Individual
- * control coordinates are not supported, so a d-pad and joystick cannot be
- * displayed together.
+ * is intentionally group based: direction, camera, action and auxiliary.
+ * Individual button coordinates are not supported. The left d-pad/joystick
+ * remains mutually exclusive while the right camera joystick is independent.
  */
 @Component
 export struct VirtualInputOverlay {
@@ -82,6 +83,13 @@ export struct VirtualInputOverlay {
   @State private joystickActive: boolean = false;
   @State private joystickX: number = 0;
   @State private joystickY: number = 0;
+  @State private rightJoystickActive: boolean = false;
+  @State private rightJoystickX: number = 0;
+  @State private rightJoystickY: number = 0;
+  @State private rightStickUp: boolean = false;
+  @State private rightStickDown: boolean = false;
+  @State private rightStickLeft: boolean = false;
+  @State private rightStickRight: boolean = false;
   @State private dpadUp: boolean = false;
   @State private dpadDown: boolean = false;
   @State private dpadLeft: boolean = false;
@@ -99,6 +107,11 @@ export struct VirtualInputOverlay {
   private joystickTouchId: number = -1;
   private joystickCenterX: number = 0;
   private joystickCenterY: number = 0;
+  private rightJoystickTouchId: number = -1;
+  private rightJoystickCenterX: number = 0;
+  private rightJoystickCenterY: number = 0;
+  private rightJoystickLastX: number = 0;
+  private rightJoystickLastY: number = 0;
   private dpadTouchId: number = -1;
   private activeFreeTouches: Map<string, number> = new Map<string, number>();
   private activeActionMouseKey: VirtualKey | null = null;
@@ -142,6 +155,22 @@ export struct VirtualInputOverlay {
 
   private directionSize(): number {
     return this.joystickRadius() * 2 + 20;
+  }
+
+  private rightJoystickRadius(): number {
+    return 55 * this.config().rightJoystickSize / 100;
+  }
+
+  private rightJoystickSize(): number {
+    return this.rightJoystickRadius() * 2;
+  }
+
+  private rightJoystickKnobSize(): number {
+    return 44 * this.config().rightJoystickSize / 100;
+  }
+
+  private rightJoystickMaxOffset(): number {
+    return Math.max(0, this.rightJoystickRadius() - this.rightJoystickKnobSize() / 2);
   }
 
   private actionWidth(): number {
@@ -266,6 +295,7 @@ export struct VirtualInputOverlay {
   private onControlsVisibleChanged(): void {
     this.controlsVisibleVisual = this.controlsVisible;
     if (this.controlsVisible) return;
+    this.releaseRightJoystickInteraction();
     this.activeButtonTouches.clear();
     this.activeFreeTouches.clear();
     this.joystickTouchId = -1;
@@ -289,6 +319,7 @@ export struct VirtualInputOverlay {
 
   aboutToDisappear(): void {
     this.cancelToolbarAutoHide();
+    this.releaseRightJoystickInteraction();
   }
 
   private toolbarOriginX(): number {
@@ -490,6 +521,10 @@ export struct VirtualInputOverlay {
       case VirtualKey.BUTTON_A: return 57;
       case VirtualKey.BUTTON_B: return 45;
       case VirtualKey.BUTTON_MENU: return 1;
+      case VirtualKey.RIGHT_STICK_UP: return 23;
+      case VirtualKey.RIGHT_STICK_DOWN: return 37;
+      case VirtualKey.RIGHT_STICK_LEFT: return 36;
+      case VirtualKey.RIGHT_STICK_RIGHT: return 38;
       default: return 0;
     }
   }
@@ -597,6 +632,9 @@ export struct VirtualInputOverlay {
     } else if (this.joystickTouchId === touch.id) {
       this.handleJoystickTouch(event);
       claimed = true;
+    } else if (this.rightJoystickTouchId === touch.id) {
+      this.handleRightJoystickTouch(event);
+      claimed = true;
     } else if (this.activeButtonForTouch(touch.id)) {
       this.lastActionTouchAt = Date.now();
       const active = this.activeButtonForTouch(touch.id);
@@ -613,6 +651,9 @@ export struct VirtualInputOverlay {
       if (target) {
         this.lastActionTouchAt = Date.now();
         this.handleButtonTouch(event, target[0], target[1]);
+        claimed = true;
+      } else if (event.type === TouchType.Down && this.isRightJoystickHit(x, y)) {
+        this.handleRightJoystickTouch(event);
         claimed = true;
       }
     }
@@ -803,6 +844,125 @@ export struct VirtualInputOverlay {
     }
   }
 
+  private rightJoystickSource(touchId: number): string {
+    return 'right-joystick-' + touchId;
+  }
+
+  private isRightJoystickHit(x: number, y: number): boolean {
+    if (!this.config().showRightJoystick) return false;
+    const centerX = this.overlayW * this.layout().camera.centerX;
+    const centerY = this.overlayH * this.layout().camera.centerY;
+    const radius = this.rightJoystickRadius() + 12;
+    const dx = x - centerX;
+    const dy = y - centerY;
+    return dx * dx + dy * dy <= radius * radius;
+  }
+
+  private releaseRightJoystickInteraction(): void {
+    if (this.rightJoystickTouchId >= 0) {
+      this.releaseRightDirections(this.rightJoystickTouchId);
+      InputDispatcher.getInstance().releaseSource(this.rightJoystickSource(this.rightJoystickTouchId));
+    }
+    this.rightJoystickTouchId = -1;
+    this.rightJoystickActive = false;
+    this.rightJoystickX = 0;
+    this.rightJoystickY = 0;
+    this.rightStickUp = false;
+    this.rightStickDown = false;
+    this.rightStickLeft = false;
+    this.rightStickRight = false;
+  }
+
+  private setRightDirection(key: VirtualKey, name: DirectionName, fallback: number,
+    pressed: boolean, touchId: number): void {
+    const previous = name === 'up' ? this.rightStickUp : name === 'down' ? this.rightStickDown :
+      name === 'left' ? this.rightStickLeft : this.rightStickRight;
+    if (previous === pressed) return;
+    if (name === 'up') this.rightStickUp = pressed;
+    if (name === 'down') this.rightStickDown = pressed;
+    if (name === 'left') this.rightStickLeft = pressed;
+    if (name === 'right') this.rightStickRight = pressed;
+    this.setPressed(key, pressed);
+    if (pressed) this.pressVirtualKey(key, fallback, touchId, 'right-joystick');
+    else this.releaseVirtualKey(key, fallback, touchId, 'right-joystick');
+  }
+
+  private applyRightDirection(up: boolean, down: boolean, left: boolean, right: boolean, touchId: number): void {
+    this.setRightDirection(VirtualKey.RIGHT_STICK_UP, 'up', 23, up, touchId);
+    this.setRightDirection(VirtualKey.RIGHT_STICK_DOWN, 'down', 37, down, touchId);
+    this.setRightDirection(VirtualKey.RIGHT_STICK_LEFT, 'left', 36, left, touchId);
+    this.setRightDirection(VirtualKey.RIGHT_STICK_RIGHT, 'right', 38, right, touchId);
+  }
+
+  private releaseRightDirections(touchId: number): void {
+    this.applyRightDirection(false, false, false, false, touchId);
+  }
+
+  /** Right analog stick adapted from VintagePomelo's camera-look control. */
+  private handleRightJoystickTouch(event: TouchEvent): void {
+    if (!this.interactive) return;
+    event.stopPropagation();
+    if (event.type === TouchType.Down && event.changedTouches.length > 0 && this.rightJoystickTouchId < 0) {
+      const touch = event.changedTouches[0];
+      this.rightJoystickTouchId = touch.id;
+      this.rightJoystickCenterX = Number(touch.x);
+      this.rightJoystickCenterY = Number(touch.y);
+      this.rightJoystickLastX = Number(touch.x);
+      this.rightJoystickLastY = Number(touch.y);
+      this.rightJoystickActive = true;
+      this.rightJoystickX = 0;
+      this.rightJoystickY = 0;
+      return;
+    }
+    if (event.type === TouchType.Move && this.rightJoystickTouchId >= 0) {
+      for (let index = 0; index < event.touches.length; index++) {
+        const touch = event.touches[index];
+        if (touch.id !== this.rightJoystickTouchId) continue;
+        const currentX = Number(touch.x);
+        const currentY = Number(touch.y);
+        const rawX = currentX - this.rightJoystickCenterX;
+        const rawY = currentY - this.rightJoystickCenterY;
+        const distance = Math.sqrt(rawX * rawX + rawY * rawY);
+        const maxOffset = this.rightJoystickMaxOffset();
+        if (distance > maxOffset && distance > 0) {
+          this.rightJoystickX = rawX * maxOffset / distance;
+          this.rightJoystickY = rawY * maxOffset / distance;
+        } else {
+          this.rightJoystickX = rawX;
+          this.rightJoystickY = rawY;
+        }
+
+        const deltaX = currentX - this.rightJoystickLastX;
+        const deltaY = currentY - this.rightJoystickLastY;
+        this.rightJoystickLastX = currentX;
+        this.rightJoystickLastY = currentY;
+        const deadzone = this.rightJoystickRadius() * this.config().rightJoystickDeadzone / 100;
+        if (this.config().rightJoystickOutputMode === RightJoystickOutputMode.KEYS) {
+          const direction = resolveVirtualJoystickDirection(rawX, rawY, this.rightJoystickRadius(),
+            this.config().rightJoystickDeadzone, true);
+          this.applyRightDirection(direction.up, direction.down, direction.left, direction.right,
+            this.rightJoystickTouchId);
+        } else if (distance > deadzone && (deltaX !== 0 || deltaY !== 0)) {
+          this.releaseRightDirections(this.rightJoystickTouchId);
+          const sensitivity = Math.max(0.25, Math.min(3, this.config().rightJoystickSensitivity / 100));
+          const ui = this.getUIContext();
+          InputDispatcher.getInstance().pointerDelta(this.rightJoystickSource(this.rightJoystickTouchId),
+            ui.vp2px(deltaX) * sensitivity, ui.vp2px(deltaY) * sensitivity);
+        }
+        break;
+      }
+      return;
+    }
+    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+      for (let index = 0; index < event.changedTouches.length; index++) {
+        if (event.changedTouches[index].id === this.rightJoystickTouchId) {
+          this.releaseRightJoystickInteraction();
+          break;
+        }
+      }
+    }
+  }
+
   private updateDpad(event: TouchEvent): void {
     for (let index = 0; index < event.touches.length; index++) {
       const touch = event.touches[index];
@@ -906,6 +1066,42 @@ export struct VirtualInputOverlay {
     .width(this.directionSize()).height(this.directionSize())
     .hitTestBehavior(HitTestMode.None)
     .position(this.groupPosition(this.layout().direction.centerX, this.layout().direction.centerY, this.directionSize(), this.directionSize()))
+  }
+
+  @Builder
+  private RightJoystickGroup() {
+    if (this.config().showRightJoystick) {
+      Stack() {
+        Circle().width(this.rightJoystickSize()).height(this.rightJoystickSize()).fill('#16000000')
+          .stroke(this.outlineBackdropColor()).strokeWidth(4)
+          .opacity(this.visibleOpacity(this.config().joystickTransparency))
+          .shadow({ radius: 5, color: '#88000000' })
+        Circle().width(this.rightJoystickSize() - 4).height(this.rightJoystickSize() - 4).fill('#00000000')
+          .stroke('#FF8BC34A').strokeWidth(2)
+          .opacity(this.visibleOpacity(this.config().joystickTransparency))
+        ForEach([0, 90, 180, 270], (angle: number): void => {
+          Line().width(10).height(2).backgroundColor('#FF8BC34A')
+            .opacity(this.visibleOpacity(this.config().joystickTransparency) * 0.6)
+            .rotate({ angle: angle })
+            .position({
+              x: this.rightJoystickRadius() + Math.cos(angle * Math.PI / 180) * (this.rightJoystickRadius() - 8) - 5,
+              y: this.rightJoystickRadius() + Math.sin(angle * Math.PI / 180) * (this.rightJoystickRadius() - 8) - 1
+            })
+        }, (angle: number): string => angle.toString())
+        Circle().width(6).height(6).fill('#B38BC34A')
+          .opacity(this.visibleOpacity(this.config().joystickTransparency) * 0.7)
+        Circle().width(this.rightJoystickKnobSize()).height(this.rightJoystickKnobSize())
+          .fill(this.rightJoystickActive ? '#738BC34A' : '#428BC34A')
+          .stroke('#FF8BC34A').strokeWidth(1.5)
+          .opacity(this.visibleOpacity(this.config().joystickTransparency) * (this.rightJoystickActive ? 1 : 0.8))
+          .shadow({ radius: 4, color: '#66000000' })
+          .translate({ x: this.rightJoystickX, y: this.rightJoystickY })
+      }
+      .width(this.rightJoystickSize()).height(this.rightJoystickSize())
+      .hitTestBehavior(HitTestMode.None).id('wine-vintage-right-joystick')
+      .position(this.groupPosition(this.layout().camera.centerX, this.layout().camera.centerY,
+        this.rightJoystickSize(), this.rightJoystickSize()))
+    }
   }
 
   @Builder
@@ -1163,6 +1359,7 @@ export struct VirtualInputOverlay {
           this.FreeButtonGroup()
         } else {
           this.DirectionGroup()
+          this.RightJoystickGroup()
           this.ShoulderGroups()
           this.ActionGroup()
           this.AuxGroup()
