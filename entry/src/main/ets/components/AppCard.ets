@@ -20,6 +20,44 @@ export struct AppCard {
     return this.resolvedDisplayMode === DisplayMode.SINGLE_APP ? '单应用' : '桌面';
   }
 
+  private showModeBadge(): boolean {
+    // Desktop is the library default and does not need to be repeated on every
+    // card. Keep the badge only for the exceptional single-app launch mode.
+    return this.resolvedDisplayMode === DisplayMode.SINGLE_APP;
+  }
+
+  private fallbackMonogram(): string {
+    const title = this.app.title.trim();
+    if (title.length === 0) return 'EXE';
+    const first = title.charAt(0).toUpperCase();
+    return first.length > 0 ? first : 'EXE';
+  }
+
+  private fallbackPalette(): number {
+    const value = this.app.id + this.app.title;
+    let hash = 0;
+    for (let index = 0; index < value.length; index++) {
+      hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+    }
+    return hash % 4;
+  }
+
+  private fallbackStartColor(): string {
+    const palette = this.fallbackPalette();
+    if (palette === 1) return '#355F69';
+    if (palette === 2) return '#565180';
+    if (palette === 3) return '#40566F';
+    return '#40577A';
+  }
+
+  private fallbackEndColor(): string {
+    const palette = this.fallbackPalette();
+    if (palette === 1) return '#4C7180';
+    if (palette === 2) return '#6D648E';
+    if (palette === 3) return '#4D756E';
+    return '#6A6284';
+  }
+
   /** Deterministic cover slices supplied with the built-in application manifest. */
   private builtinCover(): Resource {
     if (this.app.id === 'builtin-desktop') return $r('app.media.builtin_desktop');
@@ -58,6 +96,62 @@ export struct AppCard {
   }
 
   @Builder
+  private CompactBadge(text: string, color: string) {
+    Text(text)
+      .fontSize(8.5)
+      .fontWeight(FontWeight.Bold)
+      .fontColor('#FFF7FAFF')
+      .maxLines(1)
+      .padding({ left: 6, right: 6, top: 3, bottom: 3 })
+      .backgroundColor(color)
+      .border({ width: 1, color: '#24FFFFFF' })
+      .borderRadius(9)
+  }
+
+  @Builder
+  private DownloadFallback(height: number) {
+    Stack({ alignContent: Alignment.Center }) {
+      Circle()
+        .width(this.viewMode === ViewMode.COMPACT ? 96 : 190)
+        .height(this.viewMode === ViewMode.COMPACT ? 96 : 190)
+        .fill('#0FFFFFFF')
+        .position({ x: this.viewMode === ViewMode.COMPACT ? 58 : '62%', y: this.viewMode === ViewMode.COMPACT ? -34 : -62 })
+      Circle()
+        .width(this.viewMode === ViewMode.COMPACT ? 72 : 150)
+        .height(this.viewMode === ViewMode.COMPACT ? 72 : 150)
+        .fill('#0AFFFFFF')
+        .position({ x: this.viewMode === ViewMode.COMPACT ? -24 : -38, y: this.viewMode === ViewMode.COMPACT ? 60 : '58%' })
+      Column({ space: this.viewMode === ViewMode.COMPACT ? 4 : 8 }) {
+        Stack({ alignContent: Alignment.Center }) {
+          Text(this.fallbackMonogram())
+            .fontSize(this.viewMode === ViewMode.COMPACT ? 31 : 54)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#F2FFFFFF')
+        }
+        .width(this.viewMode === ViewMode.COMPACT ? 54 : 92)
+        .height(this.viewMode === ViewMode.COMPACT ? 54 : 92)
+        .backgroundColor('#24FFFFFF')
+        .border({ width: 1.5, color: '#38FFFFFF' })
+        .borderRadius(this.viewMode === ViewMode.COMPACT ? 16 : 26)
+        .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 5 })
+        if (this.viewMode !== ViewMode.COMPACT) {
+          Text('EXE')
+            .fontSize(10)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#CFF7FAFF')
+            .letterSpacing(1.2)
+        }
+      }
+    }
+    .width('100%')
+    .height(height)
+    .linearGradient({
+      angle: 142,
+      colors: [[this.fallbackStartColor(), 0], [this.fallbackEndColor(), 1]]
+    })
+  }
+
+  @Builder
   private Cover(height: number) {
     Stack({ alignContent: Alignment.BottomStart }) {
       if (this.app.coverPath.length > 0) {
@@ -73,31 +167,40 @@ export struct AppCard {
           .objectFit(ImageFit.Cover)
           .draggable(false)
       } else {
-        Column({ space: 8 }) {
-          Text('Windows 程序')
-            .fontSize(15).fontWeight(FontWeight.Bold).fontColor('#FFF8FAFF')
-            .padding({ left: 13, right: 13, top: 8, bottom: 8 })
-            .backgroundColor('#2CFFFFFF').borderRadius(16)
-          Text('Download / games').fontSize(11).fontColor('#E3F0FAFF')
-        }
-        .width('100%')
-        .height(height)
-        .justifyContent(FlexAlign.Center)
-        .linearGradient({ angle: 140, colors: [['#3952B8', 0], ['#257FC8', 0.52], ['#168E83', 1]] })
+        this.DownloadFallback(height)
       }
 
-      Row({ space: 5 }) {
-        this.Badge(this.app.source === AppSource.BUILTIN ? '内建' : 'Download',
-          this.app.source === AppSource.BUILTIN ? '#DE2979B8' : '#DE2C7B64')
-        this.Badge(this.modeText(), '#D6525EC8')
+      if (this.viewMode === ViewMode.COMPACT) {
+        Row({ space: 4 }) {
+          this.CompactBadge(this.app.source === AppSource.BUILTIN ? '内建' : 'Download',
+            this.app.source === AppSource.BUILTIN ? '#E02979B8' : '#E02C7666')
+          if (this.showModeBadge()) {
+            this.CompactBadge(this.modeText(), '#E0525EC8')
+          }
+        }
+        .padding({ left: 8, right: 8, bottom: 8 })
         if (this.running) {
-          this.Badge('运行中', '#CC22A06B')
+          Circle().width(10).height(10).fill('#FF35B779')
+            .stroke('#E6FFFFFF').strokeWidth(1.5)
+            .shadow({ radius: 5, color: '#6635B779' })
+            .position({ x: 100, y: 10 })
         }
-        if (!this.app.available) {
-          this.Badge('不可用', '#CCD64C4C')
+      } else {
+        Row({ space: 5 }) {
+          this.Badge(this.app.source === AppSource.BUILTIN ? '内建' : 'Download',
+            this.app.source === AppSource.BUILTIN ? '#DE2979B8' : '#DE2C7B64')
+          if (this.showModeBadge()) {
+            this.Badge(this.modeText(), '#D6525EC8')
+          }
+          if (this.running) {
+            this.Badge('运行中', '#CC22A06B')
+          }
+          if (!this.app.available) {
+            this.Badge('不可用', '#CCD64C4C')
+          }
         }
+        .padding(10)
       }
-      .padding(10)
     }
     .width(this.viewMode === ViewMode.COMPACT ? 120 : '100%')
     .height(height)
