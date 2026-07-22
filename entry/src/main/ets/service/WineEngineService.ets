@@ -279,8 +279,11 @@ export class WineEngineService {
       this.finishWaiters(false);
     } else if (value === 'exited' && (testNapi.getProcessList() as NativeProcessInfo[]).length === 0) {
       if (this.state === EngineState.PREPARING || this.state === EngineState.SWITCHING) {
-        this.setState(EngineState.ERROR, 'Wine 引擎启动失败');
-        this.finishWaiters(false);
+        // appspawn wrapper processes may exit while wineboot/services continue
+        // in broker-spawned children. The native launch coordinator emits an
+        // explicit ready/failure result; the six-minute waiter remains the
+        // bounded fallback when that result never arrives.
+        hilog.info(DOMAIN, TAG, 'transient zero-process exit while %{public}s; waiting for launch result', this.state);
       } else if (this.state !== EngineState.STOPPED) {
         this.setState(EngineState.STOPPED, 'Wine 引擎已停止');
       }
@@ -291,6 +294,7 @@ export class WineEngineService {
     if (!canTransitionEngineState(this.state, state)) {
       hilog.warn(DOMAIN, TAG, 'unexpected engine transition %{public}s -> %{public}s', this.state, state);
     }
+    hilog.info(DOMAIN, TAG, 'engine state %{public}s -> %{public}s: %{public}s', this.state, state, message);
     this.state = state;
     this.message = message;
     this.listeners.forEach((listener: EngineStateListener) => listener(state, message));

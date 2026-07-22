@@ -35,6 +35,7 @@ export class WineWindowManager {
   private displayMode: DisplayMode = DisplayMode.DESKTOP;
   private desktopRootId: number = 0;
   private desktopAbilityRunning: boolean = false;
+  private desktopAbilityRootId: number = 0;
   private singleAppRootId: number = 0;
   private singleAppAbilityRunning: boolean = false;
   // 主窗口 windowStage (ARGB 异型子窗口/popup 回退宿主)
@@ -149,6 +150,8 @@ export class WineWindowManager {
     this.displayMode = mode;
     this.isDesktopMode = mode === DisplayMode.DESKTOP;
     this.desktopRootId = 0;
+    this.desktopAbilityRunning = false;
+    this.desktopAbilityRootId = 0;
     this.singleAppRootId = 0;
     this.destroyed.clear();
     testNapi.setDesktopMode(this.isDesktopMode);
@@ -701,6 +704,8 @@ export class WineWindowManager {
       // C++ 已移除 native surface/session 关联。ArkTS 侧也必须清掉旧 ID：
       // 否则再次点“Wine 桌面”会把已销毁的 renderer 当作可恢复会话。
       this.desktopRootId = 0;
+      this.desktopAbilityRunning = false;
+      this.desktopAbilityRootId = 0;
       return;
     }
     // Desktop 模式: 非 root toplevel 销毁, C++ 自动停止合成
@@ -752,10 +757,14 @@ export class WineWindowManager {
 
   // Desktop 模式: 打开 DesktopAbility
   private startDesktopAbility(rootId: number): void {
-    // singleton 模式: 重复 startAbility 不会创建新实例, 只会触发 onNewWant
-    if (!this.desktopAbilityRunning) {
-      this.desktopAbilityRunning = true;
+    // 同一个 explorer root 可能同时收到 created/promote 两次事件。只让
+    // 第一个事件唤起 Ability，避免 PC 上每次启动都弹出重复桌面窗口。
+    if (this.desktopAbilityRunning && this.desktopAbilityRootId === rootId) {
+      hilog.info(DOMAIN, TAG, '[MW] DesktopAbility already running for root #%{public}d, skip', rootId);
+      return;
     }
+    this.desktopAbilityRunning = true;
+    this.desktopAbilityRootId = rootId;
     try {
       const want: Want = {
         bundleName: 'com.vintage.pomelopro',
@@ -765,11 +774,23 @@ export class WineWindowManager {
       this.uiAbilityContext!.startAbility(want).catch((err: Error) => {
         hilog.error(DOMAIN, TAG, '[MW] startAbility(DesktopAbility) failed: %{public}s',
           JSON.stringify(err));
+        if (this.desktopAbilityRootId === rootId) this.desktopAbilityRunning = false;
       });
       hilog.info(DOMAIN, TAG, '[MW] startAbility(DesktopAbility) #%{public}d OK', rootId);
     } catch (e) {
       hilog.error(DOMAIN, TAG, '[MW] startDesktopAbility error: %{public}s', JSON.stringify(e));
+      if (this.desktopAbilityRootId === rootId) this.desktopAbilityRunning = false;
     }
+  }
+
+  isDesktopAbilityRunning(rootId: number): boolean {
+    return this.desktopAbilityRunning && this.desktopAbilityRootId === rootId;
+  }
+
+  markDesktopAbilityStopped(rootId: number): void {
+    if (this.desktopAbilityRootId !== rootId) return;
+    this.desktopAbilityRunning = false;
+    hilog.info(DOMAIN, TAG, '[MW] DesktopAbility stopped for root #%{public}d', rootId);
   }
 
   private startSingleAppAbility(rootId: number, data: string): void {

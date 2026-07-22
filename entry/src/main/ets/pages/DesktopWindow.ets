@@ -12,6 +12,7 @@ import { GamepadActivityListener, GamepadConnectionListener, GamepadManager } fr
 import { InputProfileService } from '../service/InputProfileService';
 import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
 import { InputEventGate } from '../service/InputEventGate';
+import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
 
 const DOMAIN = 0x0000;
 
@@ -457,6 +458,7 @@ struct DesktopPage {
         if (horiz !== 0) testNapi.sendScrollEvent(tl, 1, horiz, step, wpx, wpy);
       })
 
+      WineEngineBlockingOverlay()
     }
     .width('100%').height('100%').backgroundColor('#000')
     .id('wine-desktop-input-root')

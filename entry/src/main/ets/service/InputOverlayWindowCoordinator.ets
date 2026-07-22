@@ -84,7 +84,7 @@ export class InputOverlayWindowCoordinator {
   async attach(stage: window.WindowStage, parentWindow: window.Window,
     sessionId: string, displayMode: DisplayMode, toplevelId: number,
     profileId: string = 'default', controlsVisible: boolean = true, opacity: number = 72,
-    enabled: boolean = true): Promise<void> {
+    enabled: boolean = true, visible: boolean = true): Promise<void> {
     const session: WineInputSession = { sessionId, displayMode, toplevelId, active: true };
     this.snapshot.enabled = enabled;
     if (!enabled) {
@@ -95,9 +95,9 @@ export class InputOverlayWindowCoordinator {
     if (this.overlayWindow && this.stage === stage) {
       this.parentWindow = parentWindow;
       this.update(session, profileId, controlsVisible, opacity);
-      await this.setVisible(true);
+      await this.setVisible(visible);
       await this.syncBounds();
-      await this.raise();
+      if (visible) await this.raise();
       this.scheduleBoundsStabilization();
       return;
     }
@@ -190,8 +190,8 @@ export class InputOverlayWindowCoordinator {
           this.publish();
         }
       });
-      await this.setVisible(true);
-      await this.raise();
+      await this.setVisible(visible);
+      if (visible) await this.raise();
       this.scheduleBoundsStabilization();
       this.publish();
     } catch (error) {

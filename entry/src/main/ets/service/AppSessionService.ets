@@ -99,7 +99,12 @@ export class AppSessionService {
       if (!ready) return null;
       const currentDesktop = this.syncDesktopSessionFromNative();
       if (currentDesktop && currentDesktop.toplevelId > 0) {
-        await this.resume(currentDesktop);
+        // The root event already starts the singleton DesktopAbility. Calling
+        // startAbility again here creates a visible PC desktop pop-up on every
+        // first launch; only explicitly restore a stopped/background ability.
+        if (wasDesktopReady || !WineWindowManager.getInstance().isDesktopAbilityRunning(currentDesktop.toplevelId)) {
+          await this.resume(currentDesktop);
+        }
         return currentDesktop;
       }
       // 首次启动时 native launch thread 正在创建 explorer，不能抢跑出第二个 shell。
@@ -331,12 +336,12 @@ export class AppSessionService {
   private async waitForDesktopRoot(rounds: number): Promise<RuntimeSession | null> {
     const existing = this.sessions.get(DESKTOP_SESSION_ID) ?? null;
     if (existing && existing.toplevelId > 0) {
-      await this.resume(existing);
+      if (!WineWindowManager.getInstance().isDesktopAbilityRunning(existing.toplevelId)) await this.resume(existing);
       return existing;
     }
     let session = this.syncDesktopSessionFromNative();
     if (session && session.toplevelId > 0) {
-      await this.resume(session);
+      if (!WineWindowManager.getInstance().isDesktopAbilityRunning(session.toplevelId)) await this.resume(session);
       return session;
     }
     const pending = session;
@@ -346,7 +351,7 @@ export class AppSessionService {
       });
       session = this.syncDesktopSessionFromNative();
       if (session && session.toplevelId > 0) {
-        await this.resume(session);
+        if (!WineWindowManager.getInstance().isDesktopAbilityRunning(session.toplevelId)) await this.resume(session);
         return session;
       }
     }

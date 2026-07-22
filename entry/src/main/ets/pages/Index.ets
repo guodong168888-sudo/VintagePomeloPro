@@ -23,6 +23,7 @@ import { WineEngineService } from '../service/WineEngineService';
 import { WineWindowManager } from '../service/WineWindowManager';
 import { GamepadManager } from '../service/GamepadManager';
 import { InputProfileService } from '../service/InputProfileService';
+import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
 
 type CatalogFilter = 'builtin' | 'windows' | 'running' | 'favorite';
 
@@ -288,39 +289,6 @@ struct Index {
 
   private isEngineBusy(): boolean {
     return this.engineState === EngineState.PREPARING || this.engineState === EngineState.SWITCHING;
-  }
-
-  @Builder
-  private EngineBusyOverlay() {
-    Column({ space: 14 }) {
-      LoadingProgress()
-        .width(52)
-        .height(52)
-        .color($r('app.color.accent'))
-      Text(this.engineState === EngineState.SWITCHING ? '正在重建 Wine 会话' : '正在初始化 Wine')
-        .fontSize(22)
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.text_primary'))
-      Text(this.engineMessage)
-        .fontSize(14)
-        .fontColor($r('app.color.text_secondary'))
-        .textAlign(TextAlign.Center)
-      if (this.engineState === EngineState.PREPARING) {
-        Text('首次启动需要解压运行环境并初始化 Windows，可能需要一段时间')
-          .fontSize(12)
-          .fontColor($r('app.color.text_secondary'))
-          .textAlign(TextAlign.Center)
-          .constraintSize({ maxWidth: 420 })
-      }
-    }
-    .width('100%')
-    .height('100%')
-    .justifyContent(FlexAlign.Center)
-    .padding(28)
-    .backgroundColor($r('app.color.page_background'))
-    .hitTestBehavior(HitTestMode.Block)
-    .id('wine-engine-blocking-overlay')
-    .zIndex(100)
   }
 
   private openAppSettings(app: AppDescriptor): void {
@@ -663,9 +631,7 @@ struct Index {
             .onClick((): void => { this.mobileSidebarVisible = false; })
         }.width('100%').height('100%').alignItems(VerticalAlign.Top)
       }
-      if (this.isEngineBusy()) {
-        this.EngineBusyOverlay()
-      }
+      WineEngineBlockingOverlay()
     }
     .width('100%').height('100%')
     .backgroundColor($r('app.color.page_background'))

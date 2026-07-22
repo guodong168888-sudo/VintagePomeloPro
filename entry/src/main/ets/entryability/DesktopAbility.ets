@@ -9,6 +9,8 @@ import { InputDispatcher } from '../service/InputDispatcher';
 import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { DisplayMode } from '../model/AppModels';
+import { EngineState } from '../model/AppModels';
+import { WineEngineService } from '../service/WineEngineService';
 
 const DOMAIN = 0x0000;
 const TAG = 'DWA';
@@ -95,6 +97,7 @@ export default class DesktopAbility extends UIAbility {
       GamepadManager.getInstance().releaseAll();
       InputDispatcher.getInstance().releaseAll('desktop-destroy');
       InputRouter.getInstance().releaseAllKeys();
+      WineWindowManager.getInstance().markDesktopAbilityStopped(this.toplevelId);
       // 关闭 ArkTS 宿主并不等于关闭 Wine explorer。保留 desktop root 后，
       // 应用库中的“Wine 桌面”卡片可以重新拉起同一会话和渲染 surface。
       WineWindowManager.getInstance().unregisterAbility(this.toplevelId);
@@ -111,6 +114,8 @@ export default class DesktopAbility extends UIAbility {
     InputOverlayWindowCoordinator.getInstance().attach(
       this.stage, this.mainWindow, 'desktop-' + rootId, DisplayMode.DESKTOP, rootId,
       settings.desktopInputProfileId || 'default', settings.showVirtualControls, settings.controlOpacity,
-      settings.virtualInputEnabled).catch(() => {});
+      settings.virtualInputEnabled,
+      WineEngineService.getInstance().getState() !== EngineState.PREPARING &&
+      WineEngineService.getInstance().getState() !== EngineState.SWITCHING).catch(() => {});
   }
 }

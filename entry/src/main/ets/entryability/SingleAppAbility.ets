@@ -11,6 +11,8 @@ import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoor
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { AppSessionService } from '../service/AppSessionService';
 import { DisplayMode, resolveInputProfileId } from '../model/AppModels';
+import { EngineState } from '../model/AppModels';
+import { WineEngineService } from '../service/WineEngineService';
 
 const DOMAIN = 0x0000;
 const TAG = 'SingleAppAbility';
@@ -96,6 +98,8 @@ export default class SingleAppAbility extends UIAbility {
     InputOverlayWindowCoordinator.getInstance().attach(
       this.stage, this.mainWindow, this.sessionId || ('single-' + this.toplevelId), DisplayMode.SINGLE_APP,
       this.toplevelId, profileId, settings.showVirtualControls, settings.controlOpacity,
-      settings.virtualInputEnabled).catch(() => {});
+      settings.virtualInputEnabled,
+      WineEngineService.getInstance().getState() !== EngineState.PREPARING &&
+      WineEngineService.getInstance().getState() !== EngineState.SWITCHING).catch(() => {});
   }
 }

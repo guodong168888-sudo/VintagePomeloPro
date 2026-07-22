@@ -13,6 +13,7 @@ import { WineWindowManager } from '../service/WineWindowManager';
 import { AppSessionService } from '../service/AppSessionService';
 import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
 import { InputEventGate } from '../service/InputEventGate';
+import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
 
 const INPUT_DOMAIN = 0x0000;
 
@@ -188,6 +189,7 @@ struct SingleAppWindow {
           if (horizontal !== 0) InputRouter.getInstance().sendScroll(1, horizontal, event.scrollStep ?? 0, x, y);
         })
 
+      WineEngineBlockingOverlay()
     }
     .width('100%').height('100%').backgroundColor('#000000')
     .id('wine-single-input-root')
