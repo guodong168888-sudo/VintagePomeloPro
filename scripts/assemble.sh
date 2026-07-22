@@ -227,11 +227,15 @@ assemble_pad() {
     for exe in "$BUILD_DIR/wine-ohos/programs/"*/x86_64-windows/*.exe; do
         cp "$exe" "$wine_data/bin/"
     done
-    # graphics smoke test (OHOS 交叉编译产物, 不在 build-native/)
-    if [ -f "$BUILD_DIR/wine-ohos/programs/winehua_graphics_smoke/x86_64-windows/winehua_graphics_smoke.exe" ]; then
-        cp "$BUILD_DIR/wine-ohos/programs/winehua_graphics_smoke/x86_64-windows/winehua_graphics_smoke.exe" "$wine_data/bin/x86_64-windows/"
-        log "  winehua_graphics_smoke.exe → x86_64-windows/"
-    fi
+    # Built-in smoke tests are launched by name.  Keep their PE stubs in the
+    # architecture directory as well as bin/ so WINEDLLDIR0 can resolve them.
+    for smoke in winehua_graphics_smoke winehua_audio_smoke; do
+        smoke_exe="$BUILD_DIR/wine-ohos/programs/$smoke/x86_64-windows/$smoke.exe"
+        if [ -f "$smoke_exe" ]; then
+            cp "$smoke_exe" "$wine_data/bin/x86_64-windows/"
+            log "  $smoke.exe → x86_64-windows/"
+        fi
+    done
     # The built-in audio smoke must be self-contained and use a format accepted
     # by wineohos.drv.  Wine's idw_testsound.wav is IMA ADPCM, while the native
     # bridge accepts PCM/float input, so generate a deterministic PCM16 stereo
