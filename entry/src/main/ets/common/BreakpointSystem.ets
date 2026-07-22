@@ -1,6 +1,6 @@
 import { display, mediaquery } from '@kit.ArkUI';
 
-export type BreakpointType = 'sm' | 'md' | 'lg' | 'xl';
+export type BreakpointType = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 export type BreakpointCallback = (breakpoint: BreakpointType) => void;
 
 class BreakpointSystemImpl {
@@ -13,7 +13,8 @@ class BreakpointSystemImpl {
     if (this.initialized) return;
     this.initialized = true;
     this.updateFromDisplay();
-    this.bind('(width < 720vp)', 'sm');
+    this.bind('(width < 360vp)', 'xs');
+    this.bind('(360vp <= width < 720vp)', 'sm');
     this.bind('(720vp <= width < 960vp)', 'md');
     this.bind('(960vp <= width < 1280vp)', 'lg');
     this.bind('(width >= 1280vp)', 'xl');
@@ -40,7 +41,8 @@ class BreakpointSystemImpl {
     if (widthVp >= 1280) this.setCurrent('xl');
     else if (widthVp >= 960) this.setCurrent('lg');
     else if (widthVp >= 720) this.setCurrent('md');
-    else this.setCurrent('sm');
+    else if (widthVp >= 360) this.setCurrent('sm');
+    else this.setCurrent('xs');
   }
 
   private setCurrent(value: BreakpointType): void {

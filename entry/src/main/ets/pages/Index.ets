@@ -48,6 +48,21 @@ struct Index {
   private settingsCallback: ThemeSettingsListener | null = null;
   private refreshTimer: number = -1;
 
+  private isPhone(): boolean {
+    return this.breakpoint === 'xs' || this.breakpoint === 'sm';
+  }
+
+  private isNarrowPhone(): boolean {
+    return this.breakpoint === 'xs';
+  }
+
+  private contentPadding(): number {
+    if (this.breakpoint === 'xs') return 10;
+    if (this.breakpoint === 'sm') return 16;
+    if (this.breakpoint === 'md') return 20;
+    return 28;
+  }
+
   aboutToAppear(): void {
     this.initialize();
     BreakpointSystem.initialize();
@@ -214,14 +229,14 @@ struct Index {
   }
 
   private gridColumns(): string {
-    if (this.settings.viewMode === ViewMode.COMPACT || this.breakpoint === 'sm') return '1fr';
+    if (this.settings.viewMode === ViewMode.COMPACT || this.isPhone()) return '1fr';
     if (this.breakpoint === 'md') return '1fr 1fr';
     if (this.breakpoint === 'xl') return this.settings.viewMode === ViewMode.LARGE ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr 1fr 1fr';
     return this.settings.viewMode === ViewMode.LARGE ? '1fr 1fr' : '1fr 1fr 1fr';
   }
 
   private compactGridColumns(): string {
-    if (this.breakpoint === 'sm') return '1fr';
+    if (this.isPhone()) return '1fr';
     if (this.breakpoint === 'md') return '1fr 1fr';
     if (this.breakpoint === 'xl') return '1fr 1fr 1fr';
     return '1fr 1fr';
@@ -351,7 +366,7 @@ struct Index {
       }
     }
     .width('100%')
-    .height(44)
+    .height(48)
     .padding({ left: 15, right: 12 })
     .borderRadius(12)
     .backgroundColor(this.filter === value ? $r('app.color.selected_background') : '#00000000')
@@ -364,16 +379,16 @@ struct Index {
     Column() {
       Row() {
         if (!this.sidebarCollapsed || mobile) {
-          Column({ space: 3 }) {
-            Text('旧柚Pro').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
-            Text(this.apps.length + ' 个程序 · 左滑收起').fontSize(11).fontColor($r('app.color.text_secondary'))
+          Column({ space: this.isNarrowPhone() ? 2 : 3 }) {
+            Text('旧柚Pro').fontSize(this.isNarrowPhone() ? 16 : 18).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+            Text(this.apps.length + ' 个程序 · 左滑收起').fontSize(this.isNarrowPhone() ? 9 : 11).fontColor($r('app.color.text_secondary'))
           }.alignItems(HorizontalAlign.Start).layoutWeight(1)
         }
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph(mobile ? $r('sys.symbol.xmark') : (this.sidebarCollapsed ? $r('sys.symbol.chevron_right') : $r('sys.symbol.chevron_left')))
             .fontSize(16).fontColor([$r('app.color.text_primary')])
         }
-          .width(44).height(44)
+          .width(48).height(48)
           .backgroundColor($r('app.color.search_background'))
           .border({ width: 1, color: '#12000000' })
           .onClick((): void => {
@@ -385,6 +400,7 @@ struct Index {
       if (!this.sidebarCollapsed || mobile) {
         AppSearchBar({
           value: this.searchQuery,
+          heightVp: 48,
           onValueChange: (value: string): void => { this.updateSearch(value); }
         })
         Button('重新扫描').width('100%').height(48).fontSize(13).fontWeight(FontWeight.Medium)
@@ -408,19 +424,19 @@ struct Index {
           Text('系统设置').fontSize(14).fontColor($r('app.color.text_primary'))
         }
       }
-      .width('100%').height(44).padding({ left: 15 }).borderRadius(12)
+      .width('100%').height(48).padding({ left: 15 }).borderRadius(12)
       .onClick(() => router.pushUrl({ url: 'pages/SystemSettings' }))
       Row({ space: 12 }) {
         SymbolGlyph($r('sys.symbol.info_circle')).fontSize(19).fontColor([$r('app.color.text_secondary')])
         if (!this.sidebarCollapsed || mobile) {
           Text('帮助').fontSize(14).fontColor($r('app.color.text_primary'))
         }
-      }.width('100%').height(44).padding({ left: 15 })
+      }.width('100%').height(48).padding({ left: 15 })
         .onClick((): void => { router.pushUrl({ url: 'pages/HelpCenter' }); })
     }
-    .width(mobile ? 304 : (this.sidebarCollapsed ? 72 : 264))
+    .width(mobile ? (this.isNarrowPhone() ? '86%' : 304) : (this.sidebarCollapsed ? 72 : 264))
     .height('100%')
-    .padding(16)
+    .padding(this.isNarrowPhone() ? 10 : 16)
     .backgroundColor($r('app.color.sidebar_background'))
     .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
   }
@@ -428,24 +444,44 @@ struct Index {
   @Builder
   private Header() {
     Column({ space: 12 }) {
-      Row() {
-        Column({ space: 3 }) {
-          Text(this.filterTitle())
-            .fontSize(28).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
-          Text(this.filterDescription()).fontSize(13).fontColor(this.engineState === EngineState.ERROR ? '#B42318' : $r('app.color.text_secondary'))
-        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-        Row({ space: 4 }) {
-          Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.square_grid_2x2')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
-            .width(48).height(48).backgroundColor(this.settings.viewMode === ViewMode.GRID ? $r('app.color.selected_background') : $r('app.color.search_background')).onClick(() => this.setViewMode(ViewMode.GRID))
-          Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.list_bullet')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
-            .width(48).height(48).backgroundColor(this.settings.viewMode === ViewMode.COMPACT ? $r('app.color.selected_background') : $r('app.color.search_background')).onClick(() => this.setViewMode(ViewMode.COMPACT))
-          Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.rectangle_grid_1x2')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
-            .width(48).height(48).backgroundColor(this.settings.viewMode === ViewMode.LARGE ? $r('app.color.selected_background') : $r('app.color.search_background')).onClick(() => this.setViewMode(ViewMode.LARGE))
-        }
-      }.width('100%')
-      if (this.breakpoint === 'sm' || this.breakpoint === 'md') {
+      if (this.isNarrowPhone()) {
+        Text(this.filterTitle())
+          .fontSize(19).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary')).width('100%')
+        Row({ space: 8 }) {
+          Button() { SymbolGlyph($r('sys.symbol.square_grid_2x2')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
+            .layoutWeight(1).height(48).borderRadius(16)
+            .backgroundColor(this.settings.viewMode === ViewMode.GRID ? $r('app.color.selected_background') : $r('app.color.search_background'))
+            .onClick(() => this.setViewMode(ViewMode.GRID))
+          Button() { SymbolGlyph($r('sys.symbol.list_bullet')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
+            .layoutWeight(1).height(48).borderRadius(16)
+            .backgroundColor(this.settings.viewMode === ViewMode.COMPACT ? $r('app.color.selected_background') : $r('app.color.search_background'))
+            .onClick(() => this.setViewMode(ViewMode.COMPACT))
+          Button() { SymbolGlyph($r('sys.symbol.rectangle_grid_1x2')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
+            .layoutWeight(1).height(48).borderRadius(16)
+            .backgroundColor(this.settings.viewMode === ViewMode.LARGE ? $r('app.color.selected_background') : $r('app.color.search_background'))
+            .onClick(() => this.setViewMode(ViewMode.LARGE))
+        }.width('100%').id('library-xs-view-modes')
+      } else {
+        Row() {
+          Column({ space: 3 }) {
+            Text(this.filterTitle())
+              .fontSize(28).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+            Text(this.filterDescription()).fontSize(13).fontColor(this.engineState === EngineState.ERROR ? '#B42318' : $r('app.color.text_secondary'))
+          }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+          Row({ space: 4 }) {
+            Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.square_grid_2x2')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
+              .width(48).height(48).backgroundColor(this.settings.viewMode === ViewMode.GRID ? $r('app.color.selected_background') : $r('app.color.search_background')).onClick(() => this.setViewMode(ViewMode.GRID))
+            Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.list_bullet')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
+              .width(48).height(48).backgroundColor(this.settings.viewMode === ViewMode.COMPACT ? $r('app.color.selected_background') : $r('app.color.search_background')).onClick(() => this.setViewMode(ViewMode.COMPACT))
+            Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.rectangle_grid_1x2')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
+              .width(48).height(48).backgroundColor(this.settings.viewMode === ViewMode.LARGE ? $r('app.color.selected_background') : $r('app.color.search_background')).onClick(() => this.setViewMode(ViewMode.LARGE))
+          }
+        }.width('100%')
+      }
+      if (this.isPhone() || this.breakpoint === 'md') {
         AppSearchBar({
           value: this.searchQuery,
+          heightVp: 48,
           onValueChange: (value: string): void => { this.updateSearch(value); }
         })
       }
@@ -456,7 +492,8 @@ struct Index {
     .width('100%')
     // The wide layout has no second search row.  Keep its header deliberately
     // compact so that the first application row starts in the visible area.
-    .height((this.breakpoint === 'lg' || this.breakpoint === 'xl') ? 64 : 88)
+    .height((this.breakpoint === 'lg' || this.breakpoint === 'xl') ? 64 :
+      (this.breakpoint === 'md' ? 172 : (this.isNarrowPhone() ? 148 : 112)))
     .justifyContent(FlexAlign.Start)
   }
 
@@ -489,6 +526,7 @@ struct Index {
             running: this.runningAppIds.has(app.id),
             useGlassEffect: this.settings.useGlassEffect,
             resolvedDisplayMode: AppSessionService.getInstance().resolveMode(app, this.settings),
+            narrowPhone: this.isNarrowPhone(),
             onLaunch: (target: AppDescriptor): void => { this.launch(target); },
             onSettings: (target: AppDescriptor): void => { this.openAppSettings(target); },
             onLongPress: (target: AppDescriptor): void => { this.showAppLongPressMenu(target); }
@@ -519,7 +557,9 @@ struct Index {
       .width('100%')
       .constraintSize({ minHeight: '100%' })
       .justifyContent(FlexAlign.Start)
-      .padding({ top: 2, bottom: this.breakpoint === 'sm' ? 88 : 36 })
+      // Keep the last row above the phone navigation gesture area and the
+      // overlaid bottom bar. The extra inset is harmless on tablet layouts.
+      .padding({ top: 2, bottom: this.breakpoint === 'xs' ? 82 : (this.breakpoint === 'sm' ? 112 : 36) })
     }
     .layoutWeight(1)
     .width('100%')
@@ -535,17 +575,22 @@ struct Index {
         Row({ space: 10 }) {
           LoadingProgress().width(20).height(20)
           Text('正在扫描应用目录…').fontColor($r('app.color.text_secondary'))
-        }.margin({ top: 22 })
+        }.margin({ top: this.isNarrowPhone() ? 12 : 22 })
       } else if (this.visibleApps.length === 0) {
         Column({ space: 12 }) {
-          SymbolGlyph(this.emptyIcon()).fontSize(48).fontColor([$r('app.color.text_secondary')])
-          Text(this.emptyTitle()).fontSize(20).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
-          Text(this.emptyDescription()).fontSize(13).fontColor($r('app.color.text_secondary')).textAlign(TextAlign.Center)
+          SymbolGlyph(this.emptyIcon()).fontSize(this.isNarrowPhone() ? 34 : 48).fontColor([$r('app.color.text_secondary')])
+          Text(this.emptyTitle()).fontSize(this.isNarrowPhone() ? 16 : 20).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+          Text(this.emptyDescription()).fontSize(this.isNarrowPhone() ? 11 : 13).fontColor($r('app.color.text_secondary')).textAlign(TextAlign.Center)
+            .constraintSize({ maxWidth: this.isNarrowPhone() ? 240 : 420 })
           if (this.emptyActionLabel()) {
             Button(this.emptyActionLabel()).height(48).borderRadius(24).id('library-empty-action')
               .onClick((): void => this.handleEmptyAction())
           }
-        }.layoutWeight(1).justifyContent(FlexAlign.Center)
+        }
+        .layoutWeight(1)
+        .justifyContent(this.isPhone() ? FlexAlign.Start : FlexAlign.Center)
+        .padding({ top: this.isNarrowPhone() ? 18 : (this.breakpoint === 'sm' ? 30 : 0),
+          bottom: this.isNarrowPhone() ? 72 : (this.breakpoint === 'sm' ? 96 : 0) })
       } else if (this.filter === 'builtin') {
         this.CatalogScroll(this.visibleApps, 'builtin')
       } else if (this.filter === 'windows') {
@@ -558,18 +603,19 @@ struct Index {
     }
     .layoutWeight(1)
     .height('100%')
-    .padding({ left: this.breakpoint === 'sm' ? 16 : 28, right: this.breakpoint === 'sm' ? 16 : 28, top: 16 })
+    .padding({ left: this.contentPadding(), right: this.contentPadding(), top: this.isNarrowPhone() ? 8 : 16 })
   }
 
   @Builder
   private BottomItem(label: string, icon: Resource, active: boolean, onClick: () => void) {
     Button() {
       Column({ space: 3 }) {
-        SymbolGlyph(icon).fontSize(18).fontColor([active ? $r('app.color.accent') : $r('app.color.text_secondary')])
-        Text(label).fontSize(10).fontColor(active ? $r('app.color.text_primary') : $r('app.color.text_secondary'))
+        SymbolGlyph(icon).fontSize(this.isNarrowPhone() ? 16 : 18).fontColor([active ? $r('app.color.accent') : $r('app.color.text_secondary')])
+        Text(label).fontSize(this.isNarrowPhone() ? 9 : 10).maxLines(1)
+          .fontColor(active ? $r('app.color.text_primary') : $r('app.color.text_secondary'))
       }
     }
-    .layoutWeight(1).height(56).borderRadius(16)
+    .layoutWeight(1).height(this.isNarrowPhone() ? 48 : 56).borderRadius(this.isNarrowPhone() ? 12 : 16)
     .backgroundColor(active ? $r('app.color.selected_background') : '#00000000')
     .onClick(onClick)
   }
@@ -583,7 +629,9 @@ struct Index {
       this.BottomItem('菜单', $r('sys.symbol.list_bullet'), this.mobileSidebarVisible, () => this.mobileSidebarVisible = true)
       this.BottomItem('设置', $r('sys.symbol.gearshape'), false, () => router.pushUrl({ url: 'pages/SystemSettings' }))
     }
-    .height(72).width('100%').padding({ left: 8, right: 8, top: 8, bottom: 8 })
+    .height(this.isNarrowPhone() ? 64 : 80).width('100%')
+    .padding({ left: this.isNarrowPhone() ? 4 : 8, right: this.isNarrowPhone() ? 4 : 8,
+      top: this.isNarrowPhone() ? 4 : 8, bottom: this.isNarrowPhone() ? 8 : 12 })
     .backgroundColor($r('app.color.card_glass_background'))
     .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
     .align(Alignment.Bottom)
@@ -605,10 +653,10 @@ struct Index {
         }
         this.Library()
       }.width('100%').height('100%')
-      if (this.breakpoint === 'sm') {
+      if (this.isPhone()) {
         this.BottomBar()
       }
-      if (this.breakpoint === 'sm' && this.mobileSidebarVisible) {
+      if (this.isPhone() && this.mobileSidebarVisible) {
         Row() {
           this.SideBar(true)
           Column().layoutWeight(1).height('100%').backgroundColor('#55000000')
@@ -623,7 +671,7 @@ struct Index {
     .backgroundColor($r('app.color.page_background'))
     .gesture(PanGesture({ fingers: 1 })
       .onActionEnd((event: GestureEvent): void => {
-        if (this.breakpoint !== 'sm') return;
+        if (!this.isPhone()) return;
         if (event.offsetX > 64) this.mobileSidebarVisible = true;
         else if (event.offsetX < -64) this.mobileSidebarVisible = false;
       }))

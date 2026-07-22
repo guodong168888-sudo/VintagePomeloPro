@@ -1,12 +1,13 @@
 @Component
 export struct AppSearchBar {
   @Prop value: string = '';
+  @Prop heightVp: number = 48;
   placeholder: string = '搜索 Windows 应用';
   onValueChange: (value: string) => void = (_value: string): void => {};
 
   build() {
     Search({ value: this.value, placeholder: this.placeholder })
-      .height(48)
+      .height(this.heightVp)
       .width('100%')
       .backgroundColor($r('app.color.search_background'))
       .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)

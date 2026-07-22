@@ -1,4 +1,5 @@
 import router from '@ohos.router';
+import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 
 type HelpCategory = 'all' | 'start' | 'library' | 'controls' | 'runtime';
 
@@ -21,6 +22,8 @@ interface HelpTopic {
 struct HelpCenter {
   @State private category: HelpCategory = 'all';
   @State private expandedTopicId: string = '';
+  @State private breakpoint: BreakpointType = 'lg';
+  private breakpointCallback: ((value: BreakpointType) => void) | null = null;
   private readonly topics: HelpTopic[] = [
     {
       id: 'getting-started', category: 'start', icon: $r('sys.symbol.info_circle'),
@@ -54,6 +57,20 @@ struct HelpCenter {
     }
   ];
 
+  aboutToAppear(): void {
+    BreakpointSystem.initialize();
+    this.breakpointCallback = (value: BreakpointType): void => { this.breakpoint = value; };
+    BreakpointSystem.subscribe(this.breakpointCallback);
+  }
+
+  aboutToDisappear(): void {
+    if (this.breakpointCallback) BreakpointSystem.unsubscribe(this.breakpointCallback);
+  }
+
+  private isNarrowPhone(): boolean {
+    return this.breakpoint === 'xs';
+  }
+
   private visibleTopics(): HelpTopic[] {
     return this.topics.filter((topic: HelpTopic): boolean => this.category === 'all' || topic.category === this.category);
   }
@@ -67,7 +84,8 @@ struct HelpCenter {
           .fontColor(this.category === value ? '#FFFFFFFF' : $r('app.color.text_primary'))
       }
     }
-    .height(42).padding({ left: 12, right: 12 }).borderRadius(14)
+    .height(48)
+    .padding({ left: this.isNarrowPhone() ? 10 : 12, right: this.isNarrowPhone() ? 10 : 12 }).borderRadius(14)
     .backgroundColor(this.category === value ? $r('app.color.accent') : $r('app.color.search_background'))
     .onClick((): void => { this.category = value; this.expandedTopicId = ''; })
   }
@@ -75,14 +93,16 @@ struct HelpCenter {
   @Builder
   private TopicCard(topic: HelpTopic) {
     Column({ space: 12 }) {
-      Row({ space: 14 }) {
+      Row({ space: this.isNarrowPhone() ? 9 : 14 }) {
         Stack({ alignContent: Alignment.Center }) {
           SymbolGlyph(topic.icon).fontSize(22).fontColor([$r('app.color.accent')])
         }
-        .width(48).height(48).borderRadius(16).backgroundColor($r('app.color.selected_background'))
+        .width(this.isNarrowPhone() ? 38 : 48).height(this.isNarrowPhone() ? 38 : 48)
+        .borderRadius(this.isNarrowPhone() ? 12 : 16).backgroundColor($r('app.color.selected_background'))
         Column({ space: 4 }) {
-          Text(topic.title).fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
-          Text(topic.description).fontSize(12).fontColor($r('app.color.text_secondary')).lineHeight(18).maxLines(2).width('100%')
+          Text(topic.title).fontSize(this.isNarrowPhone() ? 14 : 16).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
+          Text(topic.description).fontSize(this.isNarrowPhone() ? 10 : 12).fontColor($r('app.color.text_secondary'))
+            .lineHeight(this.isNarrowPhone() ? 15 : 18).maxLines(2).width('100%')
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
@@ -94,32 +114,37 @@ struct HelpCenter {
           .padding({ left: 4, right: 4, top: 2 })
       }
     }
-    .width('100%').padding(16).backgroundColor($r('app.color.card_glass_background'))
+    .width('100%').padding(this.isNarrowPhone() ? 11 : 16).backgroundColor($r('app.color.card_glass_background'))
     .backgroundBlurStyle(BlurStyle.COMPONENT_THICK).borderRadius(16)
     .onClick((): void => { this.expandedTopicId = this.expandedTopicId === topic.id ? '' : topic.id; })
   }
 
   build() {
     Column() {
-      Row({ space: 14 }) {
+      Row({ space: this.isNarrowPhone() ? 8 : 14 }) {
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(18).fontColor([$r('app.color.text_primary')])
         }
-        .width(48).height(48).backgroundColor($r('app.color.search_background'))
+        .width(48).height(48)
+        .backgroundColor($r('app.color.search_background'))
         .id('help-center-back').onClick((): void => { router.back(); })
-        Column({ space: 3 }) {
-          Text('帮助中心').fontSize(26).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
-          Text('Wine 应用库、输入控制与 Windows 会话使用指南').fontSize(12).fontColor($r('app.color.text_secondary'))
+        Column({ space: this.isNarrowPhone() ? 0 : 3 }) {
+          Text('帮助中心').fontSize(this.isNarrowPhone() ? 19 : 26).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+          if (!this.isNarrowPhone()) {
+            Text('Wine 应用库、输入控制与 Windows 会话使用指南').fontSize(12).fontColor($r('app.color.text_secondary'))
+          }
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
       }
-      .height(64).width('100%').padding({ left: 16, right: 16, top: 4, bottom: 0 })
+      .height(this.isNarrowPhone() ? 56 : 64).width('100%')
+      .padding({ left: this.isNarrowPhone() ? 8 : 16, right: this.isNarrowPhone() ? 8 : 16, top: 4, bottom: 0 })
 
       Scroll() {
         Column({ space: 18 }) {
           Column({ space: 8 }) {
-            SymbolGlyph($r('sys.symbol.info_circle')).fontSize(42).fontColor([$r('app.color.accent')])
-            Text('需要一点帮助？').fontSize(20).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
-            Text('按主题查找应用导入、虚拟控制和 Wine 运行方式。').fontSize(13).fontColor($r('app.color.text_secondary'))
+            SymbolGlyph($r('sys.symbol.info_circle')).fontSize(this.isNarrowPhone() ? 32 : 42).fontColor([$r('app.color.accent')])
+            Text('需要一点帮助？').fontSize(this.isNarrowPhone() ? 17 : 20).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+            Text('按主题查找应用导入、虚拟控制和 Wine 运行方式。').fontSize(this.isNarrowPhone() ? 11 : 13)
+              .fontColor($r('app.color.text_secondary')).textAlign(TextAlign.Center)
           }
           .width('100%').alignItems(HorizontalAlign.Center).padding({ top: 12, bottom: 4 })
 
@@ -142,8 +167,11 @@ struct HelpCenter {
             .backgroundColor($r('app.color.accent')).fontColor('#FFFFFFFF')
             .onClick((): void => { router.pushUrl({ url: 'pages/SystemSettings' }); })
         }
-        .width('100%').height('100%').justifyContent(FlexAlign.Start)
-        .padding({ left: 20, right: 20, top: 10, bottom: 28 })
+        // Scroll content must be allowed to grow beyond the viewport. A fixed
+        // 100% height makes the last topic render under the bottom inset.
+        .width('100%').constraintSize({ minHeight: '100%' }).justifyContent(FlexAlign.Start)
+        .padding({ left: this.isNarrowPhone() ? 10 : 20, right: this.isNarrowPhone() ? 10 : 20,
+          top: this.isNarrowPhone() ? 4 : 10, bottom: this.isNarrowPhone() ? 76 : 104 })
         .constraintSize({ maxWidth: 960 })
       }
       .layoutWeight(1).width('100%').scrollBar(BarState.Auto)

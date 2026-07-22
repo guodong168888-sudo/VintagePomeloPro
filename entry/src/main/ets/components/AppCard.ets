@@ -7,6 +7,7 @@ export struct AppCard {
   @Prop running: boolean = false;
   @Prop useGlassEffect: boolean = true;
   @Prop resolvedDisplayMode: DisplayMode = DisplayMode.DESKTOP;
+  @Prop narrowPhone: boolean = false;
   @State private pressed: boolean = false;
   onLaunch: (app: AppDescriptor) => void = (_app: AppDescriptor): void => {};
   onSettings: (app: AppDescriptor) => void = (_app: AppDescriptor): void => {};
@@ -18,6 +19,12 @@ export struct AppCard {
 
   private modeText(): string {
     return this.resolvedDisplayMode === DisplayMode.SINGLE_APP ? '单应用' : '桌面';
+  }
+
+  private coverHeight(): number {
+    if (this.viewMode === ViewMode.COMPACT) return 104;
+    if (this.narrowPhone) return this.viewMode === ViewMode.LARGE ? 156 : 140;
+    return this.viewMode === ViewMode.LARGE ? 246 : 220;
   }
 
   private showModeBadge(): boolean {
@@ -264,7 +271,7 @@ export struct AppCard {
       .id('wine-app-card-' + this.app.id)
     } else {
       Column() {
-        this.Cover(this.viewMode === ViewMode.LARGE ? 246 : 220)
+        this.Cover(this.coverHeight())
         this.TitleRow()
       }
       .width('100%')

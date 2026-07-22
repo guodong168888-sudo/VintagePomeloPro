@@ -23,6 +23,10 @@ const SOCK = FILES_BASE + '/.wine/wine-wayland';
 const PREFIX_MARKER = WINE_ROOT + '/share/wine/wine.inf';
 const RUNTIME_VERSION_RAWFILE = 'wine_runtime.version';
 const RUNTIME_VERSION_MARKER = WINE_ROOT + '/.winehua-runtime-version';
+// Native wineboot allows up to 3 minutes, followed by a 60 second prefix
+// flush window. Keep a margin so slow ARM first-run initialization is not
+// reported as a failure while the desktop is still being prepared.
+const ENGINE_READY_TIMEOUT_MS = 6 * 60 * 1000;
 
 interface RuntimePathRequirement {
   path: string;
@@ -252,7 +256,7 @@ export class WineEngineService {
           this.setState(EngineState.ERROR, 'Wine 引擎准备超时');
           finish(false);
         }
-      }, 90000);
+      }, ENGINE_READY_TIMEOUT_MS);
     });
   }
 

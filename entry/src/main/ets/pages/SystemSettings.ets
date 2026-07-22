@@ -41,6 +41,14 @@ struct SystemSettingsPage {
   private callback: ((value: BreakpointType) => void) | null = null;
   private engineCallback: EngineStateListener | null = null;
 
+  private isNarrowPhone(): boolean {
+    return this.breakpoint === 'xs';
+  }
+
+  private cardPadding(): number {
+    return this.isNarrowPhone() ? 12 : 22;
+  }
+
   aboutToAppear(): void {
     this.settings = ThemeSettingsService.getInstance().getSettings();
     BreakpointSystem.initialize();
@@ -483,10 +491,12 @@ struct SystemSettingsPage {
           Text('全局默认模式').fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
           Row({ space: 8 }) {
             Button('桌面模式').layoutWeight(1).height(48).borderRadius(14)
+              .fontSize(this.isNarrowPhone() ? 12 : 14)
               .backgroundColor(this.settings.defaultDisplayMode === DisplayMode.DESKTOP ? $r('app.color.accent') : $r('app.color.search_background'))
               .fontColor(this.settings.defaultDisplayMode === DisplayMode.DESKTOP ? '#FFFFFFFF' : $r('app.color.text_primary'))
               .onClick(() => this.update(DisplayMode.DESKTOP))
             Button('单应用全屏').layoutWeight(1).height(48).borderRadius(14)
+              .fontSize(this.isNarrowPhone() ? 12 : 14)
               .backgroundColor(this.settings.defaultDisplayMode === DisplayMode.SINGLE_APP ? $r('app.color.accent') : $r('app.color.search_background'))
               .fontColor(this.settings.defaultDisplayMode === DisplayMode.SINGLE_APP ? '#FFFFFFFF' : $r('app.color.text_primary'))
               .onClick(() => this.update(DisplayMode.SINGLE_APP))
@@ -496,7 +506,7 @@ struct SystemSettingsPage {
           Slider({ value: this.settings.outputScale, min: 75, max: 150, step: 5 }).onChange((value: number) => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, this.settings.autoHideVirtualControls, this.settings.controlOpacity, this.settings.gamepadDeadzone, value))
         }
         .width('100%')
-        .padding(22)
+        .padding(this.cardPadding())
         .backgroundColor($r('app.color.card_glass_background'))
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         .borderRadius(20)
@@ -506,14 +516,17 @@ struct SystemSettingsPage {
           Text('主题').fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
           Row({ space: 8 }) {
             Button('跟随系统').layoutWeight(1).height(48).borderRadius(14)
+              .fontSize(this.isNarrowPhone() ? 10 : 14)
               .backgroundColor(this.settings.themeMode === ThemeMode.SYSTEM ? $r('app.color.accent') : $r('app.color.search_background'))
               .fontColor(this.settings.themeMode === ThemeMode.SYSTEM ? '#FFFFFFFF' : $r('app.color.text_primary'))
               .onClick(() => this.updateTheme(ThemeMode.SYSTEM))
             Button('浅色').layoutWeight(1).height(48).borderRadius(14)
+              .fontSize(this.isNarrowPhone() ? 10 : 14)
               .backgroundColor(this.settings.themeMode === ThemeMode.LIGHT ? $r('app.color.accent') : $r('app.color.search_background'))
               .fontColor(this.settings.themeMode === ThemeMode.LIGHT ? '#FFFFFFFF' : $r('app.color.text_primary'))
               .onClick(() => this.updateTheme(ThemeMode.LIGHT))
             Button('深色').layoutWeight(1).height(48).borderRadius(14)
+              .fontSize(this.isNarrowPhone() ? 10 : 14)
               .backgroundColor(this.settings.themeMode === ThemeMode.DARK ? $r('app.color.accent') : $r('app.color.search_background'))
               .fontColor(this.settings.themeMode === ThemeMode.DARK ? '#FFFFFFFF' : $r('app.color.text_primary'))
               .onClick(() => this.updateTheme(ThemeMode.DARK))
@@ -525,7 +538,7 @@ struct SystemSettingsPage {
           this.PageBackgroundChooser()
         }
         .width('100%')
-        .padding(22)
+        .padding(this.cardPadding())
         .backgroundColor($r('app.color.card_glass_background'))
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         .borderRadius(20)
@@ -575,7 +588,7 @@ struct SystemSettingsPage {
           this.KeyMappingEntry()
         }
         .width('100%')
-        .padding(22)
+        .padding(this.cardPadding())
         .backgroundColor($r('app.color.card_glass_background'))
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         .borderRadius(20)
@@ -613,7 +626,7 @@ struct SystemSettingsPage {
             .onClick(() => AlertDialog.show({ title: '重置 Wine 环境', message: '这会删除当前 Wine prefix 中的应用数据，且无法撤销。', primaryButton: { value: '取消', action: (): void => {} }, secondaryButton: { value: '重置', fontColor: '#D94848', action: (): void => { this.resetPrefix(); } } }))
         }
         .width('100%')
-        .padding(22)
+        .padding(this.cardPadding())
         .backgroundColor($r('app.color.card_glass_background'))
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         .borderRadius(20)
@@ -627,7 +640,7 @@ struct SystemSettingsPage {
             .onClick((): void => { router.pushUrl({ url: 'pages/HelpCenter' }); })
         }
         .width('100%')
-        .padding(24)
+        .padding(this.isNarrowPhone() ? 12 : 24)
         .backgroundColor($r('app.color.card_glass_background'))
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         .borderRadius(20)
@@ -647,7 +660,7 @@ struct SystemSettingsPage {
     .layoutWeight(1)
     .width('100%')
     .constraintSize({ maxWidth: maxWidth })
-    .padding({ right: 10, bottom: 16 })
+    .padding({ right: this.isNarrowPhone() ? 0 : 10, bottom: this.isNarrowPhone() ? 28 : 16 })
     .scrollBar(BarState.Auto)
     .scrollBarWidth(6)
     .scrollBarColor($r('app.color.accent'))
@@ -661,27 +674,30 @@ struct SystemSettingsPage {
   build() {
     Stack() {
       Column() {
-      Row() {
+      Row({ space: this.isNarrowPhone() ? 6 : 0 }) {
         Button({ type: ButtonType.Circle }) {
-          SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(18).fontColor([$r('app.color.text_primary')])
+          SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(this.isNarrowPhone() ? 16 : 18).fontColor([$r('app.color.text_primary')])
         }
           .width(48).height(48)
           .backgroundColor($r('app.color.search_background'))
           .onClick(() => router.back())
-        Column({ space: 3 }) {
-          Text('系统设置').fontSize(26).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
-          Text('调整显示模式、外观、输入和 Wine 引擎行为。').fontSize(12).fontColor($r('app.color.text_secondary'))
+        Column({ space: this.isNarrowPhone() ? 0 : 3 }) {
+          Text('系统设置').fontSize(this.isNarrowPhone() ? 19 : 26).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+          if (!this.isNarrowPhone()) {
+            Text('调整显示模式、外观、输入和 Wine 引擎行为。').fontSize(12).fontColor($r('app.color.text_secondary'))
+          }
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
-        Button('恢复默认').height(48).borderRadius(14)
+        Button(this.isNarrowPhone() ? '恢复' : '恢复默认').height(48)
+          .fontSize(this.isNarrowPhone() ? 12 : 14).borderRadius(14)
           .backgroundColor($r('app.color.search_background'))
           .fontColor($r('app.color.text_primary'))
           .onClick(() => this.restoreDefaults())
       }
-      .height(64)
+      .height(this.isNarrowPhone() ? 56 : 64)
       .width('100%')
-      .padding({ left: 16, right: 16, top: 4, bottom: 0 })
+      .padding({ left: this.isNarrowPhone() ? 8 : 16, right: this.isNarrowPhone() ? 8 : 16, top: 4, bottom: 0 })
 
       if (this.breakpoint === 'lg' || this.breakpoint === 'xl') {
         Row({ space: 22 }) {
@@ -708,23 +724,23 @@ struct SystemSettingsPage {
         Column({ space: 12 }) {
           Scroll() {
             Row({ space: 8 }) {
-              Button('显示').height(48).borderRadius(14)
+              Button('显示').height(48).fontSize(this.isNarrowPhone() ? 12 : 14).borderRadius(14)
                 .backgroundColor(this.section === 'display' ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.section === 'display' ? '#FFFFFFFF' : $r('app.color.text_primary'))
                 .onClick(() => this.selectSection('display'))
-              Button('外观').height(48).borderRadius(14)
+              Button('外观').height(48).fontSize(this.isNarrowPhone() ? 12 : 14).borderRadius(14)
                 .backgroundColor(this.section === 'appearance' ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.section === 'appearance' ? '#FFFFFFFF' : $r('app.color.text_primary'))
                 .onClick(() => this.selectSection('appearance'))
-              Button('输入').height(48).borderRadius(14)
+              Button('输入').height(48).fontSize(this.isNarrowPhone() ? 12 : 14).borderRadius(14)
                 .backgroundColor(this.section === 'input' ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.section === 'input' ? '#FFFFFFFF' : $r('app.color.text_primary'))
                 .onClick(() => this.selectSection('input'))
-              Button('引擎').height(48).borderRadius(14)
+              Button('引擎').height(48).fontSize(this.isNarrowPhone() ? 12 : 14).borderRadius(14)
                 .backgroundColor(this.section === 'engine' ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.section === 'engine' ? '#FFFFFFFF' : $r('app.color.text_primary'))
                 .onClick(() => this.selectSection('engine'))
-              Button('关于').height(48).borderRadius(14)
+              Button('关于').height(48).fontSize(this.isNarrowPhone() ? 12 : 14).borderRadius(14)
                 .backgroundColor(this.section === 'about' ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.section === 'about' ? '#FFFFFFFF' : $r('app.color.text_primary'))
                 .onClick(() => this.selectSection('about'))
@@ -735,7 +751,8 @@ struct SystemSettingsPage {
         .layoutWeight(1)
         .width('100%')
         .alignItems(HorizontalAlign.Start)
-        .padding({ left: 16, right: 16, top: 0, bottom: 16 })
+        .padding({ left: this.isNarrowPhone() ? 8 : 16, right: this.isNarrowPhone() ? 8 : 16,
+          top: 0, bottom: this.isNarrowPhone() ? 8 : 16 })
       }
       }
       .width('100%').height('100%').backgroundColor($r('app.color.page_background'))
@@ -749,7 +766,7 @@ struct SystemSettingsPage {
         }
         .width('100%').height('100%')
         .justifyContent(FlexAlign.Center)
-        .padding(32)
+        .padding(this.isNarrowPhone() ? 18 : 32)
         .backgroundColor('#EE111827')
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         .hitTestBehavior(HitTestMode.Block)

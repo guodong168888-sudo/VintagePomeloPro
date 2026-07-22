@@ -57,6 +57,37 @@ static void* stderr_reader_thread(void* arg) {
 #define LOG_DOMAIN 0x0000
 #define LOG_TAG "WineChild"
 
+// HAP native libraries are not guaranteed to be visible through the
+// appspawn child's default linker search path. Try the normal soname first,
+// then resolve the sibling of this loaded native library (the HAP native-lib
+// directory) so ARM Box64 startup does not depend on process-specific paths.
+static void* open_box64_library()
+{
+    void* handle = dlopen("box64.so", RTLD_NOW | RTLD_LOCAL);
+    if (handle) return handle;
+
+    const char* firstError = dlerror();
+    Dl_info owner{};
+    if (dladdr(reinterpret_cast<void*>(&open_box64_library), &owner) != 0 && owner.dli_fname) {
+        std::string libraryPath(owner.dli_fname);
+        const size_t slash = libraryPath.find_last_of('/');
+        if (slash != std::string::npos) {
+            const std::string siblingPath = libraryPath.substr(0, slash) + "/box64.so";
+            handle = dlopen(siblingPath.c_str(), RTLD_NOW | RTLD_LOCAL);
+            if (handle) {
+                OH_LOG_INFO(LOG_APP, "[WineChild] dlopen box64.so via native-lib sibling: %{public}s",
+                            siblingPath.c_str());
+                return handle;
+            }
+        }
+    }
+
+    const char* lastError = dlerror();
+    OH_LOG_ERROR(LOG_APP, "[WineChild] dlopen box64.so failed by soname and native-lib sibling: %{public}s",
+                 lastError ? lastError : (firstError ? firstError : "unknown"));
+    return nullptr;
+}
+
 static const char *default_winedebug_profile(void)
 {
     return "-all";
@@ -480,9 +511,8 @@ extern "C" void Main(NativeChildProcess_Args args)
 #ifdef __aarch64__
     // ARM64 Pad: dlopen box64.so → Box64 模拟 x86_64 wine ELF
     OH_LOG_INFO(LOG_APP, "[WineChild] dlopen box64.so (ARM64 Box64 path)...");
-    void* box64_lib = dlopen("box64.so", RTLD_NOW);
+    void* box64_lib = open_box64_library();
     if (!box64_lib) {
-        OH_LOG_ERROR(LOG_APP, "[WineChild] dlopen(box64.so) failed: %{public}s", dlerror());
         free(buf);
         return;
     }
@@ -597,9 +627,8 @@ extern "C" void WineserverMain(NativeChildProcess_Args args)
 #ifdef __aarch64__
     // ARM64 Pad: dlopen box64.so → Box64 模拟 x86_64 wineserver ELF
     OH_LOG_INFO(LOG_APP, "[WineChild] ws step5: dlopen box64.so (ARM64 Box64 path)...");
-    void* box64_lib = dlopen("box64.so", RTLD_NOW);
+    void* box64_lib = open_box64_library();
     if (!box64_lib) {
-        OH_LOG_ERROR(LOG_APP, "[WineChild] dlopen(box64.so) failed: %{public}s", dlerror());
         free(buf);
         return;
     }

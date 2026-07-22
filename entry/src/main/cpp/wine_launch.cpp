@@ -392,6 +392,8 @@ void LaunchThreadFunc(LaunchParams* p) {
 
     if (ok && gStateTsfn)
         napi_call_threadsafe_function(gStateTsfn, strdup("wine-ready"), napi_tsfn_blocking);
+    else if (!ok && gStateTsfn)
+        napi_call_threadsafe_function(gStateTsfn, strdup("wine-failed"), napi_tsfn_blocking);
 
     delete p;
 }
