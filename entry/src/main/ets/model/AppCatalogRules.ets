@@ -35,6 +35,23 @@ export function chooseExecutablePath(directory: string, candidates: string[]): s
     return !HELPER_TOKENS.some((token: string) => lower.includes(token));
   });
   if (preferred.length === 1) return preferred[0];
+  const normalizedDirectory = directory.replace(/\\/g, '/').replace(/\/+$/, '');
+  const rootCandidates = preferred.filter((path: string) => {
+    const normalizedPath = path.replace(/\\/g, '/');
+    const separator = normalizedPath.lastIndexOf('/');
+    return separator > 0 && normalizedPath.substring(0, separator) === normalizedDirectory;
+  });
+  if (rootCandidates.length === 1) return rootCandidates[0];
+  // Versioned directories usually keep the executable's stable basename,
+  // e.g. palmod2.0/palmod.exe. A unique prefix match is deterministic and
+  // avoids presenting a non-launchable card merely because a launcher also
+  // exists beside the actual program.
+  const versionedMatches = preferred.filter((path: string) => {
+    const executableName = comparableName(catalogNameWithoutExtension(catalogFileName(path)));
+    if (executableName.length < 3 || directoryName.length < 3) return false;
+    return directoryName.startsWith(executableName) || executableName.startsWith(directoryName);
+  });
+  if (versionedMatches.length === 1) return versionedMatches[0];
   return '';
 }
 

@@ -57,6 +57,22 @@ export default function localUnitTest() {
       expect(chooseExecutablePath('/games/SetupOnly', ['/games/SetupOnly/setup.exe'])).assertEqual('');
     });
 
+    it('matchesVersionedDirectoryToStableExecutableName', 0, () => {
+      const chosen = chooseExecutablePath('/games/palmod2.0', [
+        '/games/palmod2.0/palmod.exe', '/games/palmod2.0/launcher.exe'
+      ]);
+      expect(chosen).assertEqual('/games/palmod2.0/palmod.exe');
+    });
+
+    it('prefersTheOnlyRootExecutableOverNestedTools', 0, () => {
+      const chosen = chooseExecutablePath('/games/palmod2.0', [
+        '/games/palmod2.0/sdlpal.exe',
+        '/games/palmod2.0/pal/Pal.exe',
+        '/games/palmod2.0/pal/PALS.EXE'
+      ]);
+      expect(chosen).assertEqual('/games/palmod2.0/sdlpal.exe');
+    });
+
     it('usesCoverBeforeFolderArt', 0, () => {
       expect(chooseCoverFileName(['folder.png', 'Cover.JPG'])).assertEqual('Cover.JPG');
     });

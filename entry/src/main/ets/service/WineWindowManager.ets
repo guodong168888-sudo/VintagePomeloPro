@@ -363,13 +363,13 @@ export class WineWindowManager {
         }
         break;
       case 'desktop_root':
-        // Tablet: C++ 识别到 explorer desktop → 打开 DesktopAbility
-        hilog.info(DOMAIN, TAG, '[MW] desktop_root toplevel #%{public}d → start DesktopAbility', id);
         if (this.displayMode === DisplayMode.DESKTOP) {
+          hilog.info(DOMAIN, TAG, '[MW] desktop_root #%{public}d -> start DesktopAbility', id);
           if (this.sessionAssociationCallback) this.sessionAssociationCallback(DESKTOP_SESSION_ID, 0, id);
           this.desktopRootId = id;
           this.startDesktopAbility(id);
         } else if (this.singleAppRootId !== id) {
+          hilog.info(DOMAIN, TAG, '[MW] desktop_root #%{public}d -> start SingleAppAbility', id);
           this.singleAppRootId = id;
           this.startSingleAppAbility(id, data);
         }

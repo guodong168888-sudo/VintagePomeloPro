@@ -99,7 +99,6 @@ export default class SingleAppAbility extends UIAbility {
       this.stage, this.mainWindow, this.sessionId || ('single-' + this.toplevelId), DisplayMode.SINGLE_APP,
       this.toplevelId, profileId, settings.showVirtualControls, settings.controlOpacity,
       settings.virtualInputEnabled,
-      WineEngineService.getInstance().getState() !== EngineState.PREPARING &&
-      WineEngineService.getInstance().getState() !== EngineState.SWITCHING).catch(() => {});
+      true).catch(() => {});
   }
 }

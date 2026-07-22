@@ -268,12 +268,18 @@ export class WineEngineService {
 
   private handleNativeState(raw: string): void {
     const separator = raw.indexOf(':');
+    const processScoped = separator > 0;
     const value = separator >= 0 ? raw.substring(separator + 1) : raw;
     if (value === 'wine-ready' || value === 'wine-running') {
       this.setState(EngineState.READY, value === 'wine-running' ? 'Windows 程序运行中' : 'Wine 引擎已就绪');
       this.finishWaiters(true);
     } else if (value === 'wineserver-starting' || value === 'wineboot-starting') {
       this.setState(EngineState.PREPARING, value === 'wineboot-starting' ? '正在初始化 Wine 环境' : '正在启动 Wine 服务');
+    } else if (value === 'wine-failed' && processScoped && this.state === EngineState.READY) {
+      // runWineExe reports a process-scoped failure as "-1:wine-failed".
+      // The engine and Wayland server are still usable; AppSessionService
+      // already rejects the failed NativeLaunchResult for that one card.
+      hilog.warn(DOMAIN, TAG, 'Windows program launch failed while engine remains ready: %{public}s', raw);
     } else if (value === 'wine-failed' || value === 'wineboot-failed' || value === 'wineserver-failed') {
       this.setState(EngineState.ERROR, 'Wine 启动失败');
       this.finishWaiters(false);

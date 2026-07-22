@@ -17,11 +17,13 @@ export struct WineEngineBlockingOverlay {
     this.listener = (state: EngineState, message: string): void => {
       this.state = state;
       this.message = message;
-      // The separate ArkTS input child window must not remain touchable while
-      // the compositor and prefix are still being rebuilt.
-      InputOverlayWindowCoordinator.getInstance().setVisible(!this.isBusy()).catch(() => {});
+      // The input page owns a separate child window above the native Wine
+      // surface. Keep that window alive and switch its hit-test state while
+      // the engine is preparing, so XComponent frames cannot bypass this UI.
+      InputOverlayWindowCoordinator.getInstance().setEngineBusy(this.isBusy()).catch(() => {});
     };
     WineEngineService.getInstance().subscribe(this.listener);
+    InputOverlayWindowCoordinator.getInstance().setEngineBusy(this.isBusy()).catch(() => {});
   }
 
   aboutToDisappear(): void {
@@ -46,7 +48,7 @@ export struct WineEngineBlockingOverlay {
       Stack() {
         Column()
           .width('100%').height('100%')
-          .backgroundColor('#D90B1220')
+          .backgroundColor('#E80B1220')
           .hitTestBehavior(HitTestMode.Block)
         Column({ space: 16 }) {
           LoadingProgress().width(56).height(56).color('#2F6BFF')
@@ -63,13 +65,15 @@ export struct WineEngineBlockingOverlay {
         }
         .width('86%').constraintSize({ maxWidth: 480 })
         .padding({ left: 24, right: 24, top: 28, bottom: 28 })
-        .backgroundColor('#F8FAFF')
-        .borderRadius(24)
+        .backgroundColor('#FFFFFFFF')
+        .border({ width: 2, color: '#FFB8C7E8' })
+        .borderRadius(20)
         .shadow({ radius: 24, color: '#66000000', offsetX: 0, offsetY: 10 })
         .hitTestBehavior(HitTestMode.Block)
         .id('wine-engine-progress-panel')
       }
       .width('100%').height('100%')
+      .alignContent(Alignment.Center)
       .zIndex(1000)
       .hitTestBehavior(HitTestMode.Block)
       .id('wine-engine-blocking-overlay')

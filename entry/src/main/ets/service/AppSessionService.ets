@@ -17,6 +17,7 @@ import {
 import { WineEngineService } from './WineEngineService';
 import { WineWindowManager } from './WineWindowManager';
 import { InputOverlayWindowCoordinator } from './InputOverlayWindowCoordinator';
+import { AppSettingsStore } from './AppSettingsStore';
 
 export enum LaunchConflictKind {
   NONE = 'none',
@@ -54,6 +55,9 @@ export class AppSessionService {
   }
 
   resolveMode(app: AppDescriptor, settings: GlobalSettings): DisplayMode {
+    // Harmony PC/2-in-1 window management exposes the selected program as one
+    // application window. Ignore desktop overrides left by a tablet install.
+    if (AppSettingsStore.getInstance().requiresSingleWindowMode()) return DisplayMode.SINGLE_APP;
     return resolveDisplayMode(app.displayModeOverride, settings.defaultDisplayMode);
   }
 
@@ -88,6 +92,10 @@ export class AppSessionService {
 
   async launch(app: AppDescriptor, settings: GlobalSettings, homeDirectory: string): Promise<RuntimeSession | null> {
     if (!app.available) return null;
+    if ((app.launchTarget.kind === LaunchKind.WINE_EXE ||
+      app.launchTarget.kind === LaunchKind.WINE_SYSTEM ||
+      app.launchTarget.kind === LaunchKind.WINE_DESKTOP) &&
+      app.launchTarget.executable.trim().length === 0) return null;
     const mode = this.resolveMode(app, settings);
 
     // “Wine 桌面”不是普通可执行文件：先检查实际 desktop root 是否仍存在。
@@ -102,8 +110,14 @@ export class AppSessionService {
         // The root event already starts the singleton DesktopAbility. Calling
         // startAbility again here creates a visible PC desktop pop-up on every
         // first launch; only explicitly restore a stopped/background ability.
-        if (wasDesktopReady || !WineWindowManager.getInstance().isDesktopAbilityRunning(currentDesktop.toplevelId)) {
+        if (!WineWindowManager.getInstance().isDesktopAbilityRunning(currentDesktop.toplevelId)) {
           await this.resume(currentDesktop);
+        } else {
+          // The singleton DesktopAbility is already the visible host for this
+          // root. Calling startAbility again on PC creates a second mission/
+          // popup even though the Wine session is unchanged.
+          try { testNapi.activateWineSession(currentDesktop.sessionId); } catch (_) {}
+          try { testNapi.raiseToplevel(currentDesktop.toplevelId); } catch (_) {}
         }
         return currentDesktop;
       }

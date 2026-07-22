@@ -115,7 +115,6 @@ export default class DesktopAbility extends UIAbility {
       this.stage, this.mainWindow, 'desktop-' + rootId, DisplayMode.DESKTOP, rootId,
       settings.desktopInputProfileId || 'default', settings.showVirtualControls, settings.controlOpacity,
       settings.virtualInputEnabled,
-      WineEngineService.getInstance().getState() !== EngineState.PREPARING &&
-      WineEngineService.getInstance().getState() !== EngineState.SWITCHING).catch(() => {});
+      true).catch(() => {});
   }
 }

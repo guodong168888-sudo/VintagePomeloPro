@@ -514,7 +514,10 @@ export function createDefaultGlobalSettings(): GlobalSettings {
     usePageBackground: false,
     pageBackgroundUri: '',
     virtualInputEnabled: true,
-    showVirtualControls: true,
+    // Hardware keyboard/mouse is the least surprising first-run experience.
+    // The input layer remains enabled for full-screen mouse and can be
+    // explicitly enabled from system settings when a controller is used.
+    showVirtualControls: false,
     // 独立 ArkTS 覆盖层默认保持可见，避免实体输入后无法恢复控制层。
     autoHideVirtualControls: false,
     controlBarDirection: ControlBarDirection.AUTO,

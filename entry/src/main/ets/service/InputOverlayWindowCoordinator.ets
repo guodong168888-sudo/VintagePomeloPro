@@ -8,6 +8,8 @@ export interface InputOverlaySnapshot {
   profileId: string;
   enabled: boolean;
   visible: boolean;
+  /** Engine preparation blocks the Wine surface while retaining this window. */
+  blocking: boolean;
   controlsVisible: boolean;
   opacity: number;
   createdCount: number;
@@ -38,6 +40,7 @@ export class InputOverlayWindowCoordinator {
   private snapshot: InputOverlaySnapshot = {
     session: { sessionId: '', displayMode: DisplayMode.DESKTOP, toplevelId: 0, active: false },
     profileId: 'default', enabled: true, visible: false, controlsVisible: true, opacity: 72,
+    blocking: false,
     createdCount: 0, destroyedCount: 0, rendererRebinds: 0, zLevel: 0,
     stressRunning: false, stressCompleted: 0, lastError: ''
   };
@@ -69,6 +72,7 @@ export class InputOverlayWindowCoordinator {
       profileId: this.snapshot.profileId,
       enabled: this.snapshot.enabled,
       visible: this.snapshot.visible,
+      blocking: this.snapshot.blocking,
       controlsVisible: this.snapshot.controlsVisible,
       opacity: this.snapshot.opacity,
       createdCount: this.snapshot.createdCount,
@@ -210,6 +214,34 @@ export class InputOverlayWindowCoordinator {
     this.snapshot.controlsVisible = controlsVisible;
     this.snapshot.opacity = Math.max(25, Math.min(100, opacity));
     InputDispatcher.getInstance().setSession(session);
+    this.publish();
+  }
+
+  /**
+   * Keep the retained child window above the native Wine surface while the
+   * engine is extracting or rebuilding its runtime. The blocker is rendered
+   * by InputOverlayPage; this method only controls the window's hit-test and
+   * visibility so a compositor frame cannot bypass it.
+   */
+  async setEngineBusy(busy: boolean): Promise<void> {
+    if (this.snapshot.blocking === busy && (!busy || this.snapshot.visible)) return;
+    this.snapshot.blocking = busy;
+    if (this.overlayWindow) {
+      if (busy) {
+        this.snapshot.visible = true;
+        try { await this.overlayWindow.showWindow(); } catch (_) {}
+        try { await this.overlayWindow.setWindowTouchable(true); } catch (error) {
+          this.snapshot.lastError = 'setWindowTouchable(blocking): ' + JSON.stringify(error);
+        }
+        await this.raise();
+      } else {
+        const visible = this.snapshot.visible && this.snapshot.enabled;
+        try { await this.overlayWindow.setWindowTouchable(visible); } catch (error) {
+          this.snapshot.lastError = 'setWindowTouchable(ready): ' + JSON.stringify(error);
+        }
+        if (visible) await this.raise();
+      }
+    }
     this.publish();
   }
 

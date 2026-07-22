@@ -14,6 +14,9 @@ import { InputProfileService } from '../service/InputProfileService';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { AppSessionService } from '../service/AppSessionService';
 import { InputEventGate } from '../service/InputEventGate';
+import { EngineState } from '../model/AppModels';
+import { EngineStateListener, WineEngineService } from '../service/WineEngineService';
+import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
 
 interface DirectTouch {
   x: number;
@@ -50,7 +53,9 @@ struct InputOverlayPage {
   @State private touchpadMode: boolean = false;
   @State private overlayW: number = 0;
   @State private overlayH: number = 0;
+  @State private engineState: EngineState = WineEngineService.getInstance().getState();
   private listener: InputOverlayListener | null = null;
+  private engineListener: EngineStateListener | null = null;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private directTouches: Map<number, DirectTouch> = new Map();
   private twoFinger: boolean = false;
@@ -94,12 +99,21 @@ struct InputOverlayPage {
       if (profileChanged || sessionChanged || becameVisible) this.loadProfile(snapshot.profileId);
     };
     InputOverlayWindowCoordinator.getInstance().subscribe(this.listener);
+    this.engineListener = (state: EngineState): void => {
+      this.engineState = state;
+      const busy = state === EngineState.PREPARING || state === EngineState.SWITCHING;
+      InputOverlayWindowCoordinator.getInstance().setEngineBusy(busy).catch(() => {});
+    };
+    WineEngineService.getInstance().subscribe(this.engineListener);
+    InputOverlayWindowCoordinator.getInstance().setEngineBusy(
+      this.engineState === EngineState.PREPARING || this.engineState === EngineState.SWITCHING).catch(() => {});
     this.settings = AppSettingsStore.getInstance().getGlobalSettings();
     this.loadProfile(this.snapshot.profileId);
   }
 
   aboutToDisappear(): void {
     if (this.listener) InputOverlayWindowCoordinator.getInstance().unsubscribe(this.listener);
+    if (this.engineListener) WineEngineService.getInstance().unsubscribe(this.engineListener);
     this.cancelCursorTimers();
     this.resetTouchpadGesture();
     InputDispatcher.getInstance().releaseAll('overlay-page-disappear');
@@ -578,6 +592,7 @@ struct InputOverlayPage {
         .onTouch((event: TouchEvent): void => this.handleOverlayTouch(event))
         .onMouse((event: MouseEvent): void => this.handleDirectMouse(event))
         .onAxisEvent((event?: AxisEvent): void => this.handleDirectAxis(event))
+      WineEngineBlockingOverlay()
     }
     .width('100%').height('100%')
     .backgroundColor('#00000000')

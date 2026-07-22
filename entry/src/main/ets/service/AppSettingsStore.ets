@@ -1,4 +1,5 @@
 import preferences from '@ohos.data.preferences';
+import deviceInfo from '@ohos.deviceInfo';
 import { common } from '@kit.AbilityKit';
 import {
   AppSettings,
@@ -17,6 +18,7 @@ const GLOBAL_KEY = 'global_settings_v1';
 const APP_SETTINGS_KEY = 'app_settings_v1';
 const LIBRARY_PATH_KEY = 'library_path_v1';
 const CATALOG_CACHE_KEY = 'catalog_cache_v1';
+const PLATFORM_DEFAULTS_KEY = 'platform_defaults_v2';
 
 export class AppSettingsStore {
   private static instance: AppSettingsStore | null = null;
@@ -24,6 +26,7 @@ export class AppSettingsStore {
   private appSettings: Map<string, AppSettings> = new Map<string, AppSettings>();
   private globalSettings: GlobalSettings = createDefaultGlobalSettings();
   private libraryPath: string = '';
+  private pcSingleWindowMode: boolean = false;
 
   static getInstance(): AppSettingsStore {
     if (!AppSettingsStore.instance) AppSettingsStore.instance = new AppSettingsStore();
@@ -31,11 +34,56 @@ export class AppSettingsStore {
   }
 
   async initialize(context: common.UIAbilityContext): Promise<void> {
+    this.pcSingleWindowMode = this.detectPcSingleWindowMode();
     if (this.store) return;
     this.store = await preferences.getPreferences(context, STORE_NAME);
     this.loadGlobal();
+    await this.applyPlatformDefaults();
     this.loadApps();
     this.libraryPath = this.store.getSync(LIBRARY_PATH_KEY, '') as string;
+  }
+
+  /**
+   * Apply first-run defaults without overwriting a later user choice. Harmony
+   * 2-in-1 devices behave like a PC: a selected EXE should own the window
+   * instead of starting the multi-window Wine desktop shell. Tablets retain
+   * the desktop default, while virtual buttons start hidden on every device.
+   */
+  private async applyPlatformDefaults(): Promise<void> {
+    if (!this.store) return;
+    const applied = this.store.getSync(PLATFORM_DEFAULTS_KEY, '') as string;
+    if (applied === '1') return;
+    const current = this.globalSettings;
+    this.globalSettings = {
+      defaultDisplayMode: this.pcSingleWindowMode ? DisplayMode.SINGLE_APP : current.defaultDisplayMode,
+      desktopInputProfileId: current.desktopInputProfileId,
+      viewMode: current.viewMode,
+      themeMode: current.themeMode,
+      useGlassEffect: current.useGlassEffect,
+      usePageBackground: current.usePageBackground,
+      pageBackgroundUri: current.pageBackgroundUri,
+      virtualInputEnabled: current.virtualInputEnabled,
+      showVirtualControls: false,
+      autoHideVirtualControls: current.autoHideVirtualControls,
+      controlBarDirection: current.controlBarDirection,
+      virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),
+      controlOpacity: current.controlOpacity,
+      gamepadDeadzone: current.gamepadDeadzone,
+      outputScale: current.outputScale
+    };
+    await this.store.put(GLOBAL_KEY, JSON.stringify(this.globalSettings));
+    await this.store.put(PLATFORM_DEFAULTS_KEY, '1');
+    await this.store.flush();
+  }
+
+  private detectPcSingleWindowMode(): boolean {
+    const model = (deviceInfo.productModel ?? '').toLowerCase();
+    return deviceInfo.deviceType === '2in1' || model.indexOf('emulator') >= 0;
+  }
+
+  /** PC/2-in-1 uses one ArkUI host window per selected Windows program. */
+  requiresSingleWindowMode(): boolean {
+    return this.pcSingleWindowMode;
   }
 
   private loadGlobal(): void {

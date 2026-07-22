@@ -41,6 +41,21 @@ assert.equal(
   ''
 );
 assert.equal(
+  rules.chooseExecutablePath('/games/palmod2.0', [
+    '/games/palmod2.0/palmod.exe',
+    '/games/palmod2.0/launcher.exe'
+  ]),
+  '/games/palmod2.0/palmod.exe'
+);
+assert.equal(
+  rules.chooseExecutablePath('/games/palmod2.0', [
+    '/games/palmod2.0/sdlpal.exe',
+    '/games/palmod2.0/pal/Pal.exe',
+    '/games/palmod2.0/pal/PALS.EXE'
+  ]),
+  '/games/palmod2.0/sdlpal.exe'
+);
+assert.equal(
   rules.chooseCoverFileName(['readme.txt', 'folder.png', 'cover.jpg']),
   'cover.jpg'
 );
@@ -75,4 +90,4 @@ assert.equal(
   false
 );
 
-console.log('catalog/model unit tests: 15 passed');
+console.log('catalog/model unit tests: 17 passed');

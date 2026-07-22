@@ -30,7 +30,7 @@ interface BuiltinCatalogItem {
   launchKind: string;
   launchParams: BuiltinLaunchParams;
   cover: string;
-  displayMode: string;
+  displayMode?: string;
 }
 
 interface BuiltinCatalogFile {
@@ -44,6 +44,7 @@ const GAMES_DIRECTORY = 'games';
 const DOWNLOAD_LIBRARY_URI = 'file://docs/storage/Users/currentUser/Download/com.vintage.pomelopro';
 
 function exists(path: string): boolean {
+  if (!path || path.trim().length === 0) return false;
   try {
     fs.accessSync(path);
     return true;
@@ -210,7 +211,11 @@ export class AppCatalogService {
     const result: AppDescriptor[] = [];
     catalog.apps.forEach((item: BuiltinCatalogItem) => {
       const kind = this.parseLaunchKind(item.launchKind);
-      const mode = item.displayMode === DisplayMode.SINGLE_APP ? DisplayMode.SINGLE_APP : DisplayMode.DESKTOP;
+      // A built-in manifest may request single-app explicitly. Otherwise it
+      // follows the global platform default, which is single-app on 2-in-1
+      // PCs and desktop mode on tablets/phones.
+      const mode: DisplayMode | null = item.displayMode === DisplayMode.SINGLE_APP ?
+        DisplayMode.SINGLE_APP : null;
       const id = item.id || stableAppId(AppSource.BUILTIN, item.launchParams.executable);
       const settings = AppSettingsStore.getInstance().getAppSettings(id);
       // Built-ins are part of the Wine runtime.  Their executable and working
@@ -240,15 +245,15 @@ export class AppCatalogService {
     return {
       version: 1,
       apps: [
-        { id: 'builtin-desktop', title: 'Wine 桌面', launchKind: 'wine-desktop', launchParams: { executable: 'explorer.exe' }, cover: '', displayMode: 'desktop' },
-        { id: 'builtin-explorer', title: '文件资源管理器', launchKind: 'wine-system', launchParams: { executable: 'explorer.exe', arguments: ['Z:\\'] }, cover: '', displayMode: 'desktop' },
-        { id: 'builtin-winecfg', title: 'Wine 配置', launchKind: 'wine-system', launchParams: { executable: 'winecfg.exe' }, cover: '', displayMode: 'desktop' },
-        { id: 'builtin-control', title: '控制面板', launchKind: 'wine-system', launchParams: { executable: 'control.exe' }, cover: '', displayMode: 'desktop' },
-        { id: 'builtin-taskmgr', title: '任务管理器', launchKind: 'wine-system', launchParams: { executable: 'taskmgr.exe' }, cover: '', displayMode: 'desktop' },
-        { id: 'builtin-regedit', title: '注册表编辑器', launchKind: 'wine-system', launchParams: { executable: 'regedit.exe' }, cover: '', displayMode: 'desktop' },
-        { id: 'builtin-cmd', title: '命令提示符', launchKind: 'wine-system', launchParams: { executable: 'wineconsole.exe', arguments: ['cmd.exe'] }, cover: '', displayMode: 'desktop' },
-        { id: 'builtin-graphics-smoke', title: '图形测试', launchKind: 'wine-system', launchParams: { executable: 'winehua_graphics_smoke.exe' }, cover: '', displayMode: 'desktop' },
-        { id: 'builtin-audio-smoke', title: '音频测试', launchKind: 'wine-system', launchParams: { executable: 'winehua_audio_smoke.exe' }, cover: '', displayMode: 'desktop' }
+        { id: 'builtin-desktop', title: 'Wine 桌面', launchKind: 'wine-desktop', launchParams: { executable: 'explorer.exe' }, cover: '' },
+        { id: 'builtin-explorer', title: '文件资源管理器', launchKind: 'wine-system', launchParams: { executable: 'explorer.exe', arguments: ['Z:\\'] }, cover: '' },
+        { id: 'builtin-winecfg', title: 'Wine 配置', launchKind: 'wine-system', launchParams: { executable: 'winecfg.exe' }, cover: '' },
+        { id: 'builtin-control', title: '控制面板', launchKind: 'wine-system', launchParams: { executable: 'control.exe' }, cover: '' },
+        { id: 'builtin-taskmgr', title: '任务管理器', launchKind: 'wine-system', launchParams: { executable: 'taskmgr.exe' }, cover: '' },
+        { id: 'builtin-regedit', title: '注册表编辑器', launchKind: 'wine-system', launchParams: { executable: 'regedit.exe' }, cover: '' },
+        { id: 'builtin-cmd', title: '命令提示符', launchKind: 'wine-system', launchParams: { executable: 'wineconsole.exe', arguments: ['cmd.exe'] }, cover: '' },
+        { id: 'builtin-graphics-smoke', title: '图形测试', launchKind: 'wine-system', launchParams: { executable: 'winehua_graphics_smoke.exe' }, cover: '' },
+        { id: 'builtin-audio-smoke', title: '音频测试', launchKind: 'wine-system', launchParams: { executable: 'winehua_audio_smoke.exe' }, cover: '' }
       ]
     };
   }
