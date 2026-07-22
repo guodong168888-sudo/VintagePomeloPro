@@ -212,8 +212,8 @@ export class AppCatalogService {
     catalog.apps.forEach((item: BuiltinCatalogItem) => {
       const kind = this.parseLaunchKind(item.launchKind);
       // A built-in manifest may request single-app explicitly. Otherwise it
-      // follows the global platform default, which is single-app on 2-in-1
-      // PCs and desktop mode on tablets/phones.
+      // follows the global desktop default. PC/2-in-1 hosts present that mode
+      // as independent managed Wine windows rather than a singleton window.
       const mode: DisplayMode | null = item.displayMode === DisplayMode.SINGLE_APP ?
         DisplayMode.SINGLE_APP : null;
       const id = item.id || stableAppId(AppSource.BUILTIN, item.launchParams.executable);

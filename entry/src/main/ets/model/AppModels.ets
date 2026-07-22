@@ -17,6 +17,13 @@ export enum DisplayMode {
   SINGLE_APP = 'single-app'
 }
 
+/** Internal host topology; kept separate from the user's two display modes. */
+export enum WinePresentationMode {
+  DESKTOP = 'desktop',
+  MANAGED_WINDOWS = 'managed-windows',
+  SINGLE_APP = 'single-app'
+}
+
 export enum EngineState {
   STOPPED = 'stopped',
   PREPARING = 'preparing',
@@ -132,6 +139,7 @@ export interface RuntimeSession {
   executable: string;
   pid: number;
   displayMode: DisplayMode;
+  presentationMode: WinePresentationMode;
   state: SessionState;
   toplevelId: number;
   startedAt: number;
@@ -602,6 +610,23 @@ export function createDefaultInputProfile(): InputProfile {
 
 export function resolveDisplayMode(override: DisplayMode | null, defaultMode: DisplayMode): DisplayMode {
   return override ?? defaultMode;
+}
+
+/**
+ * Resolve the user-facing mode without treating the explicit Wine desktop
+ * card as a normal Windows program.
+ */
+export function resolveLaunchDisplayMode(kind: LaunchKind, override: DisplayMode | null,
+  defaultMode: DisplayMode): DisplayMode {
+  if (kind === LaunchKind.WINE_DESKTOP) return DisplayMode.DESKTOP;
+  return resolveDisplayMode(override, defaultMode);
+}
+
+export function resolveWinePresentationMode(kind: LaunchKind, displayMode: DisplayMode,
+  managedWindowsHost: boolean): WinePresentationMode {
+  if (kind === LaunchKind.WINE_DESKTOP) return WinePresentationMode.DESKTOP;
+  if (displayMode === DisplayMode.SINGLE_APP) return WinePresentationMode.SINGLE_APP;
+  return managedWindowsHost ? WinePresentationMode.MANAGED_WINDOWS : WinePresentationMode.DESKTOP;
 }
 
 export function canTransitionEngineState(from: EngineState, to: EngineState): boolean {

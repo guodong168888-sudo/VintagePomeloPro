@@ -11,8 +11,10 @@ import {
   NativeWineSessionInfo,
   RuntimeSession,
   SessionState,
+  WinePresentationMode,
   normalizeLaunchPath,
-  resolveDisplayMode
+  resolveLaunchDisplayMode,
+  resolveWinePresentationMode
 } from '../model/AppModels';
 import { WineEngineService } from './WineEngineService';
 import { WineWindowManager } from './WineWindowManager';
@@ -55,10 +57,23 @@ export class AppSessionService {
   }
 
   resolveMode(app: AppDescriptor, settings: GlobalSettings): DisplayMode {
-    // Harmony PC/2-in-1 window management exposes the selected program as one
-    // application window. Ignore desktop overrides left by a tablet install.
-    if (AppSettingsStore.getInstance().requiresSingleWindowMode()) return DisplayMode.SINGLE_APP;
-    return resolveDisplayMode(app.displayModeOverride, settings.defaultDisplayMode);
+    return resolveLaunchDisplayMode(app.launchTarget.kind, app.displayModeOverride,
+      settings.defaultDisplayMode);
+  }
+
+  resolvePresentationMode(app: AppDescriptor, settings: GlobalSettings): WinePresentationMode {
+    const requested = resolveWinePresentationMode(app.launchTarget.kind, this.resolveMode(app, settings),
+      AppSettingsStore.getInstance().usesManagedWineWindows());
+    // A full Wine desktop is already a multi-program session.  On a PC the
+    // cold-start topology is MANAGED_WINDOWS, but once the desktop shell is
+    // active, ordinary programs must stay in that same desktop session rather
+    // than triggering a mode-switch dialog or tearing down explorer.exe.
+    if (requested === WinePresentationMode.MANAGED_WINDOWS &&
+      WineEngineService.getInstance().isReady() &&
+      WineEngineService.getInstance().getPresentationMode() === WinePresentationMode.DESKTOP) {
+      return WinePresentationMode.DESKTOP;
+    }
+    return requested;
   }
 
   hasModeConflict(app: AppDescriptor, settings: GlobalSettings): boolean {
@@ -73,12 +88,17 @@ export class AppSessionService {
     }
     const engine = WineEngineService.getInstance();
     const currentMode = engine.getMode();
-    if (!currentMode || engine.getState() === EngineState.STOPPED) return LaunchConflictKind.NONE;
+    const currentPresentation = engine.getPresentationMode();
+    if (!currentMode || !currentPresentation || engine.getState() === EngineState.STOPPED) {
+      return LaunchConflictKind.NONE;
+    }
     const requestedMode = this.resolveMode(app, settings);
-    if (currentMode !== requestedMode && engine.getState() !== EngineState.STOPPED) {
+    const requestedPresentation = this.resolvePresentationMode(app, settings);
+    if ((currentMode !== requestedMode || currentPresentation !== requestedPresentation) &&
+      engine.getState() !== EngineState.STOPPED) {
       return LaunchConflictKind.DISPLAY_MODE;
     }
-    if (requestedMode === DisplayMode.SINGLE_APP && engine.isReady()) {
+    if (requestedPresentation === WinePresentationMode.SINGLE_APP && engine.isReady()) {
       const requestedPath = normalizeLaunchPath(app.launchTarget.executable);
       const running = this.getRunningPaths();
       let hasDifferentPath = false;
@@ -97,13 +117,16 @@ export class AppSessionService {
       app.launchTarget.kind === LaunchKind.WINE_DESKTOP) &&
       app.launchTarget.executable.trim().length === 0) return null;
     const mode = this.resolveMode(app, settings);
+    const presentationMode = this.resolvePresentationMode(app, settings);
 
     // “Wine 桌面”不是普通可执行文件：先检查实际 desktop root 是否仍存在。
     // root 已被关闭时只补启 explorer desktop，不重置 prefix，也不结束其它窗口。
-    if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP && mode === DisplayMode.DESKTOP) {
+    if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP &&
+      presentationMode === WinePresentationMode.DESKTOP) {
       const engine = WineEngineService.getInstance();
-      const wasDesktopReady = engine.isReady() && engine.getMode() === DisplayMode.DESKTOP;
-      const ready = await engine.ensureReady(mode, homeDirectory);
+      const wasDesktopReady = engine.isReady() &&
+        engine.getPresentationMode() === WinePresentationMode.DESKTOP;
+      const ready = await engine.ensureReady(mode, presentationMode, homeDirectory);
       if (!ready) return null;
       const currentDesktop = this.syncDesktopSessionFromNative();
       if (currentDesktop && currentDesktop.toplevelId > 0) {
@@ -145,10 +168,10 @@ export class AppSessionService {
       return existing;
     }
 
-    const ready = await WineEngineService.getInstance().ensureReady(mode, homeDirectory);
+    const ready = await WineEngineService.getInstance().ensureReady(mode, presentationMode, homeDirectory);
     if (!ready) return null;
 
-    if (mode === DisplayMode.DESKTOP) {
+    if (presentationMode === WinePresentationMode.DESKTOP) {
       const desktopSession = await this.ensureDesktopSession();
       if (!desktopSession) return null;
       if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP) return desktopSession;
@@ -163,6 +186,7 @@ export class AppSessionService {
       executable: app.launchTarget.executable,
       pid: result.pid,
       displayMode: mode,
+      presentationMode: presentationMode,
       state: SessionState.RUNNING,
       toplevelId: 0,
       startedAt: Date.now()
@@ -190,11 +214,24 @@ export class AppSessionService {
     if (session.toplevelId > 0) {
       try { testNapi.raiseToplevel(session.toplevelId); } catch (_) {}
     }
-    if (session.displayMode === DisplayMode.DESKTOP) {
+    if (session.presentationMode === WinePresentationMode.DESKTOP) {
       if (session.toplevelId <= 0) return;
       const want: Want = {
         bundleName: 'com.vintage.pomelopro',
         abilityName: 'DesktopAbility',
+        parameters: { toplevelId: session.toplevelId }
+      };
+      await this.context.startAbility(want);
+    } else if (session.presentationMode === WinePresentationMode.MANAGED_WINDOWS) {
+      if (session.toplevelId <= 0) return;
+      const managedWindow = WineWindowManager.getInstance().getWindow(session.toplevelId);
+      if (managedWindow) {
+        await managedWindow.showWindow();
+        return;
+      }
+      const want: Want = {
+        bundleName: 'com.vintage.pomelopro',
+        abilityName: 'WineWindowAbility',
         parameters: { toplevelId: session.toplevelId }
       };
       await this.context.startAbility(want);
@@ -226,7 +263,9 @@ export class AppSessionService {
     this.sessions.clear();
     this.pendingToplevels = [];
     await InputOverlayWindowCoordinator.getInstance().setVisible(false);
-    return WineEngineService.getInstance().restart(mode, homeDirectory);
+    const presentationMode = resolveWinePresentationMode(LaunchKind.WINE_EXE, mode,
+      AppSettingsStore.getInstance().usesManagedWineWindows());
+    return WineEngineService.getInstance().restart(mode, presentationMode, homeDirectory);
   }
 
   async resetPrefix(): Promise<void> {
@@ -302,7 +341,7 @@ export class AppSessionService {
       });
     }
     if (!matched && sessionId === DESKTOP_SESSION_ID &&
-      WineEngineService.getInstance().getMode() === DisplayMode.DESKTOP) {
+      WineEngineService.getInstance().getPresentationMode() === WinePresentationMode.DESKTOP) {
       matched = this.upsertDesktopSession(toplevelId, clientPid);
     }
     if (matched) {
@@ -405,6 +444,7 @@ export class AppSessionService {
       executable: DESKTOP_EXECUTABLE,
       pid: pid > 0 ? pid : 0,
       displayMode: DisplayMode.DESKTOP,
+      presentationMode: WinePresentationMode.DESKTOP,
       state: SessionState.RUNNING,
       toplevelId: toplevelId > 0 ? toplevelId : 0,
       startedAt: Date.now()
@@ -416,7 +456,7 @@ export class AppSessionService {
 
   private reconcile(): void {
     if (WineEngineService.getInstance().getState() === EngineState.READY &&
-      WineEngineService.getInstance().getMode() === DisplayMode.DESKTOP) {
+      WineEngineService.getInstance().getPresentationMode() === WinePresentationMode.DESKTOP) {
       this.syncDesktopSessionFromNative();
     }
     const processes = this.getNativeProcesses();

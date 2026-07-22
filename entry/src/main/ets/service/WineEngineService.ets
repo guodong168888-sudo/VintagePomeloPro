@@ -8,6 +8,7 @@ import {
   EngineState,
   NativeLaunchResult,
   NativeProcessInfo,
+  WinePresentationMode,
   canTransitionEngineState
 } from '../model/AppModels';
 import { WineWindowManager } from './WineWindowManager';
@@ -71,6 +72,7 @@ export class WineEngineService {
   private state: EngineState = EngineState.STOPPED;
   private message: string = 'Wine 引擎未启动';
   private mode: DisplayMode | null = null;
+  private presentationMode: WinePresentationMode | null = null;
   private homeDirectory: string = '';
   private listeners: Set<EngineStateListener> = new Set<EngineStateListener>();
   private waiters: Array<(ready: boolean) => void> = [];
@@ -101,6 +103,10 @@ export class WineEngineService {
     return this.mode;
   }
 
+  getPresentationMode(): WinePresentationMode | null {
+    return this.presentationMode;
+  }
+
   isReady(): boolean {
     return this.state === EngineState.READY;
   }
@@ -114,23 +120,28 @@ export class WineEngineService {
     this.listeners.delete(listener);
   }
 
-  async ensureReady(mode: DisplayMode, homeDirectory: string): Promise<boolean> {
+  async ensureReady(mode: DisplayMode, presentationMode: WinePresentationMode,
+    homeDirectory: string): Promise<boolean> {
     if (!this.context) return false;
-    if (this.state === EngineState.READY && this.mode === mode) return true;
-    if (this.state === EngineState.PREPARING && this.mode === mode) return this.waitForReady();
+    if (this.state === EngineState.READY && this.mode === mode &&
+      this.presentationMode === presentationMode) return true;
+    if (this.state === EngineState.PREPARING && this.mode === mode &&
+      this.presentationMode === presentationMode) return this.waitForReady();
 
-    if (this.state !== EngineState.STOPPED && this.mode !== mode) {
+    if (this.state !== EngineState.STOPPED &&
+      (this.mode !== mode || this.presentationMode !== presentationMode)) {
       this.setState(EngineState.SWITCHING, '正在切换显示模式');
       await this.stopAll();
     }
 
     this.mode = mode;
+    this.presentationMode = presentationMode;
     this.homeDirectory = homeDirectory;
     this.setState(EngineState.PREPARING, '正在准备 Wine 引擎');
 
     try {
       await this.ensureRuntimeInstalled();
-      WineWindowManager.getInstance().setDisplayMode(mode);
+      WineWindowManager.getInstance().setPresentationMode(presentationMode);
       const serverReady = testNapi.startServer(SOCK) as boolean;
       if (!serverReady) {
         this.setState(EngineState.ERROR, 'Wayland 服务启动失败');
@@ -151,7 +162,7 @@ export class WineEngineService {
     if (this.state !== EngineState.READY) {
       return { pid: -1, sessionId: '', reused: false };
     }
-    const singleAppRoot = this.mode === DisplayMode.SINGLE_APP;
+    const singleAppRoot = this.presentationMode === WinePresentationMode.SINGLE_APP;
     if (singleAppRoot) WineWindowManager.getInstance().prepareSingleAppComposition();
     return testNapi.runWineExe(
       WINE_BIN,
@@ -169,7 +180,8 @@ export class WineEngineService {
    * 不调用 stopAll，因而不会中断桌面模式中仍在运行的其它 Windows 程序。
    */
   restartDesktopShell(): NativeLaunchResult {
-    if (this.state !== EngineState.READY || this.mode !== DisplayMode.DESKTOP) {
+    if (this.state !== EngineState.READY ||
+      this.presentationMode !== WinePresentationMode.DESKTOP) {
       return { pid: -1, sessionId: '', reused: false };
     }
     // Initial desktop startup uses Wine's `explorer` program name.  Reusing
@@ -188,6 +200,7 @@ export class WineEngineService {
     this.finishWaiters(false);
     await this.waitForNativeShutdown();
     this.mode = null;
+    this.presentationMode = null;
     this.setState(EngineState.STOPPED, 'Wine 引擎已停止');
     // Leave a small socket-settle window after the process list becomes empty.
     // Restarting the Wayland server immediately can otherwise race the old
@@ -199,21 +212,23 @@ export class WineEngineService {
    * Rebuild Wine/Wayland services without deleting the prefix. Concurrent UI
    * requests share one operation so two taps cannot start competing servers.
    */
-  async restart(mode: DisplayMode, homeDirectory: string): Promise<boolean> {
+  async restart(mode: DisplayMode, presentationMode: WinePresentationMode,
+    homeDirectory: string): Promise<boolean> {
     if (this.restartPromise) return this.restartPromise;
-    const operation = this.performRestart(mode, homeDirectory);
+    const operation = this.performRestart(mode, presentationMode, homeDirectory);
     this.restartPromise = operation;
     const ready = await operation;
     if (this.restartPromise === operation) this.restartPromise = null;
     return ready;
   }
 
-  private async performRestart(mode: DisplayMode, homeDirectory: string): Promise<boolean> {
+  private async performRestart(mode: DisplayMode, presentationMode: WinePresentationMode,
+    homeDirectory: string): Promise<boolean> {
     if (this.state !== EngineState.STOPPED) {
       this.setState(EngineState.SWITCHING, '正在重新启动 Wine 引擎');
     }
     await this.stopAll();
-    return this.ensureReady(mode, homeDirectory);
+    return this.ensureReady(mode, presentationMode, homeDirectory);
   }
 
   private async waitForNativeShutdown(): Promise<void> {

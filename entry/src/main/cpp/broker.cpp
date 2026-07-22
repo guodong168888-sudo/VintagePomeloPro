@@ -39,6 +39,7 @@ std::string gBrokerHomeDir;
 static const char* kBrokerSocketPath = WINE_BROKER_SOCKET;
 
 static std::atomic<bool> gBrokerRunning{false};
+static std::atomic<bool> gBrokerListening{false};
 
 static bool IsBrokerWineserverRequest(const char* entryParamsRaw)
 {
@@ -242,11 +243,11 @@ static void BrokerThreadFunc()
     int server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (server_fd < 0) {
         OH_LOG_ERROR(LOG_APP, "[Broker] socket() failed: %{public}s", strerror(errno));
+        gBrokerRunning.store(false, std::memory_order_release);
         return;
     }
 
     // 2) 绑定到已知路径
-    unlink(kBrokerSocketPath);  // 清理残留
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
@@ -256,6 +257,7 @@ static void BrokerThreadFunc()
         OH_LOG_ERROR(LOG_APP, "[Broker] bind(%{public}s) failed: %{public}s",
                      kBrokerSocketPath, strerror(errno));
         close(server_fd);
+        gBrokerRunning.store(false, std::memory_order_release);
         return;
     }
 
@@ -263,9 +265,11 @@ static void BrokerThreadFunc()
     if (listen(server_fd, 8) < 0) {
         OH_LOG_ERROR(LOG_APP, "[Broker] listen() failed: %{public}s", strerror(errno));
         close(server_fd);
+        gBrokerRunning.store(false, std::memory_order_release);
         return;
     }
 
+    gBrokerListening.store(true, std::memory_order_release);
     OH_LOG_INFO(LOG_APP, "[Broker] listening on %{public}s", kBrokerSocketPath);
 
     // 4) Accept 循环
@@ -281,6 +285,8 @@ static void BrokerThreadFunc()
     }
 
     close(server_fd);
+    gBrokerListening.store(false, std::memory_order_release);
+    gBrokerRunning.store(false, std::memory_order_release);
     unlink(kBrokerSocketPath);
     OH_LOG_INFO(LOG_APP, "[Broker] thread exiting");
 }
@@ -288,16 +294,29 @@ static void BrokerThreadFunc()
 int StartBrokerServer()
 {
     if (gBrokerRunning.load(std::memory_order_acquire)) {
-        OH_LOG_WARN(LOG_APP, "[Broker] already running");
-        return 0;
+        const bool ready = WaitFor("broker listening", []() {
+            return gBrokerListening.load(std::memory_order_acquire);
+        }, 2000, 20);
+        OH_LOG_WARN(LOG_APP, "[Broker] already running, listening=%{public}s",
+                    ready ? "yes" : "no");
+        return ready ? 0 : -1;
     }
 
+    // Remove a socket left by a previously killed application before the
+    // worker is published as running. Waiting on file existence alone races
+    // this unlink and can make Wine launch into a stale, refused socket.
+    unlink(kBrokerSocketPath);
+    gBrokerListening.store(false, std::memory_order_release);
     gBrokerRunning.store(true, std::memory_order_release);
     std::thread(BrokerThreadFunc).detach();
 
-    // 等待 broker socket 文件创建 (避免盲等)
-    if (!WaitFor("broker socket", []() { return access(kBrokerSocketPath, F_OK) == 0; }, 2000, 50)) {
-        OH_LOG_WARN(LOG_APP, "[Broker] socket creation slow, continuing anyway");
+    // Readiness means listen() completed, not merely that a socket pathname
+    // exists. This makes the WineEngine READY callback safe to act on.
+    if (!WaitFor("broker listening", []() {
+        return gBrokerListening.load(std::memory_order_acquire);
+    }, 2000, 20)) {
+        OH_LOG_ERROR(LOG_APP, "[Broker] failed to become ready");
+        return -1;
     }
     return 0;
 }

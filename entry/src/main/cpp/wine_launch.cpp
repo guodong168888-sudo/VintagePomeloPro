@@ -255,7 +255,10 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd, const std::stri
         napi_call_threadsafe_function(gStateTsfn, strdup("wineboot-starting"), napi_tsfn_blocking);
 
     gBrokerHomeDir = p->homeDir;
-    StartBrokerServer();
+    if (StartBrokerServer() != 0) {
+        OH_LOG_ERROR(LOG_APP, "[Launch-Async] process broker failed to become ready");
+        return false;
+    }
     setenv("PROCESSBROKER", WINE_BROKER_SOCKET, 1);
 
     // -- wineboot --init --
@@ -360,7 +363,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd, const std::stri
     }
     else
     {
-        OH_LOG_INFO(LOG_APP, "[Launch-Async] single-app engine ready; explorer intentionally not started");
+        OH_LOG_INFO(LOG_APP, "[Launch-Async] managed/single-app engine ready; explorer intentionally not started");
     }
     return true;
 }

@@ -2,7 +2,7 @@ import { common, Want } from '@kit.AbilityKit';
 import { window, display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import testNapi from 'libentry.so';
-import { DisplayMode } from '../model/AppModels';
+import { WinePresentationMode } from '../model/AppModels';
 import { PopupWindowManager } from './PopupWindowManager';
 import { ArgbWindowManager } from './ArgbWindowManager';
 
@@ -32,7 +32,7 @@ export class WineWindowManager {
 
   // -- Desktop 模式 (Tablet) --
   private isDesktopMode: boolean = true;
-  private displayMode: DisplayMode = DisplayMode.DESKTOP;
+  private presentationMode: WinePresentationMode = WinePresentationMode.DESKTOP;
   private desktopRootId: number = 0;
   private desktopAbilityRunning: boolean = false;
   private desktopAbilityRootId: number = 0;
@@ -112,7 +112,7 @@ export class WineWindowManager {
       this.mainWindow ? 'ok' : 'NULL', this.uiAbilityContext ? 'ok' : 'NULL');
 
     testNapi.setDesktopMode(this.isDesktopMode);
-    hilog.info(DOMAIN, TAG, '[MW] configured display mode=%{public}s', this.displayMode);
+    hilog.info(DOMAIN, TAG, '[MW] configured presentation mode=%{public}s', this.presentationMode);
 
     // 获取设备显示密度 + 主窗口可用区域
     try {
@@ -146,16 +146,16 @@ export class WineWindowManager {
     hilog.info(DOMAIN, TAG, '[MW] toplevel callback registered OK');
   }
 
-  setDisplayMode(mode: DisplayMode): void {
-    this.displayMode = mode;
-    this.isDesktopMode = mode === DisplayMode.DESKTOP;
+  setPresentationMode(mode: WinePresentationMode): void {
+    this.presentationMode = mode;
+    this.isDesktopMode = mode === WinePresentationMode.DESKTOP;
     this.desktopRootId = 0;
     this.desktopAbilityRunning = false;
     this.desktopAbilityRootId = 0;
     this.singleAppRootId = 0;
     this.destroyed.clear();
     testNapi.setDesktopMode(this.isDesktopMode);
-    hilog.info(DOMAIN, TAG, '[MW] setDisplayMode=%{public}s nativeDesktop=%{public}s',
+    hilog.info(DOMAIN, TAG, '[MW] setPresentationMode=%{public}s nativeDesktop=%{public}s',
       mode, this.isDesktopMode ? 'yes' : 'no');
   }
 
@@ -177,7 +177,7 @@ export class WineWindowManager {
   }
 
   prepareSingleAppComposition(): void {
-    if (this.displayMode !== DisplayMode.SINGLE_APP) return;
+    if (this.presentationMode !== WinePresentationMode.SINGLE_APP) return;
     testNapi.setDesktopMode(true);
     hilog.info(DOMAIN, TAG, '[MW] single-app compositor enabled before root launch');
   }
@@ -345,14 +345,16 @@ export class WineWindowManager {
       case 'created':
         try {
           const initial = JSON.parse(data) as Record<string, string | number>;
-          if (this.sessionAssociationCallback && (this.isDesktopMode || this.singleAppRootId === 0)) {
+          if (this.sessionAssociationCallback &&
+            (this.presentationMode === WinePresentationMode.MANAGED_WINDOWS ||
+              this.isDesktopMode || this.singleAppRootId === 0)) {
             this.sessionAssociationCallback(initial.sessionId as string ?? '', initial.clientPid as number ?? 0, id);
           }
         } catch (_) {
         }
         if (this.isDesktopMode) {
           hilog.info(DOMAIN, TAG, '[MW] Desktop mode: toplevel #%{public}d created, skipping Ability', id);
-        } else {
+        } else if (this.presentationMode === WinePresentationMode.SINGLE_APP) {
           if (this.singleAppRootId === 0) {
             this.singleAppRootId = id;
             hilog.info(DOMAIN, TAG, '[MW] -> startSingleAppAbility(#%{public}d)', id);
@@ -360,10 +362,13 @@ export class WineWindowManager {
           } else {
             hilog.info(DOMAIN, TAG, '[MW] single-app child toplevel #%{public}d composed into root #%{public}d', id, this.singleAppRootId);
           }
+        } else {
+          hilog.info(DOMAIN, TAG, '[MW] managed windows -> startWineWindowAbility(#%{public}d)', id);
+          this.startWineWindowAbility(id, data);
         }
         break;
       case 'desktop_root':
-        if (this.displayMode === DisplayMode.DESKTOP) {
+        if (this.presentationMode === WinePresentationMode.DESKTOP) {
           hilog.info(DOMAIN, TAG, '[MW] desktop_root #%{public}d -> start DesktopAbility', id);
           if (this.sessionAssociationCallback) this.sessionAssociationCallback(DESKTOP_SESSION_ID, 0, id);
           this.desktopRootId = id;
@@ -714,7 +719,7 @@ export class WineWindowManager {
       return;
     }
 
-    if (this.displayMode === DisplayMode.SINGLE_APP) {
+    if (this.presentationMode === WinePresentationMode.SINGLE_APP) {
       if (id !== this.singleAppRootId) {
         this.unregisterAbility(id);
         return;

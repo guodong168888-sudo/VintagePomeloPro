@@ -78,6 +78,41 @@ assert.equal(
   models.DisplayMode.SINGLE_APP
 );
 assert.equal(
+  models.resolveLaunchDisplayMode(
+    models.LaunchKind.WINE_DESKTOP, null, models.DisplayMode.SINGLE_APP),
+  models.DisplayMode.DESKTOP
+);
+assert.equal(
+  models.resolveLaunchDisplayMode(
+    models.LaunchKind.WINE_EXE, models.DisplayMode.DESKTOP, models.DisplayMode.DESKTOP),
+  models.DisplayMode.DESKTOP
+);
+assert.equal(
+  models.resolveLaunchDisplayMode(
+    models.LaunchKind.WINE_SYSTEM, null, models.DisplayMode.DESKTOP),
+  models.DisplayMode.DESKTOP
+);
+assert.equal(
+  models.resolveWinePresentationMode(
+    models.LaunchKind.WINE_DESKTOP, models.DisplayMode.DESKTOP, true),
+  models.WinePresentationMode.DESKTOP
+);
+assert.equal(
+  models.resolveWinePresentationMode(
+    models.LaunchKind.WINE_EXE, models.DisplayMode.DESKTOP, true),
+  models.WinePresentationMode.MANAGED_WINDOWS
+);
+assert.equal(
+  models.resolveWinePresentationMode(
+    models.LaunchKind.WINE_EXE, models.DisplayMode.DESKTOP, false),
+  models.WinePresentationMode.DESKTOP
+);
+assert.equal(
+  models.resolveWinePresentationMode(
+    models.LaunchKind.WINE_EXE, models.DisplayMode.SINGLE_APP, true),
+  models.WinePresentationMode.SINGLE_APP
+);
+assert.equal(
   models.canTransitionEngineState(models.EngineState.STOPPED, models.EngineState.PREPARING),
   true
 );
@@ -90,4 +125,4 @@ assert.equal(
   false
 );
 
-console.log('catalog/model unit tests: 17 passed');
+console.log('catalog/model unit tests: 24 passed');

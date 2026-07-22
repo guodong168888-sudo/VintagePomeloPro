@@ -117,19 +117,29 @@ napi_value RunWineExe(napi_env env, napi_callback_info info) {
         entryParams += SerializeEnvToEntryParams(wineEnv);
         OH_LOG_INFO(LOG_APP, "[Wine] runWineExe via broker: %{public}s", entryParams.c_str());
 
-        int broker_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-        if (broker_fd < 0) {
-            OH_LOG_ERROR(LOG_APP, "[Wine] broker socket failed: %{public}s", strerror(errno));
+        const char* brokerPath = getenv("PROCESSBROKER");
+        if (!brokerPath || !brokerPath[0]) {
+            OH_LOG_ERROR(LOG_APP, "[Wine] PROCESSBROKER is not configured");
             if (gStateTsfn) napi_call_threadsafe_function(gStateTsfn, strdup("-1:wine-failed"), napi_tsfn_blocking);
             return MakeLaunchResult(env, -1, "", false);
         }
         struct sockaddr_un addr;
         memset(&addr, 0, sizeof(addr));
         addr.sun_family = AF_UNIX;
-        strcpy(addr.sun_path, getenv("PROCESSBROKER"));
-        if (connect(broker_fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
-            OH_LOG_ERROR(LOG_APP, "[Wine] broker connect failed: %{public}s", strerror(errno));
-            close(broker_fd);
+        strncpy(addr.sun_path, brokerPath, sizeof(addr.sun_path) - 1);
+
+        int broker_fd = -1;
+        int connectError = 0;
+        for (int attempt = 0; attempt < 10; attempt++) {
+            broker_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+            if (broker_fd >= 0 && connect(broker_fd, (struct sockaddr*)&addr, sizeof(addr)) == 0) break;
+            connectError = errno;
+            if (broker_fd >= 0) close(broker_fd);
+            broker_fd = -1;
+            usleep(50000);
+        }
+        if (broker_fd < 0) {
+            OH_LOG_ERROR(LOG_APP, "[Wine] broker connect failed after retry: %{public}s", strerror(connectError));
             if (gStateTsfn) napi_call_threadsafe_function(gStateTsfn, strdup("-1:wine-failed"), napi_tsfn_blocking);
             return MakeLaunchResult(env, -1, "", false);
         }

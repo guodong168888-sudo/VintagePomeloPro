@@ -18,7 +18,10 @@ const GLOBAL_KEY = 'global_settings_v1';
 const APP_SETTINGS_KEY = 'app_settings_v1';
 const LIBRARY_PATH_KEY = 'library_path_v1';
 const CATALOG_CACHE_KEY = 'catalog_cache_v1';
-const PLATFORM_DEFAULTS_KEY = 'platform_defaults_v2';
+// Bump this whenever the product default changes. v2/v3 installations may
+// still carry the short-lived PC single-app default, so those installs must
+// be migrated once to the desktop default before the catalog is resolved.
+const PLATFORM_DEFAULTS_KEY = 'platform_defaults_v4';
 
 export class AppSettingsStore {
   private static instance: AppSettingsStore | null = null;
@@ -26,7 +29,7 @@ export class AppSettingsStore {
   private appSettings: Map<string, AppSettings> = new Map<string, AppSettings>();
   private globalSettings: GlobalSettings = createDefaultGlobalSettings();
   private libraryPath: string = '';
-  private pcSingleWindowMode: boolean = false;
+  private managedWineWindowsHost: boolean = false;
 
   static getInstance(): AppSettingsStore {
     if (!AppSettingsStore.instance) AppSettingsStore.instance = new AppSettingsStore();
@@ -34,7 +37,7 @@ export class AppSettingsStore {
   }
 
   async initialize(context: common.UIAbilityContext): Promise<void> {
-    this.pcSingleWindowMode = this.detectPcSingleWindowMode();
+    this.managedWineWindowsHost = this.detectManagedWineWindowsHost();
     if (this.store) return;
     this.store = await preferences.getPreferences(context, STORE_NAME);
     this.loadGlobal();
@@ -44,10 +47,9 @@ export class AppSettingsStore {
   }
 
   /**
-   * Apply first-run defaults without overwriting a later user choice. Harmony
-   * 2-in-1 devices behave like a PC: a selected EXE should own the window
-   * instead of starting the multi-window Wine desktop shell. Tablets retain
-   * the desktop default, while virtual buttons start hidden on every device.
+   * Migrate the short-lived PC single-app default back to the product default.
+   * “桌面模式” is the user default on every device; PC/2-in-1 hosts implement
+   * it as one Harmony window per Wine toplevel instead of a singleton app.
    */
   private async applyPlatformDefaults(): Promise<void> {
     if (!this.store) return;
@@ -55,7 +57,7 @@ export class AppSettingsStore {
     if (applied === '1') return;
     const current = this.globalSettings;
     this.globalSettings = {
-      defaultDisplayMode: this.pcSingleWindowMode ? DisplayMode.SINGLE_APP : current.defaultDisplayMode,
+      defaultDisplayMode: DisplayMode.DESKTOP,
       desktopInputProfileId: current.desktopInputProfileId,
       viewMode: current.viewMode,
       themeMode: current.themeMode,
@@ -63,7 +65,7 @@ export class AppSettingsStore {
       usePageBackground: current.usePageBackground,
       pageBackgroundUri: current.pageBackgroundUri,
       virtualInputEnabled: current.virtualInputEnabled,
-      showVirtualControls: false,
+      showVirtualControls: current.showVirtualControls,
       autoHideVirtualControls: current.autoHideVirtualControls,
       controlBarDirection: current.controlBarDirection,
       virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),
@@ -76,14 +78,14 @@ export class AppSettingsStore {
     await this.store.flush();
   }
 
-  private detectPcSingleWindowMode(): boolean {
+  private detectManagedWineWindowsHost(): boolean {
     const model = (deviceInfo.productModel ?? '').toLowerCase();
     return deviceInfo.deviceType === '2in1' || model.indexOf('emulator') >= 0;
   }
 
-  /** PC/2-in-1 uses one ArkUI host window per selected Windows program. */
-  requiresSingleWindowMode(): boolean {
-    return this.pcSingleWindowMode;
+  /** PC/2-in-1 exposes every Wine toplevel through a multiton ArkUI window. */
+  usesManagedWineWindows(): boolean {
+    return this.managedWineWindowsHost;
   }
 
   private loadGlobal(): void {

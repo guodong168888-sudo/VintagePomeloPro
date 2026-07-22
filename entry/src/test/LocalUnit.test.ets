@@ -8,6 +8,8 @@ import {
   DEFAULT_VIRTUAL_MOUSE_CONFIG,
   DisplayMode,
   EngineState,
+  LaunchKind,
+  WinePresentationMode,
   RightJoystickOutputMode,
   VirtualGamepadLayout,
   VirtualKey,
@@ -20,6 +22,8 @@ import {
   createDefaultInputProfile,
   normalizeLaunchPath,
   resolveDisplayMode,
+  resolveLaunchDisplayMode,
+  resolveWinePresentationMode,
   resolveInputProfileId,
   resolveVirtualJoystickDirection,
   resolveVirtualKeyMapping,
@@ -86,6 +90,26 @@ export default function localUnitTest() {
     it('resolvesPerAppDisplayModeOverride', 0, () => {
       expect(resolveDisplayMode(null, DisplayMode.DESKTOP)).assertEqual(DisplayMode.DESKTOP);
       expect(resolveDisplayMode(DisplayMode.SINGLE_APP, DisplayMode.DESKTOP)).assertEqual(DisplayMode.SINGLE_APP);
+    });
+
+    it('keepsDesktopAsTheUserDefaultOnEveryDevice', 0, () => {
+      expect(resolveLaunchDisplayMode(LaunchKind.WINE_DESKTOP, null,
+        DisplayMode.SINGLE_APP)).assertEqual(DisplayMode.DESKTOP);
+      expect(resolveLaunchDisplayMode(LaunchKind.WINE_EXE, DisplayMode.DESKTOP,
+        DisplayMode.DESKTOP)).assertEqual(DisplayMode.DESKTOP);
+      expect(resolveLaunchDisplayMode(LaunchKind.WINE_SYSTEM, null,
+        DisplayMode.DESKTOP)).assertEqual(DisplayMode.DESKTOP);
+    });
+
+    it('mapsPcDesktopModeToManagedWineWindows', 0, () => {
+      expect(resolveWinePresentationMode(LaunchKind.WINE_DESKTOP,
+        DisplayMode.DESKTOP, true)).assertEqual(WinePresentationMode.DESKTOP);
+      expect(resolveWinePresentationMode(LaunchKind.WINE_EXE,
+        DisplayMode.DESKTOP, true)).assertEqual(WinePresentationMode.MANAGED_WINDOWS);
+      expect(resolveWinePresentationMode(LaunchKind.WINE_EXE,
+        DisplayMode.DESKTOP, false)).assertEqual(WinePresentationMode.DESKTOP);
+      expect(resolveWinePresentationMode(LaunchKind.WINE_EXE,
+        DisplayMode.SINGLE_APP, true)).assertEqual(WinePresentationMode.SINGLE_APP);
     });
 
     it('validatesEngineStateMachine', 0, () => {
