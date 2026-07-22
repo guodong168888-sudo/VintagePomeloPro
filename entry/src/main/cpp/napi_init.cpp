@@ -120,40 +120,9 @@ static napi_value SetHostShadowProfile(napi_env env, napi_callback_info info) {
         napi_get_value_string_utf8(env, args[0], profile, sizeof(profile), nullptr);
 
     const bool skip = !strcmp(profile, "shadow-none");
-    const bool preciseStrongTrace =
-        !strcmp(profile, "shadow-precise-strong-ring-trace");
-    const bool preciseStrongPerf =
-        !strcmp(profile, "shadow-precise-strong-ring-perf");
-    const bool legacyHostSync =
-        !strcmp(profile, "shadow-precise-legacy-host-sync");
-    const bool preciseDirtyPerf = !strcmp(profile, "shadow-precise-dirty-ring-perf");
-    const bool preciseDirtyNoMerge = !strcmp(profile, "shadow-precise-dirty-ring-no-merge");
-    const bool preciseDirtyNoUpload = !strcmp(profile, "shadow-precise-dirty-ring-no-upload");
-    const bool preciseDirtyNoUploadFast =
-        !strcmp(profile, "shadow-precise-dirty-ring-no-upload-fast");
-    const bool preciseDirtyDescriptorSerialized =
-        !strcmp(profile, "shadow-precise-dirty-ring-inline-upload-descriptor-serialized");
-    const bool preciseDirtyCoverageSort =
-        !strcmp(profile, "shadow-precise-dirty-ring-inline-upload-coverage-sort");
-    const bool preciseDirtyFrameAssocTrace =
-        !strcmp(profile, "shadow-precise-dirty-ring-frame-assoc-trace");
-    const bool preciseDirtyPresentImageTrace =
-        !strcmp(profile, "shadow-precise-dirty-ring-present-image-trace");
-    const bool preciseDirtyInlineUpload =
-        !strcmp(profile, "shadow-precise-dirty-ring-inline-upload") ||
-        preciseDirtyCoverageSort || preciseDirtyDescriptorSerialized ||
-        preciseDirtyFrameAssocTrace;
-    const bool preciseDirtyInlineUploadSerialized =
-        !strcmp(profile, "shadow-precise-dirty-ring-inline-upload-serialized");
-    const bool preciseDirtyRing =
-        !strcmp(profile, "shadow-precise-dirty-ring") ||
-        preciseDirtyPresentImageTrace;
-    const bool trace = !strcmp(profile, "shadow-trace") || preciseStrongTrace;
+    const bool trace = !strcmp(profile, "shadow-trace");
     const bool explicitToHost = !strcmp(profile, "shadow-to-host-explicit");
     const bool deferShmemUnref = !strcmp(profile, "shadow-precise-retain-shmem");
-    const bool cpuShadowUpload =
-        !strcmp(profile, "shadow-precise-cpu-upload");
-    const bool waitShadowUpload = !strcmp(profile, "shadow-precise-sync-submit");
     const bool mailboxPresent = !strcmp(profile, "shadow-precise-strong-ring-mailbox");
     const bool asyncPresent = !strcmp(
         profile, "shadow-precise-strong-ring-async-present");
@@ -162,62 +131,25 @@ static napi_value SetHostShadowProfile(napi_env env, napi_callback_info info) {
     const bool precise = !strcmp(profile, "shadow-precise") ||
         !strcmp(profile, "shadow-precise-single-ring") ||
         !strcmp(profile, "shadow-precise-sync-submit") ||
-        (!strcmp(profile, "shadow-precise-strong-ring") || legacyHostSync || preciseStrongTrace ||
-         preciseStrongPerf || preciseDirtyRing || preciseDirtyPerf || preciseDirtyNoMerge || preciseDirtyNoUpload ||
-         preciseDirtyNoUploadFast || preciseDirtyInlineUpload ||
-         preciseDirtyInlineUploadSerialized) ||
+        !strcmp(profile, "shadow-precise-strong-ring") ||
         asyncPresent ||
         pollPresent ||
         mailboxPresent ||
         !strcmp(profile, "shadow-precise-direct-fence") ||
-        deferShmemUnref ||
-        cpuShadowUpload;
-    const char* mode = (preciseDirtyRing || preciseDirtyPerf || preciseDirtyNoUpload ||
-                        preciseDirtyNoUploadFast || preciseDirtyInlineUpload ||
-                        preciseDirtyInlineUploadSerialized ||
-                        preciseDirtyNoMerge) ? "precise-dirty" : precise ? "precise" : skip ? "none" :
+        deferShmemUnref;
+    const char* mode = precise ? "precise" : skip ? "none" :
         (explicitToHost ? "to-host-explicit" : "full");
     setenv("VKR_WINEHUA_SHADOW_FROM_HOST", mode, 1);
-    /* Preserve the precise shadow contract while carrying one diagnostic
-     * selector through the existing graphics-broker IPC. The child converts
-     * this selector to the concrete renderer flags before vtest starts. */
-    const char* shadowSelector =
-        legacyHostSync ? "legacy-host-sync" :
-        preciseDirtyCoverageSort ? "inline-gpu-upload-coverage-sort" :
-        preciseDirtyDescriptorSerialized ? "inline-gpu-upload-descriptor-serialized" :
-        preciseDirtyFrameAssocTrace ? "inline-gpu-upload-frame-assoc-trace" :
-        preciseDirtyPresentImageTrace ? "present-image-trace" :
-        cpuShadowUpload ? "cpu-upload" :
-        preciseDirtyInlineUploadSerialized ? "inline-gpu-upload-serialized" :
-        preciseDirtyInlineUpload ? "inline-gpu-upload" :
-        preciseDirtyNoUpload ? "no-gpu-upload" :
-        preciseDirtyNoUploadFast ? "no-gpu-upload-fast" :
-        (preciseStrongPerf || preciseDirtyPerf || preciseDirtyNoMerge) ? "perf" :
-        trace ? "1" : "0";
-    setenv("VKR_WINEHUA_SHADOW_TRACE", shadowSelector, 1);
-    setenv("VKR_WINEHUA_SHADOW_MERGE_RANGES", preciseDirtyNoMerge ? "0" : "1", 1);
-    setenv("VKR_WINEHUA_GPU_UPLOAD_WAIT", waitShadowUpload ? "1" : "0", 1);
-    setenv("VKR_WINEHUA_DESCRIPTOR_UPDATE_SERIALIZE",
-           preciseDirtyDescriptorSerialized ? "1" : "0", 1);
+    setenv("VKR_WINEHUA_SHADOW_TRACE", trace ? "1" : "0", 1);
     setenv("VN_WINEHUA_DEFER_SHMEM_UNREF", deferShmemUnref ? "1" : "0", 1);
     const char* presentMode = mailboxPresent ? "mailbox" :
         (asyncPresent ? "fifo-async" : (pollPresent ? "fifo-poll" : "fifo"));
     setenv("WINEHUA_VENUS_PRESENT_MODE", presentMode, 1);
     OH_LOG_INFO(LOG_APP,
                 "[NAPI] host shadow profile=%{public}s mode=%{public}s "
-                "trace=%{public}s selector=%{public}s perf_summary=%{public}s "
-                "gpu_upload=%{public}s upload_wait=%{public}s "
-                "descriptor_serialize=%{public}s defer_shmem_unref=%{public}s "
-                "present_mode=%{public}s",
-                profile, mode, trace ? "1" : "0", shadowSelector,
-                (preciseStrongPerf || preciseDirtyPerf || preciseDirtyNoMerge ||
-                 preciseDirtyNoUpload || preciseDirtyInlineUpload ||
-                 preciseDirtyInlineUploadSerialized) ? "1" : "0",
-                (legacyHostSync || preciseDirtyNoUpload || preciseDirtyNoUploadFast) ? "0" :
-                    (cpuShadowUpload ? "cpu" : "auto"),
-                waitShadowUpload ? "1" : "0",
-                preciseDirtyDescriptorSerialized ? "1" : "0",
-                deferShmemUnref ? "1" : "0", presentMode);
+                "trace=%{public}s defer_shmem_unref=%{public}s present_mode=%{public}s",
+                profile, mode, trace ? "1" : "0", deferShmemUnref ? "1" : "0",
+                presentMode);
 
     napi_value result;
     napi_get_boolean(env, true, &result);
@@ -299,9 +231,7 @@ static napi_value CheckWinePrefix(napi_env env, napi_callback_info info) {
         napi_get_value_string_utf8(env, args[0], mode, sizeof(mode), nullptr);
         if (!strcmp(mode, "clean")) prefix = WINE_SMOKE_PREFIX;
     }
-    const std::string initMarker = prefix + "/.winehua-init-in-progress";
-    bool ok = IsWinePrefixInitialized(prefix)
-        && access(initMarker.c_str(), F_OK) != 0;
+    bool ok = IsWinePrefixInitialized(prefix);
     OH_LOG_INFO(LOG_APP, "[Wine] checkWinePrefix prefix=%{public}s initialized=%{public}s",
                 prefix.c_str(), ok ? "yes" : "no");
     napi_value r;
@@ -806,9 +736,6 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"runWineExe",     nullptr, RunWineExe,     nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runWineProgram", nullptr, RunWineProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runGuestProgram", nullptr, RunGuestProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"runHostProgram", nullptr, RunHostProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"runHostReplay", nullptr, RunHostReplay, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"isHostReplayRunning", nullptr, IsHostReplayRunning, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"queryWineProcess", nullptr, QueryWineProcess, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"terminateWineProcess", nullptr, TerminateWineProcess, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"checkWinePrefix",nullptr, CheckWinePrefix,nullptr, nullptr, nullptr, napi_default, nullptr},
