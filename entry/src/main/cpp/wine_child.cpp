@@ -57,37 +57,6 @@ static void* stderr_reader_thread(void* arg) {
 #define LOG_DOMAIN 0x0000
 #define LOG_TAG "WineChild"
 
-// HAP native libraries are not guaranteed to be visible through the
-// appspawn child's default linker search path. Try the normal soname first,
-// then resolve the sibling of this loaded native library (the HAP native-lib
-// directory) so ARM Box64 startup does not depend on process-specific paths.
-static void* open_box64_library()
-{
-    void* handle = dlopen("box64.so", RTLD_NOW | RTLD_LOCAL);
-    if (handle) return handle;
-
-    const char* firstError = dlerror();
-    Dl_info owner{};
-    if (dladdr(reinterpret_cast<void*>(&open_box64_library), &owner) != 0 && owner.dli_fname) {
-        std::string libraryPath(owner.dli_fname);
-        const size_t slash = libraryPath.find_last_of('/');
-        if (slash != std::string::npos) {
-            const std::string siblingPath = libraryPath.substr(0, slash) + "/box64.so";
-            handle = dlopen(siblingPath.c_str(), RTLD_NOW | RTLD_LOCAL);
-            if (handle) {
-                OH_LOG_INFO(LOG_APP, "[WineChild] dlopen box64.so via native-lib sibling: %{public}s",
-                            siblingPath.c_str());
-                return handle;
-            }
-        }
-    }
-
-    const char* lastError = dlerror();
-    OH_LOG_ERROR(LOG_APP, "[WineChild] dlopen box64.so failed by soname and native-lib sibling: %{public}s",
-                 lastError ? lastError : (firstError ? firstError : "unknown"));
-    return nullptr;
-}
-
 static const char *default_winedebug_profile(void)
 {
     return "-all";
@@ -107,11 +76,6 @@ static const char *sdl_audio_diag_winedebug_profile(void)
            "warn+module,err+module";
 }
 
-static const char *graphics_diag_winedebug_profile(void)
-{
-    return "-all,trace+opengl,trace+wgl,trace+waylanddrv,warn+module,err+module";
-}
-
 static const char *basename_of_path(const char *path)
 {
     const char *slash;
@@ -124,23 +88,12 @@ static const char *basename_of_path(const char *path)
 
 static bool is_audio_test_exe(int argc, char *argv[])
 {
-    for (int i = 0; i < argc; ++i)
-    {
-        const char *base = basename_of_path(argv[i]);
-        if (!strcasecmp(base, "winehua_audio_test.exe") ||
-            !strcasecmp(base, "winehua_audio_test32.exe") ||
-            !strcasecmp(base, "winehua_audio_smoke.exe"))
-            return true;
-    }
-    return false;
-}
+    const char *base;
 
-static bool is_graphics_smoke_exe(int argc, char *argv[])
-{
-    for (int i = 0; i < argc; ++i)
-        if (!strcasecmp(basename_of_path(argv[i]), "winehua_graphics_smoke.exe"))
-            return true;
-    return false;
+    if (argc <= 0 || !argv[0]) return false;
+    base = basename_of_path(argv[0]);
+    return !strcasecmp(base, "winehua_audio_test.exe") ||
+           !strcasecmp(base, "winehua_audio_test32.exe");
 }
 
 static bool is_sdl_audio_test_exe(int argc, char *argv[])
@@ -293,7 +246,6 @@ static const char *select_winedebug_profile(int argc, char *argv[])
     const char *override = getenv("WINEHUA_WINEDEBUG");
 
     if (override && override[0]) return override;
-    if (is_graphics_smoke_exe(argc, argv)) return graphics_diag_winedebug_profile();
     if (is_audio_test_exe(argc, argv)) return midi_diag_winedebug_profile();
     if (is_sdl_audio_test_exe(argc, argv)) return sdl_audio_diag_winedebug_profile();
     return default_winedebug_profile();
@@ -339,13 +291,7 @@ static void setup_wine_env(const char* binDir, const char* homeDir, const char *
     setenv("WINEDLLDIR0", (std::string(binDir) + "/x86_64-windows").c_str(), 1);
     setenv("WINEDLLDIR1", (std::string(binDir) + "/i386-windows").c_str(), 1);
     setenv("WINEDLLDIR2", binDir, 1);
-    {
-        std::string dllPath = std::string(binDir) + "/x86_64-windows:" + binDir + "/i386-windows:" + binDir;
-#ifndef __aarch64__
-        dllPath += ":/data/storage/el1/bundle/libs/x86_64";
-#endif
-        setenv("WINEDLLPATH", dllPath.c_str(), 1);
-    }
+    setenv("WINEDLLPATH", (std::string(binDir) + "/x86_64-windows:" + binDir + "/i386-windows:" + binDir).c_str(), 1);
     // Box64 日志: 0=关闭 (3=DEBUG 会产生海量 I/O)
     SetBox64PerfEnv();
 #ifdef __aarch64__
@@ -381,6 +327,20 @@ static void apply_entry_param_env_overrides(const std::vector<std::string>& envO
             OH_LOG_INFO(LOG_APP, "[WineChild] env override %{public}s=%{public}s",
                         key.c_str(), value.c_str());
     }
+}
+
+static void log_d3d_environment_summary()
+{
+    const char* profile = getenv("WINEHUA_PERF_PROFILE");
+    const char* logPath = getenv("DXVK_LOG_PATH");
+    const char* dumpPath = getenv("DXVK_SHADER_DUMP_PATH");
+    const char* traceSampled = getenv("DXVK_WINEHUA_TRACE_SAMPLED");
+    const char* traceFlow = getenv("DXVK_WINEHUA_TRACE_FLOW");
+    OH_LOG_INFO(LOG_APP,
+                "[WineChild] final D3D env profile=%{public}s logPath=%{public}s dumpPath=%{public}s "
+                "traceSampled=%{public}s traceFlow=%{public}s",
+                profile ? profile : "", logPath ? logPath : "", dumpPath ? dumpPath : "",
+                traceSampled ? traceSampled : "", traceFlow ? traceFlow : "");
 }
 
 extern "C" void Main(NativeChildProcess_Args args)
@@ -440,41 +400,74 @@ extern "C" void Main(NativeChildProcess_Args args)
     setup_wine_env(binDir, homeDir, winedebug);
 
     // 3. 从父进程 fdList 读取 fds (按 fdName 区分)
-    int wsSockFd = -1;   // wineserver fd (per-process)
-    int audioFd = -1;    // audio bootstrap fd
+    //    环境变量转发 fd (wine_env) 先读到缓冲区, 最后一步 apply
+    char* envBuf = nullptr;
+    size_t envBufLen = 0;
+    int wsSockFd = -1;   // wineserver fd (per-process, 等 apply 后覆盖)
+    int audioFd = -1;    // audio bootstrap fd (同上)
     for (auto* node = args.fdList.head; node; node = node->next) {
         if (node->fdName && strcmp(node->fdName, "wine_audio_bootstrap") == 0) {
             audioFd = node->fd;
-            OH_LOG_INFO(LOG_APP, "[WineChild] audio bootstrap fd=%{public}d", audioFd);
+            OH_LOG_INFO(LOG_APP, "[WineChild] audio bootstrap fd=%{public}d (assert after env apply)", audioFd);
+            // 不在此处 setenv —— 等 Step B 应用转发 env 后统一覆盖
         } else if (node->fdName && strcmp(node->fdName, "wineserver_sock") == 0) {
             wsSockFd = node->fd;
-            OH_LOG_INFO(LOG_APP, "[WineChild] wineserver fd=%{public}d (via Broker)", wsSockFd);
+            OH_LOG_INFO(LOG_APP, "[WineChild] wineserver fd=%{public}d (via Broker, assert after env apply)", wsSockFd);
+            // 不在此处 setenv —— 转发 env 可能包含父进程的旧 WINESERVERSOCKET,
+            // 等 apply 完成后再用本进程自己的 fd 覆盖
+        } else if (node->fdName && strcmp(node->fdName, "wine_env") == 0) {
+            // 从 memfd 读取完整 env blob, 稍后 apply
+            off_t end = lseek(node->fd, 0, SEEK_END);
+            if (end > 0 && end <= 65536) {
+                envBuf = (char*)malloc(end + 1);
+                if (envBuf) {
+                    lseek(node->fd, 0, SEEK_SET);
+                    ssize_t r = read(node->fd, envBuf, end);
+                    if (r == end) {
+                        envBufLen = (size_t)end;
+                        OH_LOG_INFO(LOG_APP, "[WineChild] env blob fd=%{public}d len=%{public}zu",
+                                    node->fd, envBufLen);
+                    } else {
+                        free(envBuf); envBuf = nullptr; envBufLen = 0;
+                        OH_LOG_WARN(LOG_APP, "[WineChild] env blob read partial: %{public}zd != %{public}lld", r, (long long)end);
+                    }
+                }
+            } else {
+                OH_LOG_WARN(LOG_APP, "[WineChild] env blob fd=%{public}d invalid size", node->fd);
+            }
+            close(node->fd);  // memfd 读完即关, 所有权转移
         } else {
             OH_LOG_INFO(LOG_APP, "[WineChild] fdList fd=%{public}d name=%{public}s (unrecognized, ignoring)",
                         node->fd, node->fdName ? node->fdName : "(null)");
         }
     }
 
-    // 应用 entryParams 中的 |__env=K=V| 覆盖 (覆盖 baseline)
+    // Step B: entryParams 中的兼容性覆盖先应用；完整 env blob 最后应用，
+    // 这样调用方传入的诊断/DXVK 变量不会被 Broker 的 session 默认值覆盖。
     apply_entry_param_env_overrides(envOverrides);
 
-    // BuildWineEnv normally keeps Wine quiet.  Built-in smoke programs are
-    // diagnostics, so restore their scoped channels after the serialized
-    // WINEDEBUG override has been applied.  This never affects user programs.
-    if (is_graphics_smoke_exe(argc, argv))
-    {
-        setenv("WINEDEBUG", graphics_diag_winedebug_profile(), 1);
-        setenv("WINEHUA_OPENGL_DIAG", "1", 1);
-        OH_LOG_INFO(LOG_APP,
-                    "[WineChild] graphics diag readback=%{public}s eglPlatform=%{public}s eglLib=%{public}s",
-                    getenv("WINEHUA_WAYLAND_READBACK") ? getenv("WINEHUA_WAYLAND_READBACK") : "(unset)",
-                    getenv("EGL_PLATFORM") ? getenv("EGL_PLATFORM") : "(unset)",
-                    getenv("WINEHUA_EGL_LIBRARY_PATH") ? getenv("WINEHUA_EGL_LIBRARY_PATH") : "(unset)");
+    // Step C: 应用转发来的 guest 环境变量 (覆盖 baseline 和 entryParams)
+    if (envBuf && envBufLen > 0) {
+        char *p = envBuf, *end = envBuf + envBufLen;
+        int applied = 0;
+        while (p < end) {
+            char* eq = strchr(p, '=');
+            if (eq) {
+                *eq = '\0';
+                setenv(p, eq + 1, 1);  // overwrite=1, guest env 优先
+                *eq = '=';
+            }
+            p += strlen(p) + 1;
+            applied++;
+        }
+        OH_LOG_INFO(LOG_APP, "[WineChild] applied %{public}d env vars from forwarded environ", applied);
+        free(envBuf);
     }
-    else if (is_audio_test_exe(argc, argv))
-        setenv("WINEDEBUG", midi_diag_winedebug_profile(), 1);
 
-    // 覆盖 per-process fd 变量 (__env__ 中的是父进程 fd 号, 本进程无效)
+    log_d3d_environment_summary();
+
+    // 覆盖 per-process fd 变量 (转发 env 中的是父进程 fd 号, 本进程无效)
+    // 等价于 fork+exec 路径中 exec_wineloader 的 putenv("WINESERVERSOCKET")
     if (wsSockFd >= 0) {
         char wsEnv[64];
         snprintf(wsEnv, sizeof(wsEnv), "%d", wsSockFd);
@@ -533,8 +526,9 @@ extern "C" void Main(NativeChildProcess_Args args)
 #ifdef __aarch64__
     // ARM64 Pad: dlopen box64.so → Box64 模拟 x86_64 wine ELF
     OH_LOG_INFO(LOG_APP, "[WineChild] dlopen box64.so (ARM64 Box64 path)...");
-    void* box64_lib = open_box64_library();
+    void* box64_lib = dlopen("box64.so", RTLD_NOW);
     if (!box64_lib) {
+        OH_LOG_ERROR(LOG_APP, "[WineChild] dlopen(box64.so) failed: %{public}s", dlerror());
         free(buf);
         return;
     }
@@ -669,8 +663,9 @@ extern "C" void WineserverMain(NativeChildProcess_Args args)
 #ifdef __aarch64__
     // ARM64 Pad: dlopen box64.so → Box64 模拟 x86_64 wineserver ELF
     OH_LOG_INFO(LOG_APP, "[WineChild] ws step5: dlopen box64.so (ARM64 Box64 path)...");
-    void* box64_lib = open_box64_library();
+    void* box64_lib = dlopen("box64.so", RTLD_NOW);
     if (!box64_lib) {
+        OH_LOG_ERROR(LOG_APP, "[WineChild] dlopen(box64.so) failed: %{public}s", dlerror());
         free(buf);
         return;
     }
@@ -732,4 +727,181 @@ extern "C" void WineserverMain(NativeChildProcess_Args args)
 #endif
     OH_LOG_INFO(LOG_APP, "[WineChild] ws step9: wineserver process exiting");
     free(buf);
+}
+
+// ============================================================
+// Mmap32 探针: 在 NCP 子进程中测试 32-bit x86 所需 mmap 特性
+// ============================================================
+#include <cstdarg>
+static void MMAP_L(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+static void MMAP_L(const char* fmt, ...) {
+    char buf[300];
+    va_list ap; va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n > 0) {
+        OH_LOG_INFO(LOG_APP, "[MMAP-NCP] %{public}s", buf);
+        fprintf(stderr, "[MMAP-NCP] %s\n", buf);  // also to stderr pipe
+    }
+}
+
+static const char* PN(int prot) {
+    static char b[8];
+    if (prot == 0) return "NONE";
+    snprintf(b, sizeof(b), "%s%s%s",
+             (prot & PROT_READ) ? "R" : "",
+             (prot & PROT_WRITE) ? "W" : "",
+             (prot & PROT_EXEC) ? "X" : "");
+    return b;
+}
+
+extern "C" void MmapTestMain(NativeChildProcess_Args args)
+{
+    MMAP_L("===== NCP mmap 32-bit probe (pid=%d) =====", getpid());
+    const size_t pg = 4096;
+
+    // ── 1. mmap_min_addr ──
+    {
+        FILE* f = fopen("/proc/sys/vm/mmap_min_addr", "r");
+        if (f) { char buf[32]={0}; fread(buf,1,sizeof(buf)-1,f); fclose(f);
+                 MMAP_L("1. mmap_min_addr = %s", buf); }
+        else  { MMAP_L("1. /proc/sys/vm/mmap_min_addr: NOT READABLE (err=%d)", errno); }
+    }
+
+    // ── 2. MAP_FIXED_NOREPLACE ──
+    #ifndef MAP_FIXED_NOREPLACE
+    #define MAP_FIXED_NOREPLACE 0x100000
+    #endif
+    {
+        void* a = mmap(NULL, pg*4, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+        if (a != MAP_FAILED) {
+            void* c = mmap(a, pg, PROT_READ, MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE, -1, 0);
+            MMAP_L("2a. NOREPLACE conflict -> %s (err=%d,%s)",
+                  c==MAP_FAILED?"MAP_FAILED(expected)":"SUCCESS(unexpected)", errno, strerror(errno));
+            munmap(a, pg*4);
+            void* s = mmap(NULL, pg*4, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+            if (s != MAP_FAILED) {
+                munmap(s, pg*4);
+                void* r = mmap(s, pg*2, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE, -1, 0);
+                MMAP_L("2b. NOREPLACE free -> %s (err=%d,%s)",
+                      r==s?"OK_at_expected":"FAIL_or_wrong", errno, strerror(errno));
+                if (r != MAP_FAILED) munmap(r, pg*2);
+            }
+        } else { MMAP_L("2. SKIP (anchor failed)"); }
+    }
+
+    // ── 3. Low hint ──
+    {
+        uintptr_t hints[] = {0x100000,0x1000000,0x10000000,0x20000000,0x40000000,0x80000000,0xF0000000};
+        const char* names[] = {"1MB","16MB","256MB","512MB","1GB","2GB","3.75GB"};
+        int cnt = 0;
+        for (int i=0;i<7;i++) {
+            void* m = mmap((void*)hints[i], pg*64, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+            if (m != MAP_FAILED) {
+                bool b4=(uintptr_t)m<0x100000000ULL, atH=(uintptr_t)m==hints[i];
+                MMAP_L("3. hint=%-6s -> @%p %s %s", names[i], m, b4?"BELOW_4G":"ABOVE", atH?"at_hint":"relocated");
+                munmap(m, pg*64);
+                if(b4)cnt++;
+            } else { MMAP_L("3. hint=%-6s -> FAIL (err=%d)", names[i], errno); }
+        }
+        MMAP_L("3. %d/7 below 4GB", cnt);
+    }
+
+    // ── 4. MAP_FIXED low ──
+    {
+        uintptr_t tgt[]={0x01000000,0x10000000,0x40000000};
+        for (int i=0;i<3;i++) {
+            FILE* f=fopen("/proc/self/maps","r"); bool taken=false;
+            if(f){char ln[256]; while(fgets(ln,sizeof(ln),f)){uintptr_t s,e;
+                   if(sscanf(ln,"%lx-%lx",&s,&e)==2&&tgt[i]>=s&&tgt[i]<e){taken=true;break;}} fclose(f);}
+            if(taken){MMAP_L("4. %08lx: SKIP occupied",tgt[i]);continue;}
+            void* m=mmap((void*)tgt[i],pg*16,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0);
+            MMAP_L("4. FIXED %08lx -> %s",tgt[i],m==(void*)tgt[i]?"OK":"FAIL");
+            if(m!=MAP_FAILED)munmap(m,pg*16);
+        }
+    }
+
+    // ── 5. 256MB ──
+    {
+        size_t heap=0x10000000;
+        void* m=mmap((void*)0x10000000,heap,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0);
+        if(m==(void*)0x10000000) { MMAP_L("5. FIXED 256MB@0x10000000 -> OK"); munmap(m,heap); }
+        else { MMAP_L("5. FIXED 256MB@0x10000000 -> FAIL");
+               m=mmap((void*)0x10000000,heap,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+               bool b4=m!=MAP_FAILED&&(uintptr_t)m<0x100000000ULL;
+               MMAP_L("5. hint 256MB -> @%p %s",m,b4?"BELOW_4G":"ABOVE");
+               if(m!=MAP_FAILED)munmap(m,heap); }
+    }
+
+    // ── 6. MAP_32BIT ──
+    {
+        size_t sz[]={0x1000,0x10000,0x100000,0x1000000};
+        for(int i=0;i<4;i++){
+            void* m=mmap(NULL,sz[i],PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|0x40,-1,0);
+            if(m!=MAP_FAILED){bool b4=(uintptr_t)m<0x100000000ULL;
+                MMAP_L("6. MAP_32BIT sz=0x%zx -> @%p %s",sz[i],m,b4?"BELOW_4G":"above");munmap(m,sz[i]);}
+            else{MMAP_L("6. MAP_32BIT sz=0x%zx -> FAIL (err=%d,%s)",sz[i],errno,strerror(errno));}
+        }
+    }
+
+    // ── 7. /proc/self/maps ──
+    {
+        FILE* f=fopen("/proc/self/maps","r");
+        if(f){char ln[512];int n=0,ark=0;uintptr_t lo=-1UL,hi=0;
+              while(fgets(ln,sizeof(ln),f)){uintptr_t s,e;
+                  if(sscanf(ln,"%lx-%lx",&s,&e)==2&&s<0x100000000ULL){n++;if(s<lo)lo=s;if(e>hi)hi=e;
+                      if(n<=15){char*nl=strchr(ln,'\n');if(nl)*nl=0;MMAP_L("7. %s",ln);}
+                      if(strstr(ln,"[anon:ark"))ark++;}}
+              fclose(f);
+              MMAP_L("7. low-4GB: %d regions [%08lx,%08lx) ARK=%d",n,lo,hi,ark);}
+        else { MMAP_L("7. cannot open /proc/self/maps"); }
+    }
+
+    // ── 8. NOREPLACE scan ──
+    {
+        int hits=0,fails=0;
+        for(uintptr_t cur=0x40000000UL;cur<0xF0000000UL;cur+=0x1000000UL){
+            void* m=mmap((void*)cur,0x10000,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0);
+            if(m==(void*)cur){hits++;munmap(m,0x10000);}else{fails++;if(m!=MAP_FAILED)munmap(m,0x10000);}
+            if(hits>=3)break;
+        }
+        MMAP_L("8. NOREPLACE scan: %d free, %d occupied (%s)", hits, fails,
+              fails>0&&hits==0?"NOREPLACE not working!":"");
+    }
+
+    // ── 9. Hard search (no NOREPLACE) ──
+    {
+        size_t need=256UL*1024*1024;
+        bool found=false;
+        for(uintptr_t h=0x10000000UL;h<0x80000000UL;h+=0x10000000UL){
+            void* m=mmap((void*)h,need,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+            if(m!=MAP_FAILED&&(uintptr_t)m+need<=0x100000000ULL){
+                MMAP_L("9. hard search: 256MB@%08lx -> OK @%p",(uintptr_t)h,m);
+                munmap(m,need);found=true;break;
+            }
+            if(m!=MAP_FAILED)munmap(m,need);
+        }
+        if(!found)MMAP_L("9. hard search: 256MB <4GB NOT FOUND");
+    }
+
+    // ── 10. Dynarec: RW + mprotect RX ──
+    {
+        void* m=mmap(NULL,pg,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+        if(m!=MAP_FAILED){
+            ((uint32_t*)m)[0]=0xD65F03C0;
+            int r=mprotect(m,pg,PROT_READ|PROT_EXEC);
+            MMAP_L("10. RW+mprotect RX -> %s (err=%d)",r==0?"OK":"FAIL",errno);
+            munmap(m,pg);
+        }
+    }
+
+    // ── 11. RWX ──
+    {
+        void* m=mmap(NULL,pg,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+        MMAP_L("11. ANON RWX -> %s (err=%d)",m==MAP_FAILED?"FAIL":"OK",errno);
+        if(m!=MAP_FAILED)munmap(m,pg);
+    }
+
+    MMAP_L("===== NCP mmap probe DONE =====");
+    fflush(stderr);
 }
