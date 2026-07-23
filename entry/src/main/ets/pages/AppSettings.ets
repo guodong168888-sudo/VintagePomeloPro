@@ -11,13 +11,33 @@ import {
 } from '../model/AppModels';
 import { AppCatalogService } from '../service/AppCatalogService';
 import { AppSettingsStore } from '../service/AppSettingsStore';
+import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 
 @Entry
 @Component
 struct AppSettingsPage {
+  @StorageLink('libraryTitleButtonInsetVp') private titleButtonInsetVp: number = 0;
   @State private app: AppDescriptor | null = null;
   @State private value: StoredAppSettings = createDefaultAppSettings('');
+  @State private breakpoint: BreakpointType = 'lg';
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+  private breakpointCallback: ((value: BreakpointType) => void) | null = null;
+
+  private isCompact(): boolean {
+    return this.breakpoint === 'xs' || this.breakpoint === 'sm';
+  }
+
+  private isNarrowPhone(): boolean {
+    return this.breakpoint === 'xs';
+  }
+
+  private cardPadding(): number {
+    return this.isCompact() ? 12 : 20;
+  }
+
+  private titleButtonMargin(): number {
+    return this.titleButtonInsetVp > 0 ? this.titleButtonInsetVp + 44 : 0;
+  }
 
   private currentProfileId(): string {
     return this.value.inputProfileId || 'default';
@@ -37,6 +57,9 @@ struct AppSettingsPage {
   }
 
   aboutToAppear(): void {
+    BreakpointSystem.initialize();
+    this.breakpointCallback = (value: BreakpointType): void => { this.breakpoint = value; };
+    BreakpointSystem.subscribe(this.breakpointCallback);
     const params = (router.getParams() as Record<string, string> | undefined) ?? {};
     const appId = params.appId ?? '';
     this.app = AppCatalogService.getInstance().getApps().find((item: AppDescriptor) => item.id === appId) ?? null;
@@ -55,6 +78,10 @@ struct AppSettingsPage {
         prefixId: this.value.prefixId
       };
     }
+  }
+
+  aboutToDisappear(): void {
+    if (this.breakpointCallback) BreakpointSystem.unsubscribe(this.breakpointCallback);
   }
 
   private replace(title: string, cover: string, executable: string, workingDirectory: string,
@@ -233,24 +260,62 @@ struct AppSettingsPage {
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
+  @Builder
+  private AppSettingsBackButton() {
+    Button({ type: ButtonType.Circle }) {
+      SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(18).fontColor([$r('app.color.text_primary')])
+    }
+    .width(48).height(48).backgroundColor($r('app.color.search_background'))
+    .id('app-settings-back')
+    .onClick(() => router.back())
+  }
+
+  @Builder
+  private AppSettingsTitle(showSubtitle: boolean) {
+    Column({ space: 3 }) {
+      Text(this.app ? this.app.title + ' 设置' : '应用设置').fontSize(this.isCompact() ? 18 : 24).fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_primary')).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+      if (showSubtitle) {
+        Text('封面、启动方式、显示模式和专用输入布局').fontSize(11).fontColor($r('app.color.text_secondary'))
+      }
+    }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+  }
+
+  @Builder
+  private SaveAppSettingsButton() {
+    Button('保存').height(48).borderRadius(16).backgroundColor($r('app.color.accent')).fontColor('#FFFFFFFF')
+      .fontSize(this.isNarrowPhone() ? 12 : 14)
+      .id('app-settings-save')
+      .onClick(() => this.save())
+  }
+
+  @Builder
+  private AppSettingsHeader() {
+    if (this.isNarrowPhone() && this.titleButtonInsetVp > 0) {
+      Column({ space: 4 }) {
+        Row({ space: 6 }) {
+          this.AppSettingsBackButton()
+          this.AppSettingsTitle(false)
+        }.width('100%').height(56).padding({ right: this.titleButtonMargin() })
+        Row() {
+          Blank()
+          this.SaveAppSettingsButton()
+        }.width('100%').height(48)
+      }.width('100%').height(108)
+    } else {
+      Row({ space: this.isNarrowPhone() ? 6 : 0 }) {
+        this.AppSettingsBackButton()
+        this.AppSettingsTitle(!this.isCompact())
+        this.SaveAppSettingsButton()
+      }
+      .width('100%').height(this.isCompact() ? 62 : 78)
+      .padding({ right: this.titleButtonMargin() })
+    }
+  }
+
   build() {
     Column() {
-      Row() {
-        Button({ type: ButtonType.Circle }) {
-          SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(18).fontColor([$r('app.color.text_primary')])
-        }
-          .width(48).height(48).backgroundColor($r('app.color.search_background'))
-          .id('app-settings-back')
-          .onClick(() => router.back())
-        Column({ space: 3 }) {
-          Text(this.app ? this.app.title + ' 设置' : '应用设置').fontSize(24).fontWeight(FontWeight.Bold)
-            .fontColor($r('app.color.text_primary'))
-          Text('封面、启动方式、显示模式和专用输入布局').fontSize(11).fontColor($r('app.color.text_secondary'))
-        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-        Button('保存').height(48).borderRadius(16).backgroundColor($r('app.color.accent')).fontColor('#FFFFFFFF')
-          .id('app-settings-save')
-          .onClick(() => this.save())
-      }.width('100%').height(78)
+      this.AppSettingsHeader()
 
       Scroll() {
         Column({ space: 18 }) {
@@ -278,28 +343,31 @@ struct AppSettingsPage {
             }
             Button('选择封面图片').width('100%').height(48).backgroundColor($r('app.color.search_background'))
               .fontColor($r('app.color.text_primary')).id('app-settings-select-cover').onClick(() => this.selectCover())
-          }.width('100%').padding(20).backgroundColor($r('app.color.card_background')).borderRadius(16)
+          }.width('100%').padding(this.cardPadding()).backgroundColor($r('app.color.card_background')).borderRadius(16)
 
           Column({ space: 13 }) {
             Text('显示模式').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
             Row({ space: 8 }) {
               Button('跟随全局').layoutWeight(1).height(48).borderRadius(14)
+                .fontSize(this.isCompact() ? 11 : 14)
                 .backgroundColor(this.value.displayModeOverride === null ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.value.displayModeOverride === null ? '#FFFFFFFF' : $r('app.color.text_primary'))
                 .id('app-settings-mode-inherit')
                 .onClick(() => this.replace(this.value.customTitle, this.value.customCover, this.value.executable, this.value.workingDirectory, null))
               Button('桌面模式').layoutWeight(1).height(48).borderRadius(14)
+                .fontSize(this.isCompact() ? 11 : 14)
                 .backgroundColor(this.value.displayModeOverride === DisplayMode.DESKTOP ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.value.displayModeOverride === DisplayMode.DESKTOP ? '#FFFFFFFF' : $r('app.color.text_primary'))
                 .id('app-settings-mode-desktop')
                 .onClick(() => this.replace(this.value.customTitle, this.value.customCover, this.value.executable, this.value.workingDirectory, DisplayMode.DESKTOP))
               Button('单应用').layoutWeight(1).height(48).borderRadius(14)
+                .fontSize(this.isCompact() ? 11 : 14)
                 .backgroundColor(this.value.displayModeOverride === DisplayMode.SINGLE_APP ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(this.value.displayModeOverride === DisplayMode.SINGLE_APP ? '#FFFFFFFF' : $r('app.color.text_primary'))
                 .id('app-settings-mode-single')
                 .onClick(() => this.replace(this.value.customTitle, this.value.customCover, this.value.executable, this.value.workingDirectory, DisplayMode.SINGLE_APP))
             }.width('100%')
-          }.width('100%').padding(20).backgroundColor($r('app.color.card_background')).borderRadius(16)
+          }.width('100%').padding(this.cardPadding()).backgroundColor($r('app.color.card_background')).borderRadius(16)
 
           Column({ space: 12 }) {
             Text('输入映射').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
@@ -330,15 +398,16 @@ struct AppSettingsPage {
                 .id('app-settings-use-global-input')
                 .onClick((): void => { this.useGlobalInputProfile(); })
             }
-          }.width('100%').padding(20).backgroundColor($r('app.color.card_background')).borderRadius(16)
+          }.width('100%').padding(this.cardPadding()).backgroundColor($r('app.color.card_background')).borderRadius(16)
 
           if (this.app && !this.app.available) {
             Button('删除不可用卡片').height(48).fontColor('#D94848').backgroundColor($r('app.color.card_background')).onClick(() => this.removeUnavailable())
           }
-        }.width('100%').constraintSize({ maxWidth: 920 }).padding({ bottom: 30 })
-      }.layoutWeight(1).scrollBar(BarState.Auto)
+        }.width('100%').constraintSize({ maxWidth: 920 }).padding({ bottom: this.isCompact() ? 18 : 30 })
+      }.layoutWeight(1).width('100%').scrollBar(BarState.Auto)
     }
-    .width('100%').height('100%').padding({ left: 24, right: 24, top: 8 })
+    .width('100%').height('100%')
+    .padding({ left: this.isCompact() ? 10 : 24, right: this.isCompact() ? 10 : 24, top: this.isCompact() ? 4 : 8 })
     .backgroundColor($r('app.color.page_background'))
   }
 }

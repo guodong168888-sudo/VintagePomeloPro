@@ -18,10 +18,10 @@ const GLOBAL_KEY = 'global_settings_v1';
 const APP_SETTINGS_KEY = 'app_settings_v1';
 const LIBRARY_PATH_KEY = 'library_path_v1';
 const CATALOG_CACHE_KEY = 'catalog_cache_v1';
-// Bump this whenever the product default changes. v2/v3 installations may
+// Bump this whenever the product default changes. Older installations may
 // still carry the short-lived PC single-app default, so those installs must
 // be migrated once to the desktop default before the catalog is resolved.
-const PLATFORM_DEFAULTS_KEY = 'platform_defaults_v4';
+const PLATFORM_DEFAULTS_KEY = 'platform_defaults_v5';
 
 export class AppSettingsStore {
   private static instance: AppSettingsStore | null = null;
@@ -64,8 +64,10 @@ export class AppSettingsStore {
       useGlassEffect: current.useGlassEffect,
       usePageBackground: current.usePageBackground,
       pageBackgroundUri: current.pageBackgroundUri,
-      virtualInputEnabled: current.virtualInputEnabled,
-      showVirtualControls: current.showVirtualControls,
+      // PC/2-in-1 desktop windows use physical keyboard and mouse by default.
+      // Single-app full-screen may still be enabled explicitly from settings.
+      virtualInputEnabled: this.managedWineWindowsHost ? false : current.virtualInputEnabled,
+      showVirtualControls: this.managedWineWindowsHost ? false : current.showVirtualControls,
       autoHideVirtualControls: current.autoHideVirtualControls,
       controlBarDirection: current.controlBarDirection,
       virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),

@@ -23,12 +23,14 @@ import { AppSessionService } from '../service/AppSessionService';
 import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
 import { AppCatalogService } from '../service/AppCatalogService';
 import { InputProfileService } from '../service/InputProfileService';
+import { AppSettingsStore } from '../service/AppSettingsStore';
 
 type SettingsSection = 'display' | 'appearance' | 'input' | 'engine' | 'about';
 
 @Entry
 @Component
 struct SystemSettingsPage {
+  @StorageLink('libraryTitleButtonInsetVp') private titleButtonInsetVp: number = 0;
   @State private settings: GlobalSettings = createDefaultGlobalSettings();
   @State private breakpoint: BreakpointType = 'lg';
   @State private section: SettingsSection = 'display';
@@ -47,6 +49,14 @@ struct SystemSettingsPage {
 
   private cardPadding(): number {
     return this.isNarrowPhone() ? 12 : 22;
+  }
+
+  private isManagedWindowsHost(): boolean {
+    return AppSettingsStore.getInstance().usesManagedWineWindows();
+  }
+
+  private titleButtonMargin(): number {
+    return this.titleButtonInsetVp > 0 ? this.titleButtonInsetVp + 44 : 0;
   }
 
   aboutToAppear(): void {
@@ -545,7 +555,17 @@ struct SystemSettingsPage {
       } else if (section === 'input') {
         Column({ space: 16 }) {
           Text('输入与控制').fontSize(20).fontWeight(FontWeight.Bold).width('100%')
-          this.SwitchRow('启用屏幕虚拟输入', '关闭后不显示虚拟按键、全屏鼠标和右上角控制栏；实体外设仍可使用',
+          if (this.isManagedWindowsHost()) {
+            Column({ space: 6 }) {
+              Text('PC 桌面默认使用实体键盘鼠标')
+                .fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
+              Text('桌面和多窗口模式不会创建屏幕控制层；以下开关仅为未来明确启用的单应用全屏模式保留。')
+                .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
+            }
+            .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
+          }
+          this.SwitchRow(this.isManagedWindowsHost() ? '单应用全屏启用虚拟输入' : '启用屏幕虚拟输入',
+            '关闭后不显示虚拟按键、全屏鼠标和右上角控制栏；实体外设仍可使用',
             this.settings.virtualInputEnabled, (value: boolean): void => this.updateVirtualInputEnabled(value),
             'virtual-input-enabled')
           if (this.settings.virtualInputEnabled) {
@@ -671,33 +691,70 @@ struct SystemSettingsPage {
     .id('system-settings-list')
   }
 
-  build() {
-    Stack() {
-      Column() {
+  @Builder
+  private SettingsBackButton() {
+    Button({ type: ButtonType.Circle }) {
+      SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(this.isNarrowPhone() ? 16 : 18).fontColor([$r('app.color.text_primary')])
+    }
+    .width(48).height(48)
+    .backgroundColor($r('app.color.search_background'))
+    .onClick(() => router.back())
+  }
+
+  @Builder
+  private SettingsTitle(showSubtitle: boolean) {
+    Column({ space: this.isNarrowPhone() ? 0 : 3 }) {
+      Text('系统设置').fontSize(this.isNarrowPhone() ? 19 : 26).fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_primary')).maxLines(1)
+      if (showSubtitle) {
+        Text('调整显示模式、外观、输入和 Wine 引擎行为。').fontSize(12).fontColor($r('app.color.text_secondary'))
+      }
+    }
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  private RestoreSettingsButton(compact: boolean) {
+    Button(compact ? '恢复' : '恢复默认').height(48)
+      .fontSize(compact ? 12 : 14).borderRadius(14)
+      .backgroundColor($r('app.color.search_background'))
+      .fontColor($r('app.color.text_primary'))
+      .onClick(() => this.restoreDefaults())
+  }
+
+  @Builder
+  private SettingsHeader() {
+    if (this.isNarrowPhone() && this.titleButtonInsetVp > 0) {
+      Column({ space: 4 }) {
+        Row({ space: 6 }) {
+          this.SettingsBackButton()
+          this.SettingsTitle(false)
+        }
+        .width('100%').height(56)
+        .padding({ left: 8, right: 8 + this.titleButtonMargin(), top: 4 })
+        Row() {
+          Blank()
+          this.RestoreSettingsButton(true)
+        }.width('100%').height(48).padding({ left: 8, right: 8 })
+      }.width('100%').height(108)
+    } else {
       Row({ space: this.isNarrowPhone() ? 6 : 0 }) {
-        Button({ type: ButtonType.Circle }) {
-          SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(this.isNarrowPhone() ? 16 : 18).fontColor([$r('app.color.text_primary')])
-        }
-          .width(48).height(48)
-          .backgroundColor($r('app.color.search_background'))
-          .onClick(() => router.back())
-        Column({ space: this.isNarrowPhone() ? 0 : 3 }) {
-          Text('系统设置').fontSize(this.isNarrowPhone() ? 19 : 26).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
-          if (!this.isNarrowPhone()) {
-            Text('调整显示模式、外观、输入和 Wine 引擎行为。').fontSize(12).fontColor($r('app.color.text_secondary'))
-          }
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-        Button(this.isNarrowPhone() ? '恢复' : '恢复默认').height(48)
-          .fontSize(this.isNarrowPhone() ? 12 : 14).borderRadius(14)
-          .backgroundColor($r('app.color.search_background'))
-          .fontColor($r('app.color.text_primary'))
-          .onClick(() => this.restoreDefaults())
+        this.SettingsBackButton()
+        this.SettingsTitle(!this.isNarrowPhone())
+        this.RestoreSettingsButton(this.isNarrowPhone())
       }
       .height(this.isNarrowPhone() ? 56 : 64)
       .width('100%')
-      .padding({ left: this.isNarrowPhone() ? 8 : 16, right: this.isNarrowPhone() ? 8 : 16, top: 4, bottom: 0 })
+      .padding({ left: this.isNarrowPhone() ? 8 : 16,
+        right: (this.isNarrowPhone() ? 8 : 16) + this.titleButtonMargin(), top: 4, bottom: 0 })
+    }
+  }
+
+  build() {
+    Stack() {
+      Column() {
+      this.SettingsHeader()
 
       if (this.breakpoint === 'lg' || this.breakpoint === 'xl') {
         Row({ space: 22 }) {

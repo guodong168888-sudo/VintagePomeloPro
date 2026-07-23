@@ -22,6 +22,10 @@ class BreakpointSystemImpl {
 
   private bind(query: string, value: BreakpointType): void {
     const listener = mediaquery.matchMediaSync(query);
+    // matchMedia is scoped to the current app window. Apply the initial
+    // result immediately so an app restored directly into a small window
+    // does not render one frame using the physical display width.
+    if (listener.matches) this.setCurrent(value);
     listener.on('change', (result: mediaquery.MediaQueryResult) => {
       if (result.matches) this.setCurrent(value);
     });

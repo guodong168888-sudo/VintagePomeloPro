@@ -1,11 +1,14 @@
 import { AbilityConstant, UIAbility, Want, bundleManager } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { window } from '@kit.ArkUI';
+import { display, window } from '@kit.ArkUI';
 import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
 import { WineWindowManager } from '../service/WineWindowManager';
 
 const DOMAIN = 0x0000;
 export default class EntryAbility extends UIAbility {
+  private mainWindow: window.Window | null = null;
+  private titleButtonRectCallback: ((rect: window.TitleButtonRect) => void) | null = null;
+
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
     // 与 VintagePomelo 相同，使用 docs FileUri 而非 Environment 的可选能力。
@@ -76,7 +79,12 @@ export default class EntryAbility extends UIAbility {
       // loadContent 成功后隐藏窗口装饰
       let mainWin = windowStage.getMainWindowSync();
       if (mainWin) {
+        this.mainWindow = mainWin;
         mainWin.setWindowDecorVisible(false);
+        // The gesture navigation indicator otherwise reserves a light strip
+        // below every routed page. Gesture navigation remains available.
+        mainWin.setSpecificSystemBarEnabled('navigationIndicator', false).catch(() => {});
+        this.observeTitleButtonInset(mainWin);
       }
       hilog.info(DOMAIN, 'testTag', 'Succeeded in loading the content.');
     });
@@ -85,6 +93,43 @@ export default class EntryAbility extends UIAbility {
   onWindowStageDestroy(): void {
     // Main window is destroyed, release UI related resources
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageDestroy');
+    if (this.mainWindow && this.titleButtonRectCallback) {
+      try {
+        this.mainWindow.off('windowTitleButtonRectChange', this.titleButtonRectCallback);
+      } catch (_) {
+      }
+    }
+    this.titleButtonRectCallback = null;
+    this.mainWindow = null;
+    AppStorage.setOrCreate('libraryTitleButtonInsetVp', 0);
+  }
+
+  private observeTitleButtonInset(mainWindow: window.Window): void {
+    AppStorage.setOrCreate('libraryTitleButtonInsetVp', 0);
+    this.titleButtonRectCallback = (rect: window.TitleButtonRect): void => {
+      this.updateTitleButtonInset(rect);
+    };
+    try {
+      this.updateTitleButtonInset(mainWindow.getTitleButtonRect());
+      mainWindow.on('windowTitleButtonRectChange', this.titleButtonRectCallback);
+    } catch (error) {
+      AppStorage.setOrCreate('libraryTitleButtonInsetVp', 0);
+      hilog.warn(DOMAIN, 'EntryAbility', 'Title button safe area unavailable: %{public}s', JSON.stringify(error));
+    }
+  }
+
+  private updateTitleButtonInset(rect: window.TitleButtonRect): void {
+    try {
+      if (rect.width <= 0) {
+        AppStorage.setOrCreate('libraryTitleButtonInsetVp', 0);
+        return;
+      }
+      const density = Math.max(1, display.getDefaultDisplaySync().densityPixels);
+      const insetVp = Math.ceil((Math.max(0, rect.right) + Math.max(0, rect.width)) / density) + 12;
+      AppStorage.setOrCreate('libraryTitleButtonInsetVp', insetVp);
+    } catch (_) {
+      AppStorage.setOrCreate('libraryTitleButtonInsetVp', 0);
+    }
   }
 
   onForeground(): void {

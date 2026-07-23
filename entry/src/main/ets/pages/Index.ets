@@ -31,6 +31,7 @@ type CatalogFilter = 'builtin' | 'windows' | 'running' | 'favorite';
 @Component
 struct Index {
   @StorageLink('overlayEditorRequest') @Watch('onOverlayEditorRequest') private overlayEditorRequest: string = '';
+  @StorageLink('libraryTitleButtonInsetVp') private titleButtonInsetVp: number = 0;
   @State private apps: AppDescriptor[] = [];
   @State private visibleApps: AppDescriptor[] = [];
   @State private searchQuery: string = '';
@@ -444,6 +445,11 @@ struct Index {
             Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.rectangle_grid_1x2')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
               .width(48).height(48).backgroundColor(this.settings.viewMode === ViewMode.LARGE ? $r('app.color.selected_background') : $r('app.color.search_background')).onClick(() => this.setViewMode(ViewMode.LARGE))
           }
+          .id('library-view-modes')
+          // Keep the complete system-reported title-button area. PC window
+          // managers add spacing between the maximize/minimize/close nodes
+          // that is not always included in TitleButtonRect.width.
+          .margin({ right: this.titleButtonInsetVp > 0 ? this.titleButtonInsetVp + 24 : 0 })
         }.width('100%')
       }
       if (this.isPhone() || this.breakpoint === 'md') {

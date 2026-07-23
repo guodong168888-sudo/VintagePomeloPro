@@ -20,6 +20,7 @@ interface HelpTopic {
 @Entry
 @Component
 struct HelpCenter {
+  @StorageLink('libraryTitleButtonInsetVp') private titleButtonInsetVp: number = 0;
   @State private category: HelpCategory = 'all';
   @State private expandedTopicId: string = '';
   @State private breakpoint: BreakpointType = 'lg';
@@ -69,6 +70,10 @@ struct HelpCenter {
 
   private isNarrowPhone(): boolean {
     return this.breakpoint === 'xs';
+  }
+
+  private titleButtonMargin(): number {
+    return this.titleButtonInsetVp > 0 ? this.titleButtonInsetVp + 44 : 0;
   }
 
   private visibleTopics(): HelpTopic[] {
@@ -136,7 +141,8 @@ struct HelpCenter {
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
       }
       .height(this.isNarrowPhone() ? 56 : 64).width('100%')
-      .padding({ left: this.isNarrowPhone() ? 8 : 16, right: this.isNarrowPhone() ? 8 : 16, top: 4, bottom: 0 })
+      .padding({ left: this.isNarrowPhone() ? 8 : 16,
+        right: (this.isNarrowPhone() ? 8 : 16) + this.titleButtonMargin(), top: 4, bottom: 0 })
 
       Scroll() {
         Column({ space: 18 }) {
@@ -171,7 +177,7 @@ struct HelpCenter {
         // 100% height makes the last topic render under the bottom inset.
         .width('100%').constraintSize({ minHeight: '100%' }).justifyContent(FlexAlign.Start)
         .padding({ left: this.isNarrowPhone() ? 10 : 20, right: this.isNarrowPhone() ? 10 : 20,
-          top: this.isNarrowPhone() ? 4 : 10, bottom: this.isNarrowPhone() ? 76 : 104 })
+          top: this.isNarrowPhone() ? 4 : 10, bottom: this.isNarrowPhone() ? 24 : 32 })
         .constraintSize({ maxWidth: 960 })
       }
       .layoutWeight(1).width('100%').scrollBar(BarState.Auto)

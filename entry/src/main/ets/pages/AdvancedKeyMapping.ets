@@ -21,6 +21,7 @@ import {
 } from '../model/AppModels';
 import { InputProfileService } from '../service/InputProfileService';
 import { AppSettingsStore } from '../service/AppSettingsStore';
+import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 
 interface VirtualKeyInfo {
   key: VirtualKey;
@@ -51,6 +52,7 @@ const VIRTUAL_KEYS: VirtualKeyInfo[] = [
 @Entry
 @Component
 struct AdvancedKeyMappingPage {
+  @StorageLink('libraryTitleButtonInsetVp') private titleButtonInsetVp: number = 0;
   @State private profile: InputProfile = createDefaultInputProfile();
   @State private profileId: string = 'default';
   @State private profileName: string = 'Vintage 默认手柄布局';
@@ -64,10 +66,27 @@ struct AdvancedKeyMappingPage {
   @State private returnAbilityName: string = '';
   @State private returnSessionId: string = '';
   @State private returnToplevelId: string = '0';
+  @State private breakpoint: BreakpointType = 'lg';
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private returnScheduled: boolean = false;
+  private breakpointCallback: ((value: BreakpointType) => void) | null = null;
+
+  private isCompact(): boolean {
+    return this.breakpoint === 'xs' || this.breakpoint === 'sm';
+  }
+
+  private isNarrowPhone(): boolean {
+    return this.breakpoint === 'xs';
+  }
+
+  private titleButtonMargin(): number {
+    return this.titleButtonInsetVp > 0 ? this.titleButtonInsetVp + 44 : 0;
+  }
 
   aboutToAppear(): void {
+    BreakpointSystem.initialize();
+    this.breakpointCallback = (value: BreakpointType): void => { this.breakpoint = value; };
+    BreakpointSystem.subscribe(this.breakpointCallback);
     const params = (router.getParams() ?? {}) as Record<string, string>;
     this.profileId = params.profileId ?? 'default';
     this.profileName = params.profileName ?? (this.profileId === 'default' ? 'Vintage 默认手柄布局' : '应用专用按键映射');
@@ -84,6 +103,7 @@ struct AdvancedKeyMappingPage {
   }
 
   aboutToDisappear(): void {
+    if (this.breakpointCallback) BreakpointSystem.unsubscribe(this.breakpointCallback);
     this.resumeWineAbility();
   }
 
@@ -250,27 +270,48 @@ struct AdvancedKeyMappingPage {
   }
 
   @Builder
+  private VirtualKeyChooser(compact: boolean) {
+    Scroll() {
+      Column({ space: 8 }) {
+        Text('虚拟按键').fontSize(16).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary')).width('100%')
+        Text(compact ? '选择功能后，在下方完整 PC 键盘中选择目标按键。' : '选择功能后，点击右侧完整 PC 键盘中的目标按键。')
+          .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+        Grid() {
+          ForEach(VIRTUAL_KEYS, (info: VirtualKeyInfo): void => {
+            GridItem() { this.VirtualKeyCell(info) }
+          }, (info: VirtualKeyInfo): string => info.key)
+        }.columnsTemplate('1fr 1fr').columnsGap(8).rowsGap(8).width('100%')
+      }.width('100%').padding({ bottom: 12 })
+    }
+    .width(compact ? '100%' : 300)
+    .height(compact ? 230 : '100%')
+    .scrollBar(BarState.Auto)
+  }
+
+  @Builder
+  private KeyboardChooser() {
+    Column({ space: 12 }) {
+      Text(this.selectedKey ? '正在设置：' + (VIRTUAL_KEYS.find((item: VirtualKeyInfo): boolean => item.key === this.selectedKey)?.title ?? '') : '选择一个虚拟按键')
+        .fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
+      Text('键盘上的键值直接使用 Wine 的 Linux evdev 编码，不经过二次转换。').fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+      Scroll() { KeyboardLayout({ selectedEvdevCode: this.selectedKey ? (this.mappingFor(this.selectedKey)?.evdevCode ?? -1) : -1, onKeySelected: (code: number, label: string): void => this.setVirtualMapping(code, label) }) }
+        .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Auto).layoutWeight(1).width('100%')
+    }.layoutWeight(1).width('100%').height('100%').alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
   private FixedMapping() {
-    Row({ space: 16 }) {
-      Scroll() {
-        Column({ space: 8 }) {
-          Text('虚拟按键').fontSize(16).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary')).width('100%')
-          Text('选择功能后，点击右侧完整 PC 键盘中的目标按键。').fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
-          Grid() {
-            ForEach(VIRTUAL_KEYS, (info: VirtualKeyInfo): void => {
-              GridItem() { this.VirtualKeyCell(info) }
-            }, (info: VirtualKeyInfo): string => info.key)
-          }.columnsTemplate('1fr 1fr').columnsGap(8).rowsGap(8).width('100%')
-        }.width('100%').padding({ bottom: 12 })
-      }.width(300).scrollBar(BarState.Auto)
+    if (this.isCompact()) {
       Column({ space: 12 }) {
-        Text(this.selectedKey ? '正在设置：' + (VIRTUAL_KEYS.find((item: VirtualKeyInfo): boolean => item.key === this.selectedKey)?.title ?? '') : '选择一个虚拟按键')
-          .fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
-        Text('键盘上的键值直接使用 Wine 的 Linux evdev 编码，不经过二次转换。').fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
-        Scroll() { KeyboardLayout({ selectedEvdevCode: this.selectedKey ? (this.mappingFor(this.selectedKey)?.evdevCode ?? -1) : -1, onKeySelected: (code: number, label: string): void => this.setVirtualMapping(code, label) }) }
-          .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Auto).layoutWeight(1).width('100%')
-      }.layoutWeight(1).height('100%').alignItems(HorizontalAlign.Start)
-    }.width('100%').layoutWeight(1)
+        this.VirtualKeyChooser(true)
+        this.KeyboardChooser()
+      }.width('100%').layoutWeight(1)
+    } else {
+      Row({ space: 16 }) {
+        this.VirtualKeyChooser(false)
+        this.KeyboardChooser()
+      }.width('100%').layoutWeight(1)
+    }
   }
 
   @Builder
@@ -331,8 +372,8 @@ struct AdvancedKeyMappingPage {
           Stack() {
             Column().width('100%').height('100%').backgroundColor('#FF1A1A2E').borderRadius(16)
             VirtualInputOverlay({ profile: this.profile, renderRevision: this.previewRevision, interactive: false, hideToolbar: true }).width('100%').height('100%').hitTestBehavior(HitTestMode.None)
-          }.height(300).width('100%')
-        }.width('100%').padding(18).backgroundColor($r('app.color.card_background')).borderRadius(18)
+          }.height(this.isCompact() ? 200 : 300).width('100%')
+        }.width('100%').padding(this.isCompact() ? 12 : 18).backgroundColor($r('app.color.card_background')).borderRadius(18)
         Column({ space: 8 }) {
           Text('自由按键 (' + this.profile.freeButtonsConfig.buttons.length + '/8)').fontSize(16).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary')).width('100%')
           ForEach(this.profile.freeButtonsConfig.buttons, (button: FreeButton, index: number): void => this.FreeButtonRow(button, index), (button: FreeButton): string => button.id)
@@ -345,24 +386,66 @@ struct AdvancedKeyMappingPage {
     }.layoutWeight(1).width('100%').scrollBar(BarState.Auto)
   }
 
-  build() {
-    Column({ space: 16 }) {
+  @Builder
+  private MappingBackButton() {
+    Button({ type: ButtonType.Circle }) {
+      SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(18).fontColor([$r('app.color.text_primary')])
+    }
+    .width(48).height(48).backgroundColor($r('app.color.search_background')).id('key-mapping-back')
+    .onClick((): void => this.finishEditor())
+  }
+
+  @Builder
+  private MappingTitle(showSubtitle: boolean) {
+    Column({ space: 3 }) {
+      Text('按键映射').fontSize(this.isCompact() ? 18 : 24).fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_primary')).maxLines(1)
+      if (showSubtitle) {
+        Text(this.appId ? '此应用专用输入方案：' + this.profileName : '全局默认输入方案：' + this.profileName)
+          .fontSize(11).fontColor($r('app.color.text_secondary')).maxLines(1)
+      }
+    }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  private MappingActions() {
+    Button(this.isCompact() ? '恢复' : '恢复默认').height(44).borderRadius(14).fontSize(this.isCompact() ? 11 : 14)
+      .backgroundColor($r('app.color.search_background')).fontColor($r('app.color.text_primary')).onClick((): void => this.restoreDefaults())
+    Button('保存').height(44).borderRadius(14).fontSize(this.isCompact() ? 11 : 14)
+      .backgroundColor($r('app.color.accent')).fontColor('#FFFFFFFF').margin({ left: this.isCompact() ? 4 : 8 })
+      .id('key-mapping-save').onClick((): void => { this.save(); })
+  }
+
+  @Builder
+  private MappingHeader() {
+    if (this.isNarrowPhone() && this.titleButtonInsetVp > 0) {
+      Column({ space: 4 }) {
+        Row({ space: 6 }) {
+          this.MappingBackButton()
+          this.MappingTitle(false)
+        }.width('100%').height(52).padding({ right: this.titleButtonMargin() })
+        Row() {
+          Blank()
+          this.MappingActions()
+        }.width('100%').height(44)
+      }.width('100%').height(100)
+    } else {
       Row() {
-        Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(18).fontColor([$r('app.color.text_primary')]) }
-          .width(48).height(48).backgroundColor($r('app.color.search_background')).id('key-mapping-back')
-          .onClick((): void => this.finishEditor())
-        Column({ space: 3 }) {
-          Text('按键映射').fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
-          Text(this.appId ? '此应用专用输入方案：' + this.profileName : '全局默认输入方案：' + this.profileName).fontSize(11).fontColor($r('app.color.text_secondary'))
-        }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-        Button('恢复默认').height(44).borderRadius(14).backgroundColor($r('app.color.search_background')).fontColor($r('app.color.text_primary')).onClick((): void => this.restoreDefaults())
-        Button('保存').height(44).borderRadius(14).backgroundColor($r('app.color.accent')).fontColor('#FFFFFFFF').margin({ left: 8 }).id('key-mapping-save').onClick((): void => { this.save(); })
-      }.width('100%')
+        this.MappingBackButton()
+        this.MappingTitle(!this.isCompact())
+        this.MappingActions()
+      }.width('100%').padding({ right: this.titleButtonMargin() })
+    }
+  }
+
+  build() {
+    Column({ space: this.isCompact() ? 10 : 16 }) {
+      this.MappingHeader()
       Row({ space: 8 }) { this.Tab('固定手柄映射', 0); this.Tab('自由按键', 1) }.width('100%')
       if (this.tab === 0) this.FixedMapping()
       else this.FreeMapping()
     }
-    .width('100%').height('100%').padding(20).backgroundColor($r('app.color.page_background'))
+    .width('100%').height('100%').padding(this.isCompact() ? 10 : 20).backgroundColor($r('app.color.page_background'))
     .bindSheet($$this.showKeyPicker, this.KeyPicker(), { height: SheetSize.LARGE, dragBar: true, showClose: true, title: { title: this.editingFreeIndex >= 0 ? '修改自由按键' : '添加自由按键' } })
   }
 }
