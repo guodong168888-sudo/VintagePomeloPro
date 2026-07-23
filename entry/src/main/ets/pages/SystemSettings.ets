@@ -24,8 +24,18 @@ import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoor
 import { AppCatalogService } from '../service/AppCatalogService';
 import { InputProfileService } from '../service/InputProfileService';
 import { AppSettingsStore } from '../service/AppSettingsStore';
+import { LengthMetrics } from '@kit.ArkUI';
+import {
+  DividerShowType,
+  HdsNavigation,
+  HdsNavigationMenuContentOptions,
+  HdsNavigationTitleMode,
+  ScrollEffectType
+} from '@kit.UIDesignKit';
 
 type SettingsSection = 'display' | 'appearance' | 'input' | 'engine' | 'about';
+const HDS_MATERIAL_TYPE_IMMERSIVE: number = 101;
+const HDS_MATERIAL_LEVEL_EXQUISITE: number = 0;
 
 @Entry
 @Component
@@ -49,6 +59,25 @@ struct SystemSettingsPage {
 
   private cardPadding(): number {
     return this.isNarrowPhone() ? 12 : 22;
+  }
+
+  private settingsTopInset(): number {
+    if (this.breakpoint === 'xs' || this.breakpoint === 'sm') return 8;
+    if (this.breakpoint === 'md') return 10;
+    return 12;
+  }
+
+  private settingsSidePadding(): number {
+    if (this.isNarrowPhone()) return 10;
+    if (this.breakpoint === 'sm') return 16;
+    if (this.breakpoint === 'md') return 20;
+    return 28;
+  }
+
+  private settingsContentMaxWidth(): number {
+    if (this.breakpoint === 'xl') return 1080;
+    if (this.breakpoint === 'lg') return 960;
+    return 100000;
   }
 
   private isManagedWindowsHost(): boolean {
@@ -293,6 +322,24 @@ struct SystemSettingsPage {
       .width('100%').height(46).padding({ left: 14, right: 14 }).borderRadius(14)
       .backgroundColor(this.section === section ? $r('app.color.selected_background') : $r('app.color.search_background'))
       .onClick(() => this.selectSection(section))
+  }
+
+  @Builder
+  private SectionChip(label: string, section: SettingsSection, icon: Resource) {
+    Button() {
+      Row({ space: 7 }) {
+        SymbolGlyph(icon).fontSize(16)
+          .fontColor([this.section === section ? $r('app.color.accent') : $r('app.color.text_secondary')])
+        Text(label).fontSize(13).fontWeight(this.section === section ? FontWeight.Medium : FontWeight.Regular)
+          .fontColor(this.section === section ? $r('app.color.accent') : $r('app.color.text_primary'))
+      }
+    }
+    .height(44)
+    .padding({ left: 13, right: 13 })
+    .borderRadius(22)
+    .backgroundColor(this.section === section ? $r('app.color.selected_background') : '#18FFFFFF')
+    .border({ width: 1, color: this.section === section ? '#38FFFFFF' : '#22FFFFFF' })
+    .onClick((): void => this.selectSection(section))
   }
 
   private sectionIndex(section: SettingsSection): number {
@@ -613,10 +660,26 @@ struct SystemSettingsPage {
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         .borderRadius(20)
       } else if (section === 'engine') {
-        Column({ space: 16 }) {
-          Text('Wine 引擎').fontSize(20).fontWeight(FontWeight.Bold).width('100%')
-          Text(this.engineMessage).fontSize(13).fontColor($r('app.color.text_secondary')).width('100%')
-          Button('重启 Wine 引擎').height(48).borderRadius(14)
+        Column({ space: 14 }) {
+          Row({ space: 12 }) {
+            Stack({ alignContent: Alignment.Center }) {
+              SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(24).fontColor([$r('app.color.accent')])
+            }
+            .width(48).height(48).borderRadius(16)
+            .backgroundColor($r('app.color.selected_background'))
+            Column({ space: 3 }) {
+              Text('Wine 引擎').fontSize(20).fontWeight(FontWeight.Bold)
+                .fontColor($r('app.color.text_primary')).width('100%')
+              Text(this.engineMessage).fontSize(12).fontColor($r('app.color.text_secondary'))
+                .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+            }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+          }
+          .width('100%').padding(14).borderRadius(16)
+          .backgroundColor($r('app.color.search_background'))
+
+          Text('会话维护').fontSize(12).fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_secondary')).width('100%')
+          Button('重启 Wine 引擎').width('100%').height(48).borderRadius(14)
             .backgroundColor($r('app.color.accent'))
             .fontColor('#FFFFFFFF')
             .enabled(!this.engineBusy)
@@ -627,7 +690,7 @@ struct SystemSettingsPage {
               primaryButton: { value: '取消', action: (): void => {} },
               secondaryButton: { value: '立即重启', action: (): void => { this.restartEngine(); } }
             }))
-          Button('停止全部 Windows 会话').height(48).borderRadius(14)
+          Button('停止全部 Windows 会话').width('100%').height(48).borderRadius(14)
             .backgroundColor($r('app.color.search_background'))
             .fontColor($r('app.color.text_primary'))
             .enabled(!this.engineBusy)
@@ -638,12 +701,25 @@ struct SystemSettingsPage {
               primaryButton: { value: '取消', action: (): void => {} },
               secondaryButton: { value: '停止', fontColor: '#D94848', action: (): void => { this.stopEngine(); } }
             }))
-          Button('重置 Wine prefix').height(48).borderRadius(14)
-            .backgroundColor('#25D94848')
-            .fontColor('#D94848')
-            .enabled(!this.engineBusy)
-            .id('wine-engine-reset-prefix')
-            .onClick(() => AlertDialog.show({ title: '重置 Wine 环境', message: '这会删除当前 Wine prefix 中的应用数据，且无法撤销。', primaryButton: { value: '取消', action: (): void => {} }, secondaryButton: { value: '重置', fontColor: '#D94848', action: (): void => { this.resetPrefix(); } } }))
+          Column({ space: 10 }) {
+            Row({ space: 10 }) {
+              SymbolGlyph($r('sys.symbol.info_circle')).fontSize(20).fontColor(['#D94848'])
+              Column({ space: 3 }) {
+                Text('重置 Wine 环境').fontSize(14).fontWeight(FontWeight.Medium)
+                  .fontColor($r('app.color.text_primary')).width('100%')
+                Text('删除当前 Wine prefix 中的应用数据，仅在环境损坏时使用。')
+                  .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+            }.width('100%')
+            Button('重置 Wine prefix').width('100%').height(48).borderRadius(14)
+              .backgroundColor('#18D94848')
+              .fontColor('#D94848')
+              .enabled(!this.engineBusy)
+              .id('wine-engine-reset-prefix')
+              .onClick(() => AlertDialog.show({ title: '重置 Wine 环境', message: '这会删除当前 Wine prefix 中的应用数据，且无法撤销。', primaryButton: { value: '取消', action: (): void => {} }, secondaryButton: { value: '重置', fontColor: '#D94848', action: (): void => { this.resetPrefix(); } } }))
+          }
+          .width('100%').padding(14).borderRadius(16)
+          .backgroundColor('#0FD94848').border({ width: 1, color: '#28D94848' })
         }
         .width('100%')
         .padding(this.cardPadding())
@@ -651,12 +727,30 @@ struct SystemSettingsPage {
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         .borderRadius(20)
       } else {
-        Column({ space: 12 }) {
-          Text('旧柚Pro').fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
-          Text('Wine 作为按需启动的 Windows 兼容引擎。').fontSize(13).fontColor($r('app.color.text_secondary'))
-          Text('当前阶段：主工程架构、应用目录、双显示模式和统一输入路由。').fontSize(13).fontColor($r('app.color.text_secondary'))
-          Button('打开帮助中心').height(48).borderRadius(14)
-            .backgroundColor($r('app.color.search_background')).fontColor($r('app.color.text_primary'))
+        Column({ space: 14 }) {
+          Row({ space: 12 }) {
+            Stack({ alignContent: Alignment.Center }) {
+              SymbolGlyph($r('sys.symbol.square_grid_2x2')).fontSize(25).fontColor([$r('app.color.accent')])
+            }
+            .width(52).height(52).borderRadius(17)
+            .backgroundColor($r('app.color.selected_background'))
+            Column({ space: 3 }) {
+              Text('旧柚Pro').fontSize(22).fontWeight(FontWeight.Bold)
+                .fontColor($r('app.color.text_primary')).width('100%')
+              Text('Wine 应用库与 Windows 兼容引擎').fontSize(12)
+                .fontColor($r('app.color.text_secondary')).width('100%')
+            }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+          }.width('100%')
+          Column({ space: 8 }) {
+            Text('按需启动 Wine，集中管理内建工具与 Download/games 中的 Windows 程序。')
+              .fontSize(13).fontColor($r('app.color.text_primary')).width('100%')
+            Text('支持桌面、多窗口、虚拟输入以及每个应用的独立运行设置。')
+              .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
+          }
+          .width('100%').padding(14).borderRadius(16)
+          .backgroundColor($r('app.color.search_background'))
+          Button('打开帮助中心').width('100%').height(48).borderRadius(14)
+            .backgroundColor($r('app.color.accent')).fontColor('#FFFFFFFF')
             .onClick((): void => { router.pushUrl({ url: 'pages/HelpCenter' }); })
         }
         .width('100%')
@@ -691,128 +785,125 @@ struct SystemSettingsPage {
     .id('system-settings-list')
   }
 
-  @Builder
-  private SettingsBackButton() {
-    Button({ type: ButtonType.Circle }) {
-      SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(this.isNarrowPhone() ? 16 : 18).fontColor([$r('app.color.text_primary')])
-    }
-    .width(48).height(48)
-    .backgroundColor($r('app.color.search_background'))
-    .onClick(() => router.back())
-  }
-
-  @Builder
-  private SettingsTitle(showSubtitle: boolean) {
-    Column({ space: this.isNarrowPhone() ? 0 : 3 }) {
-      Text('系统设置').fontSize(this.isNarrowPhone() ? 19 : 26).fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.text_primary')).maxLines(1)
-      if (showSubtitle) {
-        Text('调整显示模式、外观、输入和 Wine 引擎行为。').fontSize(12).fontColor($r('app.color.text_secondary'))
-      }
-    }
-    .layoutWeight(1)
-    .alignItems(HorizontalAlign.Start)
-  }
-
-  @Builder
-  private RestoreSettingsButton(compact: boolean) {
-    Button(compact ? '恢复' : '恢复默认').height(48)
-      .fontSize(compact ? 12 : 14).borderRadius(14)
-      .backgroundColor($r('app.color.search_background'))
-      .fontColor($r('app.color.text_primary'))
-      .onClick(() => this.restoreDefaults())
-  }
-
-  @Builder
-  private SettingsHeader() {
-    if (this.isNarrowPhone() && this.titleButtonInsetVp > 0) {
-      Column({ space: 4 }) {
-        Row({ space: 6 }) {
-          this.SettingsBackButton()
-          this.SettingsTitle(false)
-        }
-        .width('100%').height(56)
-        .padding({ left: 8, right: 8 + this.titleButtonMargin(), top: 4 })
-        Row() {
-          Blank()
-          this.RestoreSettingsButton(true)
-        }.width('100%').height(48).padding({ left: 8, right: 8 })
-      }.width('100%').height(108)
-    } else {
-      Row({ space: this.isNarrowPhone() ? 6 : 0 }) {
-        this.SettingsBackButton()
-        this.SettingsTitle(!this.isNarrowPhone())
-        this.RestoreSettingsButton(this.isNarrowPhone())
-      }
-      .height(this.isNarrowPhone() ? 56 : 64)
-      .width('100%')
-      .padding({ left: this.isNarrowPhone() ? 8 : 16,
-        right: (this.isNarrowPhone() ? 8 : 16) + this.titleButtonMargin(), top: 4, bottom: 0 })
-    }
-  }
-
   build() {
     Stack() {
-      Column() {
-      this.SettingsHeader()
-
-      if (this.breakpoint === 'lg' || this.breakpoint === 'xl') {
-        Row({ space: 22 }) {
-          Column({ space: 5 }) {
-            this.SectionButton('显示模式', 'display', $r('sys.symbol.rectangle_grid_1x2'))
-            this.SectionButton('外观', 'appearance', $r('sys.symbol.square_grid_2x2'))
-            this.SectionButton('输入与手柄', 'input', $r('sys.symbol.list_bullet'))
-            this.SectionButton('Wine 引擎', 'engine', $r('sys.symbol.arrow_clockwise'))
-            this.SectionButton('关于', 'about', $r('sys.symbol.info_circle'))
-          }
-          .width(230)
-          .height('100%')
-          .padding(12)
-          .backgroundColor($r('app.color.card_glass_background'))
-          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-          .borderRadius(20)
-          this.SettingsList(1080)
-        }
-        .layoutWeight(1)
-        .width('100%')
-        .alignItems(VerticalAlign.Top)
-        .padding({ left: 20, right: 20, top: 0, bottom: 20 })
-      } else {
-        Column({ space: 12 }) {
-          Scroll() {
-            Row({ space: 8 }) {
-              Button('显示').height(48).fontSize(this.isNarrowPhone() ? 12 : 14).borderRadius(14)
-                .backgroundColor(this.section === 'display' ? $r('app.color.accent') : $r('app.color.search_background'))
-                .fontColor(this.section === 'display' ? '#FFFFFFFF' : $r('app.color.text_primary'))
-                .onClick(() => this.selectSection('display'))
-              Button('外观').height(48).fontSize(this.isNarrowPhone() ? 12 : 14).borderRadius(14)
-                .backgroundColor(this.section === 'appearance' ? $r('app.color.accent') : $r('app.color.search_background'))
-                .fontColor(this.section === 'appearance' ? '#FFFFFFFF' : $r('app.color.text_primary'))
-                .onClick(() => this.selectSection('appearance'))
-              Button('输入').height(48).fontSize(this.isNarrowPhone() ? 12 : 14).borderRadius(14)
-                .backgroundColor(this.section === 'input' ? $r('app.color.accent') : $r('app.color.search_background'))
-                .fontColor(this.section === 'input' ? '#FFFFFFFF' : $r('app.color.text_primary'))
-                .onClick(() => this.selectSection('input'))
-              Button('引擎').height(48).fontSize(this.isNarrowPhone() ? 12 : 14).borderRadius(14)
-                .backgroundColor(this.section === 'engine' ? $r('app.color.accent') : $r('app.color.search_background'))
-                .fontColor(this.section === 'engine' ? '#FFFFFFFF' : $r('app.color.text_primary'))
-                .onClick(() => this.selectSection('engine'))
-              Button('关于').height(48).fontSize(this.isNarrowPhone() ? 12 : 14).borderRadius(14)
-                .backgroundColor(this.section === 'about' ? $r('app.color.accent') : $r('app.color.search_background'))
-                .fontColor(this.section === 'about' ? '#FFFFFFFF' : $r('app.color.text_primary'))
-                .onClick(() => this.selectSection('about'))
+      HdsNavigation() {
+        if (this.breakpoint === 'lg' || this.breakpoint === 'xl') {
+          Row({ space: 22 }) {
+            Column({ space: 5 }) {
+              Text('设置分类').fontSize(13).fontWeight(FontWeight.Medium)
+                .fontColor($r('app.color.text_secondary')).width('100%').margin({ left: 8, bottom: 6 })
+              this.SectionButton('显示模式', 'display', $r('sys.symbol.rectangle_grid_1x2'))
+              this.SectionButton('外观', 'appearance', $r('sys.symbol.square_grid_2x2'))
+              this.SectionButton('输入与手柄', 'input', $r('sys.symbol.list_bullet'))
+              this.SectionButton('Wine 引擎', 'engine', $r('sys.symbol.arrow_clockwise'))
+              this.SectionButton('关于', 'about', $r('sys.symbol.info_circle'))
             }
-          }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%')
-          this.SettingsList(840)
+            .width(this.breakpoint === 'xl' ? 220 : 196)
+            .height('100%')
+            .padding({ left: 8, right: 8, top: 10, bottom: 10 })
+            .backgroundColor($r('app.color.card_glass_background'))
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            .borderRadius(16)
+            this.SettingsList(this.settingsContentMaxWidth())
+          }
+          .width('100%').height('100%')
+          .alignItems(VerticalAlign.Top)
+          .padding({
+            left: this.settingsSidePadding(), right: this.settingsSidePadding(),
+            top: this.settingsTopInset(), bottom: 20
+          })
+        } else {
+          Column({ space: 14 }) {
+            Scroll() {
+              Row({ space: 8 }) {
+                this.SectionChip('显示', 'display', $r('sys.symbol.rectangle_grid_1x2'))
+                this.SectionChip('外观', 'appearance', $r('sys.symbol.square_grid_2x2'))
+                this.SectionChip('输入', 'input', $r('sys.symbol.gamecontroller'))
+                this.SectionChip('引擎', 'engine', $r('sys.symbol.arrow_clockwise'))
+                this.SectionChip('关于', 'about', $r('sys.symbol.info_circle'))
+              }
+            }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%')
+            this.SettingsList(840)
+          }
+          .width('100%').height('100%')
+          .alignItems(HorizontalAlign.Start)
+          .padding({
+            left: this.settingsSidePadding(), right: this.settingsSidePadding(),
+            top: this.settingsTopInset(), bottom: this.isNarrowPhone() ? 8 : 16
+          })
         }
-        .layoutWeight(1)
-        .width('100%')
-        .alignItems(HorizontalAlign.Start)
-        .padding({ left: this.isNarrowPhone() ? 8 : 16, right: this.isNarrowPhone() ? 8 : 16,
-          top: 0, bottom: this.isNarrowPhone() ? 8 : 16 })
       }
-      }
-      .width('100%').height('100%').backgroundColor($r('app.color.page_background'))
+      .mode(NavigationMode.Stack)
+      .titleBar({
+        padding: { start: LengthMetrics.vp(14), end: LengthMetrics.vp(14 + this.titleButtonMargin()) },
+        style: {
+          scrollEffectOpts: {
+            enableScrollEffect: true,
+            scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR,
+            blurEffectiveStartOffset: LengthMetrics.vp(0),
+            blurEffectiveEndOffset: LengthMetrics.vp(84)
+          },
+          originalStyle: {
+            contentStyle: {
+              titleStyle: {
+                mainTitleColor: $r('app.color.text_primary'),
+                subTitleColor: $r('app.color.text_secondary')
+              },
+              menuStyle: {
+                iconColor: $r('app.color.text_primary')
+              },
+              backIconStyle: {
+                iconColor: $r('app.color.text_primary')
+              }
+            }
+          },
+          scrollEffectStyle: {
+            contentStyle: {
+              titleStyle: {
+                mainTitleColor: $r('app.color.text_primary'),
+                subTitleColor: $r('app.color.text_secondary')
+              },
+              menuStyle: {
+                iconColor: $r('app.color.text_primary')
+              },
+              backIconStyle: {
+                iconColor: $r('app.color.text_primary')
+              }
+            }
+          },
+          systemMaterialEffect: {
+            materialType: HDS_MATERIAL_TYPE_IMMERSIVE,
+            materialLevel: HDS_MATERIAL_LEVEL_EXQUISITE
+          }
+        },
+        content: {
+          title: {
+            mainTitle: '系统设置',
+            subTitle: (this.breakpoint === 'xs' || this.breakpoint === 'sm') ? undefined :
+              '全局显示、输入与 Wine 引擎偏好'
+          },
+          menu: {
+            value: [
+              {
+                content: {
+                  icon: $r('sys.symbol.arrow_counterclockwise'),
+                  action: (): void => { this.restoreDefaults(); }
+                }
+              }
+            ],
+            maxCount: 1
+          } as HdsNavigationMenuContentOptions,
+          divider: { showType: DividerShowType.OFF }
+        },
+        avoidLayoutSafeArea: true,
+        enableComponentSafeArea: true
+      })
+      .titleMode(HdsNavigationTitleMode.MINI)
+      .hideToolBar(true)
+      .bindToScrollable([this.settingsScroller])
+      .width('100%').height('100%')
+      .backgroundColor('#00FFFFFF')
 
       if (this.engineBusy) {
         Column({ space: 14 }) {
@@ -833,5 +924,7 @@ struct SystemSettingsPage {
       }
     }
     .width('100%').height('100%').backgroundColor($r('app.color.page_background'))
+    .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
+      [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
   }
 }

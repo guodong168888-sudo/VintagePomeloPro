@@ -23,7 +23,10 @@ export struct AppCard {
 
   private coverHeight(): number {
     if (this.viewMode === ViewMode.COMPACT) return 104;
-    if (this.narrowPhone) return this.viewMode === ViewMode.LARGE ? 148 : 120;
+    // VintagePomelo's large-cover mode is a full-width showcase card, not a
+    // two-column grid with a few extra pixels. Keep the phone cover visibly
+    // taller now that LARGE is rendered as a single-column list.
+    if (this.narrowPhone) return this.viewMode === ViewMode.LARGE ? 196 : 120;
     return this.viewMode === ViewMode.LARGE ? 246 : 220;
   }
 

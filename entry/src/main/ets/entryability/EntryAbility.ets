@@ -88,6 +88,16 @@ export default class EntryAbility extends UIAbility {
         this.mainWindow = mainWin;
         DeviceCapabilityPolicy.enableSensorRotation(mainWin, 'EntryAbility');
         mainWin.setWindowDecorVisible(false);
+        if (DeviceCapabilityPolicy.isPhoneDevice()) {
+          // HDS navigation owns the status-bar material. Extend the ArkUI
+          // scene behind it while keeping the status icons visible.
+          mainWin.setWindowLayoutFullScreen(true).catch((error: Error) => {
+            hilog.warn(DOMAIN, 'EntryAbility', 'Phone immersive layout unavailable: %{public}s', JSON.stringify(error));
+          });
+          mainWin.setWindowSystemBarEnable(['status']).catch((error: Error) => {
+            hilog.warn(DOMAIN, 'EntryAbility', 'Phone system bar policy unavailable: %{public}s', JSON.stringify(error));
+          });
+        }
         if (this.isPcWindowHost()) {
           // A 2-in-1 keeps the system three-button area even when the visual
           // title decoration is hidden. Re-enable that area's native drag and

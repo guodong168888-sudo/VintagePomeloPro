@@ -9,6 +9,10 @@ export class DeviceCapabilityPolicy {
     return deviceInfo.deviceType;
   }
 
+  static isPhoneDevice(): boolean {
+    return DeviceCapabilityPolicy.deviceType() === 'phone';
+  }
+
   static usesForkNativeChildProcess(): boolean {
     const type = DeviceCapabilityPolicy.deviceType();
     return type === 'phone' || type === 'tv';
@@ -20,7 +24,7 @@ export class DeviceCapabilityPolicy {
   }
 
   static supportsSensorRotation(): boolean {
-    return DeviceCapabilityPolicy.deviceType() === 'phone';
+    return DeviceCapabilityPolicy.isPhoneDevice();
   }
 
   static enableSensorRotation(target: window.Window, tag: string): void {

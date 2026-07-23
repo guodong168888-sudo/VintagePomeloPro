@@ -21,6 +21,7 @@ export default class DesktopAbility extends UIAbility {
   private stage: window.WindowStage | null = null;
   private mainWindow: window.Window | null = null;
   private windowSizeCallback: ((size: window.Size) => void) | null = null;
+  private windowResizeGeneration: number = 0;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
@@ -51,10 +52,11 @@ export default class DesktopAbility extends UIAbility {
           DeviceCapabilityPolicy.enableSensorRotation(mw, TAG);
           if (DeviceCapabilityPolicy.usesForkNativeChildProcess()) {
             this.windowSizeCallback = (size: window.Size): void => {
-              WineWindowManager.getInstance().syncOutputSize(size.width, size.height);
-              InputOverlayWindowCoordinator.getInstance().syncBounds().catch(() => {});
+              this.synchronizeDesktopWindow(size.width, size.height);
             };
             mw.on('windowSizeChange', this.windowSizeCallback);
+            const initialRect = mw.getWindowProperties().windowRect;
+            this.synchronizeDesktopWindow(initialRect.width, initialRect.height);
           }
           mw.setWindowLayoutFullScreen(true).catch((e: BusinessError) => {
             hilog.error(DOMAIN, TAG, '[DWA] fullScreen failed: %{public}s', JSON.stringify(e));
@@ -78,6 +80,7 @@ export default class DesktopAbility extends UIAbility {
 
   onForeground(): void {
     hilog.info(DOMAIN, TAG, '[DWA] onForeground tl=%{public}d', this.toplevelId);
+    WineWindowManager.getInstance().markDesktopAbilityForeground(this.toplevelId);
     InputRouter.getInstance().setActiveToplevel(WineWindowManager.getInstance().getDesktopRootId());
     this.attachInputOverlay();
   }
@@ -95,6 +98,7 @@ export default class DesktopAbility extends UIAbility {
 
   onBackground(): void {
     hilog.info(DOMAIN, TAG, '[DWA] onBackground tl=%{public}d', this.toplevelId);
+    WineWindowManager.getInstance().markDesktopAbilityBackground(this.toplevelId);
     GamepadManager.getInstance().releaseAll();
     InputDispatcher.getInstance().releaseAll('desktop-background');
     InputRouter.getInstance().releaseAllKeys();
@@ -107,6 +111,7 @@ export default class DesktopAbility extends UIAbility {
       if (this.mainWindow && this.windowSizeCallback) {
         this.mainWindow.off('windowSizeChange', this.windowSizeCallback);
       }
+      this.windowResizeGeneration++;
       this.windowSizeCallback = null;
       GamepadManager.getInstance().releaseAll();
       InputDispatcher.getInstance().releaseAll('desktop-destroy');
@@ -137,5 +142,23 @@ export default class DesktopAbility extends UIAbility {
       settings.desktopInputProfileId || 'default', settings.showVirtualControls, settings.controlOpacity,
       settings.virtualInputEnabled,
       true).catch(() => {});
+  }
+
+  private synchronizeDesktopWindow(width: number, height: number): void {
+    if (width <= 0 || height <= 0) return;
+    WineWindowManager.getInstance().syncOutputSize(width, height);
+    InputOverlayWindowCoordinator.getInstance().syncBounds().catch(() => {});
+    const generation = ++this.windowResizeGeneration;
+    // Rotation delivers several transient sizes. Re-sample the real window
+    // after layout and animation settle so both the Wine root and overlay use
+    // the final landscape/portrait rectangle.
+    [160, 480].forEach((delay: number): void => {
+      setTimeout((): void => {
+        if (generation !== this.windowResizeGeneration || !this.mainWindow) return;
+        const rect = this.mainWindow.getWindowProperties().windowRect;
+        WineWindowManager.getInstance().syncOutputSize(rect.width, rect.height);
+        InputOverlayWindowCoordinator.getInstance().syncBounds().catch(() => {});
+      }, delay);
+    });
   }
 }

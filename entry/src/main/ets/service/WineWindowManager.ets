@@ -36,6 +36,7 @@ export class WineWindowManager {
   private presentationMode: WinePresentationMode = WinePresentationMode.DESKTOP;
   private desktopRootId: number = 0;
   private desktopAbilityRunning: boolean = false;
+  private desktopAbilityForeground: boolean = false;
   private desktopAbilityRootId: number = 0;
   private singleAppRootId: number = 0;
   private singleAppAbilityRunning: boolean = false;
@@ -147,6 +148,7 @@ export class WineWindowManager {
     this.isDesktopMode = mode === WinePresentationMode.DESKTOP;
     this.desktopRootId = 0;
     this.desktopAbilityRunning = false;
+    this.desktopAbilityForeground = false;
     this.desktopAbilityRootId = 0;
     this.singleAppRootId = 0;
     this.destroyed.clear();
@@ -176,6 +178,13 @@ export class WineWindowManager {
       const outH = Math.max(1, Math.round(heightPx / effectiveScale));
       testNapi.setDisplayScale(effectiveScale);
       testNapi.setOutputSize(outW, outH);
+      // setOutputSize updates compositor bookkeeping, but an existing Wine
+      // Explorer desktop also needs an xdg configure. Some phone rotations do
+      // not deliver a reliable XComponent surface-change callback, leaving the
+      // old portrait desktop as a narrow strip in a landscape Ability.
+      if (this.presentationMode === WinePresentationMode.DESKTOP && this.desktopRootId > 0) {
+        testNapi.notifyToplevelResize(this.desktopRootId, outW, outH);
+      }
       hilog.info(DOMAIN, TAG,
         '[MW] host size=%{public}dx%{public}d output=%{public}dx%{public}d scale=%{public}s',
         widthPx, heightPx, outW, outH, effectiveScale.toFixed(2));
@@ -723,6 +732,7 @@ export class WineWindowManager {
       // 否则再次点“Wine 桌面”会把已销毁的 renderer 当作可恢复会话。
       this.desktopRootId = 0;
       this.desktopAbilityRunning = false;
+      this.desktopAbilityForeground = false;
       this.desktopAbilityRootId = 0;
       return;
     }
@@ -786,6 +796,7 @@ export class WineWindowManager {
       return;
     }
     this.desktopAbilityRunning = true;
+    this.desktopAbilityForeground = false;
     this.desktopAbilityRootId = rootId;
     try {
       const want: Want = {
@@ -809,9 +820,28 @@ export class WineWindowManager {
     return this.desktopAbilityRunning && this.desktopAbilityRootId === rootId;
   }
 
+  isDesktopAbilityForeground(rootId: number): boolean {
+    return this.desktopAbilityForeground && this.desktopAbilityRootId === rootId;
+  }
+
+  markDesktopAbilityForeground(rootId: number): void {
+    if (rootId <= 0) return;
+    this.desktopAbilityRootId = rootId;
+    this.desktopAbilityRunning = true;
+    this.desktopAbilityForeground = true;
+    hilog.info(DOMAIN, TAG, '[MW] DesktopAbility foreground for root #%{public}d', rootId);
+  }
+
+  markDesktopAbilityBackground(rootId: number): void {
+    if (this.desktopAbilityRootId !== rootId) return;
+    this.desktopAbilityForeground = false;
+    hilog.info(DOMAIN, TAG, '[MW] DesktopAbility background for root #%{public}d', rootId);
+  }
+
   markDesktopAbilityStopped(rootId: number): void {
     if (this.desktopAbilityRootId !== rootId) return;
     this.desktopAbilityRunning = false;
+    this.desktopAbilityForeground = false;
     hilog.info(DOMAIN, TAG, '[MW] DesktopAbility stopped for root #%{public}d', rootId);
   }
 

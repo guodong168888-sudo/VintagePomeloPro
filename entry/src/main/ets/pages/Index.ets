@@ -24,17 +24,27 @@ import { WineWindowManager } from '../service/WineWindowManager';
 import { GamepadManager } from '../service/GamepadManager';
 import { InputProfileService } from '../service/InputProfileService';
 import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
-import { DividerMode, HdsTabs, HdsTabsController } from '@kit.UIDesignKit';
+import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
+import { LengthMetrics } from '@kit.ArkUI';
+import {
+  DividerMode,
+  DividerShowType,
+  HdsNavigation,
+  HdsNavigationMenuContentOptions,
+  HdsNavigationTitleMode,
+  HdsTabs,
+  HdsTabsController,
+  ScrollEffectType
+} from '@kit.UIDesignKit';
 
 type CatalogFilter = 'builtin' | 'windows' | 'running' | 'favorite';
 
-const HDS_MATERIAL_TYPE_IMMERSIVE: number = 101;
-const HDS_MATERIAL_LEVEL_EXQUISITE: number = 0;
 const PHONE_NAV_BUILTIN: number = 0;
 const PHONE_NAV_WINDOWS: number = 1;
 const PHONE_NAV_FAVORITE: number = 2;
 const PHONE_NAV_RUNNING: number = 3;
-const PHONE_NAV_MENU: number = 4;
+const HDS_MATERIAL_TYPE_IMMERSIVE: number = 101;
+const HDS_MATERIAL_LEVEL_EXQUISITE: number = 0;
 
 @Entry
 @Component
@@ -47,36 +57,39 @@ struct Index {
   @State private filter: CatalogFilter = 'builtin';
   @State private breakpoint: BreakpointType = 'lg';
   @State private sidebarCollapsed: boolean = false;
-  @State private mobileSidebarVisible: boolean = false;
   @State private settings: GlobalSettings = AppSettingsStore.getInstance().getGlobalSettings();
   @State private engineState: EngineState = EngineState.STOPPED;
   @State private engineMessage: string = 'Wine 引擎未启动';
   @State private scanning: boolean = false;
   @State private runningAppIds: Set<string> = new Set<string>();
   @State private phoneNavIndex: number = PHONE_NAV_BUILTIN;
+  @State private viewportWidth: number = 0;
+  @State private viewportHeight: number = 0;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private phoneNavController: HdsTabsController = new HdsTabsController();
+  private builtinScroller: Scroller = new Scroller();
+  private windowsScroller: Scroller = new Scroller();
+  private favoriteScroller: Scroller = new Scroller();
+  private runningScroller: Scroller = new Scroller();
   private breakpointCallback: ((value: BreakpointType) => void) | null = null;
   private engineCallback: ((state: EngineState, message: string) => void) | null = null;
   private settingsCallback: ThemeSettingsListener | null = null;
   private refreshTimer: number = -1;
 
   private isPhone(): boolean {
-    return this.breakpoint === 'xs' || this.breakpoint === 'sm';
+    return DeviceCapabilityPolicy.isPhoneDevice() || this.breakpoint === 'xs' || this.breakpoint === 'sm';
   }
 
   private isNarrowPhone(): boolean {
     return this.breakpoint === 'xs';
   }
 
-  private shouldUsePhoneSwipeGesture(): boolean {
-    // A narrow 2-in-1 window uses the phone visual layout, but it must keep
-    // native title dragging. The full-page swipe recognizer is only useful on
-    // touch-first devices where it opens/closes the mobile side sheet.
-    return this.isPhone() && !AppSettingsStore.getInstance().usesManagedWineWindows();
+  private isPhoneLandscape(): boolean {
+    return DeviceCapabilityPolicy.isPhoneDevice() && this.viewportWidth > this.viewportHeight && this.viewportHeight > 0;
   }
 
   private contentPadding(): number {
+    if (this.isPhoneLandscape()) return 12;
     if (this.breakpoint === 'xs') return 10;
     if (this.breakpoint === 'sm') return 16;
     if (this.breakpoint === 'md') return 20;
@@ -207,7 +220,6 @@ struct Index {
   private selectFilter(value: CatalogFilter, syncPhoneNavigation: boolean = true): void {
     this.filter = value;
     this.visibleApps = this.filterApps(this.searchQuery, value);
-    this.mobileSidebarVisible = false;
     if (syncPhoneNavigation && this.isPhone()) {
       const index = this.phoneNavIndexForFilter(value);
       if (index !== this.phoneNavIndex) {
@@ -215,6 +227,10 @@ struct Index {
         this.phoneNavController.changeIndex(index);
       }
     }
+  }
+
+  private openSidebarPage(url: string): void {
+    router.pushUrl({ url });
   }
 
   private filterTitle(): string {
@@ -274,13 +290,26 @@ struct Index {
     if (this.settings.viewMode === ViewMode.COMPACT) return '1fr';
     // VintagePomelo keeps cover cards in two columns on phones. A single
     // flexible column makes one icon fill almost the entire compact window.
+    if (this.isPhoneLandscape()) return '1fr 1fr 1fr';
     if (this.isPhone()) return '1fr 1fr';
     if (this.breakpoint === 'md') return '1fr 1fr';
-    if (this.breakpoint === 'xl') return this.settings.viewMode === ViewMode.LARGE ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr 1fr 1fr';
-    return this.settings.viewMode === ViewMode.LARGE ? '1fr 1fr' : '1fr 1fr 1fr';
+    if (this.breakpoint === 'xl') return '1fr 1fr 1fr 1fr 1fr';
+    return '1fr 1fr 1fr';
+  }
+
+  private catalogScroller(filter: CatalogFilter): Scroller {
+    if (filter === 'windows') return this.windowsScroller;
+    if (filter === 'favorite') return this.favoriteScroller;
+    if (filter === 'running') return this.runningScroller;
+    return this.builtinScroller;
+  }
+
+  private phoneNavigationScrollers(): Scroller[] {
+    return [this.builtinScroller, this.windowsScroller, this.favoriteScroller, this.runningScroller];
   }
 
   private compactGridColumns(): string {
+    if (this.isPhoneLandscape()) return '1fr 1fr';
     if (this.isPhone()) return '1fr';
     if (this.breakpoint === 'md') return '1fr 1fr';
     if (this.breakpoint === 'xl') return '1fr 1fr 1fr';
@@ -367,7 +396,6 @@ struct Index {
     this.settings = AppSettingsStore.getInstance().getGlobalSettings();
   }
 
-  /** Phone header follows VintagePomelo: one menu entry, not three large buttons. */
   private showViewModeMenu(): void {
     promptAction.showActionMenu({
       title: '卡片视图',
@@ -383,8 +411,48 @@ struct Index {
     }).catch(() => {});
   }
 
+  private phoneViewModeIcon(): Resource {
+    if (this.settings.viewMode === ViewMode.COMPACT) return $r('sys.symbol.list_bullet');
+    if (this.settings.viewMode === ViewMode.LARGE) return $r('sys.symbol.rectangle_grid_1x2');
+    return $r('sys.symbol.square_grid_2x2');
+  }
+
+  private phoneNavigationMenu(): HdsNavigationMenuContentOptions {
+    return {
+      value: [
+        {
+          content: {
+            label: '系统设置',
+            icon: $r('sys.symbol.gearshape'),
+            action: (): void => { this.openSidebarPage('pages/SystemSettings'); }
+          }
+        },
+        {
+          content: {
+            label: '切换卡片视图',
+            icon: this.phoneViewModeIcon(),
+            action: (): void => { this.showViewModeMenu(); }
+          }
+        },
+        {
+          content: {
+            label: '帮助中心',
+            icon: $r('sys.symbol.info_circle'),
+            action: (): void => { this.openSidebarPage('pages/HelpCenter'); }
+          }
+        }
+      ],
+      maxCount: 3
+    };
+  }
+
+  private phoneBottomInset(): number {
+    if (this.isPhoneLandscape()) return 92;
+    return this.isNarrowPhone() ? 108 : 116;
+  }
+
   @Builder
-  private NavItem(label: string, value: CatalogFilter, icon: Resource, mobile: boolean = false) {
+  private NavItem(label: string, value: CatalogFilter, icon: Resource) {
     Row({ space: 12 }) {
       SymbolGlyph(icon).fontSize(19)
         .fontColor([this.filter === value ? $r('app.color.accent') : $r('app.color.text_secondary')])
@@ -403,29 +471,29 @@ struct Index {
   }
 
   @Builder
-  private SideBar(mobile: boolean = false) {
+  private SideBar() {
     Column() {
       Row() {
-        if (!this.sidebarCollapsed || mobile) {
+        if (!this.sidebarCollapsed) {
           Column({ space: this.isNarrowPhone() ? 2 : 3 }) {
             Text('旧柚Pro').fontSize(this.isNarrowPhone() ? 16 : 18).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
-            Text(this.apps.length + ' 个程序 · 左滑收起').fontSize(this.isNarrowPhone() ? 9 : 11).fontColor($r('app.color.text_secondary'))
+            Text(this.apps.length + ' 个程序').fontSize(this.isNarrowPhone() ? 9 : 11).fontColor($r('app.color.text_secondary'))
           }.alignItems(HorizontalAlign.Start).layoutWeight(1)
         }
         Button({ type: ButtonType.Circle }) {
-          SymbolGlyph(mobile ? $r('sys.symbol.xmark') : (this.sidebarCollapsed ? $r('sys.symbol.chevron_right') : $r('sys.symbol.chevron_left')))
+          SymbolGlyph(this.sidebarCollapsed ? $r('sys.symbol.chevron_right') : $r('sys.symbol.chevron_left'))
             .fontSize(16).fontColor([$r('app.color.text_primary')])
         }
           .width(48).height(48)
           .backgroundColor($r('app.color.search_background'))
           .border({ width: 1, color: '#12000000' })
+          .id('library-toggle-sidebar')
           .onClick((): void => {
-            if (mobile) this.mobileSidebarVisible = false;
-            else this.sidebarCollapsed = !this.sidebarCollapsed;
+            this.sidebarCollapsed = !this.sidebarCollapsed;
           })
       }.width('100%').height(64)
 
-      if (!this.sidebarCollapsed || mobile) {
+      if (!this.sidebarCollapsed) {
         AppSearchBar({
           value: this.searchQuery,
           heightVp: 48,
@@ -438,33 +506,50 @@ struct Index {
           .margin({ top: 10, bottom: 18 })
       }
 
-      Column({ space: 4 }) {
-        this.NavItem('收藏', 'favorite', $r('sys.symbol.star'), mobile)
-        this.NavItem('内建应用', 'builtin', $r('sys.symbol.house_fill'), mobile)
-        this.NavItem('Windows 程序', 'windows', $r('sys.symbol.folder'), mobile)
-        this.NavItem('运行中', 'running', $r('sys.symbol.play_fill'), mobile)
-      }.width('100%')
+      Scroll() {
+        Column() {
+          Column({ space: 4 }) {
+            this.NavItem('收藏', 'favorite', $r('sys.symbol.star'))
+            this.NavItem('内建应用', 'builtin', $r('sys.symbol.house_fill'))
+            this.NavItem('Windows 程序', 'windows', $r('sys.symbol.folder'))
+            this.NavItem('运行中', 'running', $r('sys.symbol.play_fill'))
+          }.width('100%')
 
-      Blank()
-      Row({ space: 12 }) {
-        SymbolGlyph($r('sys.symbol.gearshape')).fontSize(19).fontColor([$r('app.color.text_secondary')])
-        if (!this.sidebarCollapsed || mobile) {
-          Text('系统设置').fontSize(14).fontColor($r('app.color.text_primary'))
+          Blank()
+          Row({ space: 12 }) {
+            SymbolGlyph($r('sys.symbol.gearshape')).fontSize(19).fontColor([$r('app.color.text_secondary')])
+            if (!this.sidebarCollapsed) {
+              Text('系统设置').fontSize(14).fontColor($r('app.color.text_primary'))
+            }
+          }
+          .width('100%').height(48).padding({ left: 15 }).borderRadius(12)
+          .id('library-open-system-settings')
+          .onClick((): void => this.openSidebarPage('pages/SystemSettings'))
+          Row({ space: 12 }) {
+            SymbolGlyph($r('sys.symbol.info_circle')).fontSize(19).fontColor([$r('app.color.text_secondary')])
+            if (!this.sidebarCollapsed) {
+              Text('帮助').fontSize(14).fontColor($r('app.color.text_primary'))
+            }
+          }.width('100%').height(48).padding({ left: 15 })
+            .id('library-open-help')
+            .onClick((): void => { this.openSidebarPage('pages/HelpCenter'); })
         }
+        .width('100%')
+        .constraintSize({ minHeight: '100%' })
       }
-      .width('100%').height(48).padding({ left: 15 }).borderRadius(12)
-      .onClick(() => router.pushUrl({ url: 'pages/SystemSettings' }))
-      Row({ space: 12 }) {
-        SymbolGlyph($r('sys.symbol.info_circle')).fontSize(19).fontColor([$r('app.color.text_secondary')])
-        if (!this.sidebarCollapsed || mobile) {
-          Text('帮助').fontSize(14).fontColor($r('app.color.text_primary'))
-        }
-      }.width('100%').height(48).padding({ left: 15 })
-        .onClick((): void => { router.pushUrl({ url: 'pages/HelpCenter' }); })
+      .layoutWeight(1)
+      .width('100%')
+      .scrollBar(BarState.Auto)
+      .edgeEffect(EdgeEffect.Spring)
     }
-    .width(mobile ? (this.isNarrowPhone() ? '86%' : 304) : (this.sidebarCollapsed ? 72 : 264))
+    .width(this.sidebarCollapsed ? 72 : 264)
     .height('100%')
-    .padding(this.isNarrowPhone() ? 10 : 16)
+    .padding({
+      left: this.isNarrowPhone() ? 10 : 16,
+      right: this.isNarrowPhone() ? 10 : 16,
+      top: this.isNarrowPhone() ? 10 : 16,
+      bottom: this.isNarrowPhone() ? 10 : 16
+    })
     .backgroundColor($r('app.color.sidebar_background'))
     .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
   }
@@ -472,25 +557,7 @@ struct Index {
   @Builder
   private Header() {
     Column({ space: 12 }) {
-      if (this.isPhone()) {
-        Row() {
-          Column({ space: 2 }) {
-            Text(this.filterTitle())
-              .fontSize(this.isNarrowPhone() ? 19 : 22).fontWeight(FontWeight.Bold)
-              .fontColor($r('app.color.text_primary'))
-            Text(this.filterDescription()).fontSize(11).fontColor($r('app.color.text_secondary'))
-              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-          Button({ type: ButtonType.Circle }) {
-            SymbolGlyph($r('sys.symbol.rectangle_grid_1x2')).fontSize(17)
-              .fontColor([$r('app.color.text_primary')])
-          }
-          .width(48).height(48)
-          .backgroundColor($r('app.color.search_background'))
-          .id('library-phone-view-menu')
-          .onClick((): void => this.showViewModeMenu())
-        }.width('100%').height(48)
-      } else {
+      if (!this.isPhone()) {
         Row() {
           Column({ space: 3 }) {
             Text(this.filterTitle())
@@ -512,7 +579,7 @@ struct Index {
           .margin({ right: this.titleButtonInsetVp > 0 ? this.titleButtonInsetVp + 24 : 0 })
         }.width('100%')
       }
-      if (this.isPhone() || this.breakpoint === 'md') {
+      if (this.breakpoint === 'md') {
         AppSearchBar({
           value: this.searchQuery,
           heightVp: 48,
@@ -526,8 +593,9 @@ struct Index {
     .width('100%')
     // The wide layout has no second search row.  Keep its header deliberately
     // compact so that the first application row starts in the visible area.
-    .height((this.breakpoint === 'lg' || this.breakpoint === 'xl') ? 64 :
-      (this.breakpoint === 'md' ? 172 : 112))
+    .height(this.isPhone() ? (this.isPhoneLandscape() ? 52 : 60) :
+      ((this.breakpoint === 'lg' || this.breakpoint === 'xl') ? 64 :
+        (this.breakpoint === 'md' ? 172 : 112)))
     .justifyContent(FlexAlign.Start)
   }
 
@@ -551,30 +619,45 @@ struct Index {
 
   @Builder
   private AppGrid(items: AppDescriptor[]) {
-    Grid() {
-      ForEach(items, (app: AppDescriptor): void => {
-        GridItem() {
-          AppCard({
-            app: app,
-            viewMode: this.settings.viewMode,
-            running: this.runningAppIds.has(app.id),
-            useGlassEffect: this.settings.useGlassEffect,
-            resolvedDisplayMode: AppSessionService.getInstance().resolveMode(app, this.settings),
-            narrowPhone: this.isPhone(),
-            onLaunch: (target: AppDescriptor): void => { this.launch(target); },
-            onSettings: (target: AppDescriptor): void => { this.openAppSettings(target); },
-            onLongPress: (target: AppDescriptor): void => { this.showAppLongPressMenu(target); }
-          })
-        }
-        // Shadows extend beyond the card's measured bounds.  Without this
-        // inset Grid clips the last row's rounded bottom edge and shadow.
-        .padding({ left: 4, right: 4, top: 4, bottom: 12 })
-      }, (app: AppDescriptor): string => app.id)
+    if (this.settings.viewMode === ViewMode.LARGE) {
+      Column({ space: 8 }) {
+        ForEach(items, (app: AppDescriptor): void => {
+          this.CatalogCard(app)
+        }, (app: AppDescriptor): string => app.id)
+      }
+      .width('100%')
+      .padding({ left: 4, right: 4, top: 4, bottom: 12 })
+    } else {
+      Grid() {
+        ForEach(items, (app: AppDescriptor): void => {
+          GridItem() {
+            this.CatalogCard(app)
+          }
+          // Shadows extend beyond the card's measured bounds.  Without this
+          // inset Grid clips the last row's rounded bottom edge and shadow.
+          .padding({ left: 4, right: 4, top: 4, bottom: 12 })
+        }, (app: AppDescriptor): string => app.id)
+      }
+      .columnsTemplate(this.settings.viewMode === ViewMode.COMPACT ? this.compactGridColumns() : this.gridColumns())
+      .columnsGap(8)
+      .rowsGap(4)
+      .width('100%')
     }
-    .columnsTemplate(this.settings.viewMode === ViewMode.COMPACT ? this.compactGridColumns() : this.gridColumns())
-    .columnsGap(8)
-    .rowsGap(4)
-    .width('100%')
+  }
+
+  @Builder
+  private CatalogCard(app: AppDescriptor) {
+    AppCard({
+      app: app,
+      viewMode: this.settings.viewMode,
+      running: this.runningAppIds.has(app.id),
+      useGlassEffect: this.settings.useGlassEffect,
+      resolvedDisplayMode: AppSessionService.getInstance().resolveMode(app, this.settings),
+      narrowPhone: this.isPhone(),
+      onLaunch: (target: AppDescriptor): void => { this.launch(target); },
+      onSettings: (target: AppDescriptor): void => { this.openAppSettings(target); },
+      onLongPress: (target: AppDescriptor): void => { this.showAppLongPressMenu(target); }
+    })
   }
 
   /**
@@ -584,7 +667,7 @@ struct Index {
    */
   @Builder
   private CatalogScroll(items: AppDescriptor[], filter: CatalogFilter) {
-    Scroll() {
+    Scroll(this.catalogScroller(filter)) {
       Column() {
         this.AppGrid(items)
       }
@@ -593,7 +676,7 @@ struct Index {
       .justifyContent(FlexAlign.Start)
       // Keep the last row above the phone navigation gesture area and the
       // overlaid bottom bar. The extra inset is harmless on tablet layouts.
-      .padding({ top: 2, bottom: this.breakpoint === 'xs' ? 82 : (this.breakpoint === 'sm' ? 112 : 36) })
+      .padding({ top: 2, bottom: this.isPhone() ? this.phoneBottomInset() : 36 })
     }
     .layoutWeight(1)
     .width('100%')
@@ -604,7 +687,9 @@ struct Index {
   @Builder
   private Library() {
     Column() {
-      this.Header()
+      if (!this.isPhone()) {
+        this.Header()
+      }
       if (this.scanning) {
         Row({ space: 10 }) {
           LoadingProgress().width(20).height(20)
@@ -637,25 +722,30 @@ struct Index {
     }
     .layoutWeight(1)
     .height('100%')
-    .padding({ left: this.contentPadding(), right: this.contentPadding(), top: this.isNarrowPhone() ? 8 : 16 })
+    .padding({
+      left: this.contentPadding(),
+      right: this.contentPadding(),
+      top: this.isPhone() ? (this.isPhoneLandscape() ? 6 : 10) : 16
+    })
   }
 
   @Builder
   private PhoneNavigationTab(label: string, icon: Resource, index: number) {
     Column({ space: 3 }) {
       SymbolGlyph(icon)
-        .fontSize(this.isNarrowPhone() ? 20 : 22)
+        .fontSize(24)
         .fontColor([this.phoneNavIndex === index ? $r('app.color.accent') : $r('app.color.text_secondary')])
       Text(label)
-        .fontSize(this.isNarrowPhone() ? 9 : 10)
+        .fontSize(10)
         .fontWeight(this.phoneNavIndex === index ? FontWeight.Medium : FontWeight.Normal)
         .fontColor(this.phoneNavIndex === index ? $r('app.color.accent') : $r('app.color.text_secondary'))
         .maxLines(1)
     }
     .width('100%')
-    .height(this.isNarrowPhone() ? 52 : 56)
+    .height(this.isPhoneLandscape() ? 48 : (this.isNarrowPhone() ? 58 : 60))
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
+    .id('library-nav-tab-' + index)
   }
 
   @Builder
@@ -668,8 +758,6 @@ struct Index {
       .tabBar(this.PhoneNavigationTab('收藏', $r('sys.symbol.star'), PHONE_NAV_FAVORITE))
     TabContent() { Column() }
       .tabBar(this.PhoneNavigationTab('运行中', $r('sys.symbol.play_fill'), PHONE_NAV_RUNNING))
-    TabContent() { Column() }
-      .tabBar(this.PhoneNavigationTab('菜单', $r('sys.symbol.list_bullet'), PHONE_NAV_MENU))
   }
 
   @Builder
@@ -687,8 +775,13 @@ struct Index {
     .divider({ mode: DividerMode.FOLLOW_SCROLL })
     .barBackgroundBlurStyle(BlurStyle.COMPONENT_THICK)
     .barFloatingStyle({
-      barBottomMargin: this.isNarrowPhone() ? 10 : 16,
-      barSideMargin: this.isNarrowPhone() ? 8 : 16,
+      barBottomMargin: this.isPhoneLandscape() ? 12 : (this.isNarrowPhone() ? 14 : 18),
+      barSideMargin: this.isPhoneLandscape() ? 24 : (this.isNarrowPhone() ? 10 : 16),
+      barWidth: {
+        smallWidth: 320,
+        mediumWidth: 328,
+        largeWidth: 328
+      },
       gradientMask: { maskColor: $r('app.color.page_background') },
       systemMaterialEffect: {
         materialType: HDS_MATERIAL_TYPE_IMMERSIVE,
@@ -697,12 +790,6 @@ struct Index {
       adaptToHandedness: false,
       thermoCtrl: true
     })
-    .onContentWillChange((_currentIndex: number, comingIndex: number): boolean => {
-      return comingIndex !== PHONE_NAV_MENU;
-    })
-    .onTabBarClick((index: number): void => {
-      if (index === PHONE_NAV_MENU) this.mobileSidebarVisible = true;
-    })
     .onChange((index: number): void => {
       const target = this.phoneFilterForIndex(index);
       if (target === null) return;
@@ -710,8 +797,79 @@ struct Index {
       this.selectFilter(target, false);
     })
     .width('100%')
-    .height(this.isNarrowPhone() ? 86 : 96)
+    .height(this.isPhoneLandscape() ? 84 : (this.isNarrowPhone() ? 104 : 112))
     .id('library-bottom-bar')
+  }
+
+  @Builder
+  private PhoneLibraryNavigation() {
+    HdsNavigation() {
+      this.Library()
+    }
+    .mode(NavigationMode.Stack)
+    .titleBar({
+      padding: { start: LengthMetrics.vp(14), end: LengthMetrics.vp(14) },
+      style: {
+        scrollEffectOpts: {
+          enableScrollEffect: true,
+          scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR,
+          blurEffectiveStartOffset: LengthMetrics.vp(0),
+          blurEffectiveEndOffset: LengthMetrics.vp(this.isPhoneLandscape() ? 56 : 84)
+        },
+        originalStyle: {
+          contentStyle: {
+            titleStyle: {
+              mainTitleColor: $r('app.color.text_primary'),
+              subTitleColor: $r('app.color.text_secondary')
+            },
+            menuStyle: {
+              iconColor: $r('app.color.text_primary')
+            },
+            backIconStyle: {
+              iconColor: $r('app.color.text_primary')
+            }
+          }
+        },
+        scrollEffectStyle: {
+          contentStyle: {
+            titleStyle: {
+              mainTitleColor: $r('app.color.text_primary'),
+              subTitleColor: $r('app.color.text_secondary')
+            },
+            menuStyle: {
+              iconColor: $r('app.color.text_primary')
+            },
+            backIconStyle: {
+              iconColor: $r('app.color.text_primary')
+            }
+          }
+        },
+        systemMaterialEffect: {
+          materialType: HDS_MATERIAL_TYPE_IMMERSIVE,
+          materialLevel: HDS_MATERIAL_LEVEL_EXQUISITE
+        }
+      },
+      content: {
+        title: {
+          mainTitle: '旧柚Pro',
+          subTitle: this.filterTitle()
+        },
+        menu: this.phoneNavigationMenu(),
+        divider: { showType: DividerShowType.OFF }
+      },
+      avoidLayoutSafeArea: true,
+      enableComponentSafeArea: true
+    })
+    .titleMode(HdsNavigationTitleMode.MINI)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .width('100%')
+    .height('100%')
+    .backgroundColor('#00FFFFFF')
+    .bindToScrollable(this.phoneNavigationScrollers())
+    .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
+      [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
+    .id('library-phone-navigation')
   }
 
   @Builder
@@ -726,40 +884,33 @@ struct Index {
           .id('library-page-background')
       }
       Row() {
-        if (this.breakpoint === 'lg' || this.breakpoint === 'xl') {
+        if (!this.isPhone() && (this.breakpoint === 'lg' || this.breakpoint === 'xl')) {
           this.SideBar()
         }
-        this.Library()
+        if (this.isPhone()) {
+          this.PhoneLibraryNavigation()
+        } else {
+          this.Library()
+        }
       }.width('100%').height('100%')
       if (this.isPhone()) {
         this.PhoneNavigation()
-      }
-      if (this.isPhone() && this.mobileSidebarVisible) {
-        Row() {
-          this.SideBar(true)
-          Column().layoutWeight(1).height('100%').backgroundColor('#55000000')
-            .onClick((): void => { this.mobileSidebarVisible = false; })
-        }.width('100%').height('100%').alignItems(VerticalAlign.Top)
       }
       WineEngineBlockingOverlay()
     }
     .width('100%').height('100%')
     .backgroundColor($r('app.color.page_background'))
+    .onAreaChange((_oldValue: Area, area: Area): void => {
+      this.viewportWidth = area.width as number;
+      this.viewportHeight = area.height as number;
+      BreakpointSystem.updateFromWidth(this.viewportWidth);
+    })
   }
 
   build() {
-    if (this.shouldUsePhoneSwipeGesture()) {
-      Stack() {
-        this.PageSurface()
-      }
-      .width('100%').height('100%')
-      .gesture(PanGesture({ fingers: 1 })
-        .onActionEnd((event: GestureEvent): void => {
-          if (event.offsetX > 64) this.mobileSidebarVisible = true;
-          else if (event.offsetX < -64) this.mobileSidebarVisible = false;
-        }))
-    } else {
+    Stack() {
       this.PageSurface()
     }
+    .width('100%').height('100%')
   }
 }

@@ -12,6 +12,17 @@ import {
 import { AppCatalogService } from '../service/AppCatalogService';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
+import { LengthMetrics } from '@kit.ArkUI';
+import {
+  DividerShowType,
+  HdsNavigation,
+  HdsNavigationMenuContentOptions,
+  HdsNavigationTitleMode,
+  ScrollEffectType
+} from '@kit.UIDesignKit';
+
+const HDS_MATERIAL_TYPE_IMMERSIVE: number = 101;
+const HDS_MATERIAL_LEVEL_EXQUISITE: number = 0;
 
 @Entry
 @Component
@@ -22,6 +33,7 @@ struct AppSettingsPage {
   @State private breakpoint: BreakpointType = 'lg';
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private breakpointCallback: ((value: BreakpointType) => void) | null = null;
+  private appSettingsScroller: Scroller = new Scroller();
 
   private isCompact(): boolean {
     return this.breakpoint === 'xs' || this.breakpoint === 'sm';
@@ -33,6 +45,23 @@ struct AppSettingsPage {
 
   private cardPadding(): number {
     return this.isCompact() ? 12 : 20;
+  }
+
+  private contentTopInset(): number {
+    if (this.breakpoint === 'xs' || this.breakpoint === 'sm') return 8;
+    if (this.breakpoint === 'md') return 10;
+    return 12;
+  }
+
+  private contentSidePadding(): number {
+    if (this.isNarrowPhone()) return 10;
+    if (this.breakpoint === 'sm') return 16;
+    if (this.breakpoint === 'md') return 20;
+    return 28;
+  }
+
+  private contentMaxWidth(): number {
+    return this.breakpoint === 'xl' ? 1040 : 920;
   }
 
   private titleButtonMargin(): number {
@@ -260,64 +289,10 @@ struct AppSettingsPage {
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
-  @Builder
-  private AppSettingsBackButton() {
-    Button({ type: ButtonType.Circle }) {
-      SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(18).fontColor([$r('app.color.text_primary')])
-    }
-    .width(48).height(48).backgroundColor($r('app.color.search_background'))
-    .id('app-settings-back')
-    .onClick(() => router.back())
-  }
-
-  @Builder
-  private AppSettingsTitle(showSubtitle: boolean) {
-    Column({ space: 3 }) {
-      Text(this.app ? this.app.title + ' 设置' : '应用设置').fontSize(this.isCompact() ? 18 : 24).fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.text_primary')).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-      if (showSubtitle) {
-        Text('封面、启动方式、显示模式和专用输入布局').fontSize(11).fontColor($r('app.color.text_secondary'))
-      }
-    }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-  }
-
-  @Builder
-  private SaveAppSettingsButton() {
-    Button('保存').height(48).borderRadius(16).backgroundColor($r('app.color.accent')).fontColor('#FFFFFFFF')
-      .fontSize(this.isNarrowPhone() ? 12 : 14)
-      .id('app-settings-save')
-      .onClick(() => this.save())
-  }
-
-  @Builder
-  private AppSettingsHeader() {
-    if (this.isNarrowPhone() && this.titleButtonInsetVp > 0) {
-      Column({ space: 4 }) {
-        Row({ space: 6 }) {
-          this.AppSettingsBackButton()
-          this.AppSettingsTitle(false)
-        }.width('100%').height(56).padding({ right: this.titleButtonMargin() })
-        Row() {
-          Blank()
-          this.SaveAppSettingsButton()
-        }.width('100%').height(48)
-      }.width('100%').height(108)
-    } else {
-      Row({ space: this.isNarrowPhone() ? 6 : 0 }) {
-        this.AppSettingsBackButton()
-        this.AppSettingsTitle(!this.isCompact())
-        this.SaveAppSettingsButton()
-      }
-      .width('100%').height(this.isCompact() ? 62 : 78)
-      .padding({ right: this.titleButtonMargin() })
-    }
-  }
-
   build() {
-    Column() {
-      this.AppSettingsHeader()
-
-      Scroll() {
+    Stack() {
+      HdsNavigation() {
+        Scroll(this.appSettingsScroller) {
         Column({ space: 18 }) {
           Column({ space: 16 }) {
             Text('卡片与启动').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
@@ -403,11 +378,90 @@ struct AppSettingsPage {
           if (this.app && !this.app.available) {
             Button('删除不可用卡片').height(48).fontColor('#D94848').backgroundColor($r('app.color.card_background')).onClick(() => this.removeUnavailable())
           }
-        }.width('100%').constraintSize({ maxWidth: 920 }).padding({ bottom: this.isCompact() ? 18 : 30 })
-      }.layoutWeight(1).width('100%').scrollBar(BarState.Auto)
+        }
+        .width('100%')
+        .constraintSize({ minHeight: '100%', maxWidth: this.contentMaxWidth() })
+        .padding({
+          left: this.contentSidePadding(), right: this.contentSidePadding(),
+          top: this.contentTopInset(), bottom: this.isCompact() ? 32 : 44
+        })
+        .alignSelf(ItemAlign.Start)
+      }
+      .width('100%').height('100%').scrollBar(BarState.Auto)
+      }
+      .mode(NavigationMode.Stack)
+      .titleBar({
+        padding: { start: LengthMetrics.vp(14), end: LengthMetrics.vp(14 + this.titleButtonMargin()) },
+        style: {
+          scrollEffectOpts: {
+            enableScrollEffect: true,
+            scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR,
+            blurEffectiveStartOffset: LengthMetrics.vp(0),
+            blurEffectiveEndOffset: LengthMetrics.vp(84)
+          },
+          originalStyle: {
+            contentStyle: {
+              titleStyle: {
+                mainTitleColor: $r('app.color.text_primary'),
+                subTitleColor: $r('app.color.text_secondary')
+              },
+              menuStyle: {
+                iconColor: $r('app.color.accent')
+              },
+              backIconStyle: {
+                iconColor: $r('app.color.text_primary')
+              }
+            }
+          },
+          scrollEffectStyle: {
+            contentStyle: {
+              titleStyle: {
+                mainTitleColor: $r('app.color.text_primary'),
+                subTitleColor: $r('app.color.text_secondary')
+              },
+              menuStyle: {
+                iconColor: $r('app.color.accent')
+              },
+              backIconStyle: {
+                iconColor: $r('app.color.text_primary')
+              }
+            }
+          },
+          systemMaterialEffect: {
+            materialType: HDS_MATERIAL_TYPE_IMMERSIVE,
+            materialLevel: HDS_MATERIAL_LEVEL_EXQUISITE
+          }
+        },
+        content: {
+          title: {
+            mainTitle: this.app ? this.app.title + ' 设置' : '应用设置',
+            subTitle: this.isCompact() ? undefined : '封面、启动方式、显示模式和专用输入布局'
+          },
+          menu: {
+            value: [
+              {
+                content: {
+                  icon: $r('sys.symbol.checkmark'),
+                  action: (): void => { this.save(); }
+                }
+              }
+            ],
+            maxCount: 1
+          } as HdsNavigationMenuContentOptions,
+          divider: { showType: DividerShowType.OFF }
+        },
+        avoidLayoutSafeArea: true,
+        enableComponentSafeArea: true
+      })
+      .titleMode(HdsNavigationTitleMode.MINI)
+      .hideToolBar(true)
+      .bindToScrollable([this.appSettingsScroller])
+      .width('100%').height('100%')
+      .backgroundColor('#00FFFFFF')
     }
     .width('100%').height('100%')
-    .padding({ left: this.isCompact() ? 10 : 24, right: this.isCompact() ? 10 : 24, top: this.isCompact() ? 4 : 8 })
     .backgroundColor($r('app.color.page_background'))
+    .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
+      [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
   }
 }

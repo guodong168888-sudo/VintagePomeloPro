@@ -128,7 +128,7 @@ export class AppSessionService {
         // The root event already starts the singleton DesktopAbility. Calling
         // startAbility again here creates a visible PC desktop pop-up on every
         // first launch; only explicitly restore a stopped/background ability.
-        if (!WineWindowManager.getInstance().isDesktopAbilityRunning(currentDesktop.toplevelId)) {
+        if (!WineWindowManager.getInstance().isDesktopAbilityForeground(currentDesktop.toplevelId)) {
           await this.resume(currentDesktop);
         } else {
           // The singleton DesktopAbility is already the visible host for this
@@ -384,12 +384,12 @@ export class AppSessionService {
   private async waitForDesktopRoot(rounds: number): Promise<RuntimeSession | null> {
     const existing = this.sessions.get(DESKTOP_SESSION_ID) ?? null;
     if (existing && existing.toplevelId > 0) {
-      if (!WineWindowManager.getInstance().isDesktopAbilityRunning(existing.toplevelId)) await this.resume(existing);
+      if (!WineWindowManager.getInstance().isDesktopAbilityForeground(existing.toplevelId)) await this.resume(existing);
       return existing;
     }
     let session = this.syncDesktopSessionFromNative();
     if (session && session.toplevelId > 0) {
-      if (!WineWindowManager.getInstance().isDesktopAbilityRunning(session.toplevelId)) await this.resume(session);
+      if (!WineWindowManager.getInstance().isDesktopAbilityForeground(session.toplevelId)) await this.resume(session);
       return session;
     }
     const pending = session;
@@ -399,7 +399,7 @@ export class AppSessionService {
       });
       session = this.syncDesktopSessionFromNative();
       if (session && session.toplevelId > 0) {
-        if (!WineWindowManager.getInstance().isDesktopAbilityRunning(session.toplevelId)) await this.resume(session);
+        if (!WineWindowManager.getInstance().isDesktopAbilityForeground(session.toplevelId)) await this.resume(session);
         return session;
       }
     }

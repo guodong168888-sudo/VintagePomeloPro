@@ -62,6 +62,9 @@ struct InputOverlayPage {
   private twoFingerTapEligible: boolean = false;
   private lastMidX: number = 0;
   private lastMidY: number = 0;
+  private lastDirectTapAt: number = 0;
+  private lastDirectTapX: number = 0;
+  private lastDirectTapY: number = 0;
   private eventGate: InputEventGate = new InputEventGate();
   private readonly TAP_TIMEOUT_MS: number = 450;
   private readonly TAP_SLOP_PX: number = 48;
@@ -89,6 +92,7 @@ struct InputOverlayPage {
         this.directTouches.clear();
         this.twoFinger = false;
         this.twoFingerTapEligible = false;
+        this.resetDirectTapSequence();
         this.resetTouchpadGesture();
         this.touchpadMode = false;
         this.cursorVisible = false;
@@ -177,6 +181,34 @@ struct InputOverlayPage {
     InputDispatcher.getInstance().pointerUp(source, x, y, button);
   }
 
+  private resetDirectTapSequence(): void {
+    this.lastDirectTapAt = 0;
+    this.lastDirectTapX = 0;
+    this.lastDirectTapY = 0;
+  }
+
+  private injectDirectLeftTap(x: number, y: number): void {
+    const now = Date.now();
+    const interval = now - this.lastDirectTapAt;
+    const spatialSlop = Math.max(this.TAP_SLOP_PX, vp2px(24));
+    const nearPrevious = Math.abs(x - this.lastDirectTapX) <= spatialSlop &&
+      Math.abs(y - this.lastDirectTapY) <= spatialSlop;
+    const isSecondTap = this.lastDirectTapAt > 0 && interval <= 520 && nearPrevious;
+    // Finger taps rarely land on the exact same pixel. Anchor the second
+    // click to the first tap so Wine/Windows can recognise the pair using its
+    // normal double-click state machine without changing single-click delay.
+    this.injectClick('direct-rdp-left',
+      isSecondTap ? this.lastDirectTapX : x,
+      isSecondTap ? this.lastDirectTapY : y, 272);
+    if (isSecondTap) {
+      this.resetDirectTapSequence();
+    } else {
+      this.lastDirectTapAt = now;
+      this.lastDirectTapX = x;
+      this.lastDirectTapY = y;
+    }
+  }
+
   private handleDirectTouch(event: TouchEvent): void {
     if (!this.eventGate.shouldHandleTouch(event.source, event.sourceTool)) return;
     event.stopPropagation();
@@ -190,6 +222,7 @@ struct InputOverlayPage {
           x, y, startX: x, startY: y, moved: false, buttonDown: false, consumed: false, startTime: Date.now()
         });
         if (this.directTouches.size === 2) {
+          this.resetDirectTapSequence();
           this.twoFinger = true;
           this.twoFingerTapEligible = true;
           this.lastMidX = this.midpointX();
@@ -254,10 +287,12 @@ struct InputOverlayPage {
             this.twoFingerTapEligible = false;
           }
         } else if (previous.buttonDown) {
+          this.resetDirectTapSequence();
           InputDispatcher.getInstance().pointerUp(source, x, y, 272);
         } else if (event.type === TouchType.Up && !previous.moved && elapsed < this.TAP_TIMEOUT_MS) {
-          this.injectClick('direct-rdp-left', x, y, 272);
+          this.injectDirectLeftTap(x, y);
         } else {
+          this.resetDirectTapSequence();
           InputDispatcher.getInstance().releaseSource(source);
         }
       }
@@ -313,6 +348,7 @@ struct InputOverlayPage {
     this.directTouches.clear();
     this.twoFinger = false;
     this.twoFingerTapEligible = false;
+    this.resetDirectTapSequence();
     this.resetTouchpadGesture();
     this.touchpadMode = enabled;
     if (enabled) {
