@@ -24,9 +24,17 @@ import { WineWindowManager } from '../service/WineWindowManager';
 import { GamepadManager } from '../service/GamepadManager';
 import { InputProfileService } from '../service/InputProfileService';
 import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
+import { DividerMode, HdsTabs, HdsTabsController } from '@kit.UIDesignKit';
 
 type CatalogFilter = 'builtin' | 'windows' | 'running' | 'favorite';
-type BottomNavTarget = CatalogFilter | 'menu' | 'settings';
+
+const HDS_MATERIAL_TYPE_IMMERSIVE: number = 101;
+const HDS_MATERIAL_LEVEL_EXQUISITE: number = 0;
+const PHONE_NAV_BUILTIN: number = 0;
+const PHONE_NAV_WINDOWS: number = 1;
+const PHONE_NAV_FAVORITE: number = 2;
+const PHONE_NAV_RUNNING: number = 3;
+const PHONE_NAV_MENU: number = 4;
 
 @Entry
 @Component
@@ -45,7 +53,9 @@ struct Index {
   @State private engineMessage: string = 'Wine 引擎未启动';
   @State private scanning: boolean = false;
   @State private runningAppIds: Set<string> = new Set<string>();
+  @State private phoneNavIndex: number = PHONE_NAV_BUILTIN;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+  private phoneNavController: HdsTabsController = new HdsTabsController();
   private breakpointCallback: ((value: BreakpointType) => void) | null = null;
   private engineCallback: ((state: EngineState, message: string) => void) | null = null;
   private settingsCallback: ThemeSettingsListener | null = null;
@@ -179,10 +189,32 @@ struct Index {
     this.visibleApps = this.filterApps(value, this.filter);
   }
 
-  private selectFilter(value: CatalogFilter): void {
+  private phoneNavIndexForFilter(value: CatalogFilter): number {
+    if (value === 'windows') return PHONE_NAV_WINDOWS;
+    if (value === 'favorite') return PHONE_NAV_FAVORITE;
+    if (value === 'running') return PHONE_NAV_RUNNING;
+    return PHONE_NAV_BUILTIN;
+  }
+
+  private phoneFilterForIndex(index: number): CatalogFilter | null {
+    if (index === PHONE_NAV_BUILTIN) return 'builtin';
+    if (index === PHONE_NAV_WINDOWS) return 'windows';
+    if (index === PHONE_NAV_FAVORITE) return 'favorite';
+    if (index === PHONE_NAV_RUNNING) return 'running';
+    return null;
+  }
+
+  private selectFilter(value: CatalogFilter, syncPhoneNavigation: boolean = true): void {
     this.filter = value;
     this.visibleApps = this.filterApps(this.searchQuery, value);
     this.mobileSidebarVisible = false;
+    if (syncPhoneNavigation && this.isPhone()) {
+      const index = this.phoneNavIndexForFilter(value);
+      if (index !== this.phoneNavIndex) {
+        this.phoneNavIndex = index;
+        this.phoneNavController.changeIndex(index);
+      }
+    }
   }
 
   private filterTitle(): string {
@@ -236,12 +268,6 @@ struct Index {
       return;
     }
     if (this.filter === 'windows') this.rescan();
-  }
-
-  private isBottomNavActive(target: BottomNavTarget): boolean {
-    if (target === 'menu') return this.mobileSidebarVisible;
-    if (target === 'settings') return false;
-    return this.filter === target;
   }
 
   private gridColumns(): string {
@@ -615,78 +641,76 @@ struct Index {
   }
 
   @Builder
-  private BottomItem(label: string, icon: Resource, target: BottomNavTarget, onClick: () => void) {
-    Button() {
-      Stack({ alignContent: Alignment.Center }) {
-        if (this.isBottomNavActive(target)) {
-          Circle()
-            .width(this.isNarrowPhone() ? 31 : 35)
-            .height(this.isNarrowPhone() ? 31 : 35)
-            .fill($r('app.color.bottom_nav_glow'))
-            .shadow({ radius: 10, color: $r('app.color.bottom_nav_glow'), offsetX: 0, offsetY: 2 })
-        }
-        Column({ space: 2 }) {
-          SymbolGlyph(icon)
-            .fontSize(this.isNarrowPhone() ? 17 : 19)
-            .fontColor([this.isBottomNavActive(target) ? $r('app.color.accent') : $r('app.color.text_secondary')])
-          Text(label)
-            .fontSize(this.isNarrowPhone() ? 9 : 10)
-            .fontWeight(this.isBottomNavActive(target) ? FontWeight.Medium : FontWeight.Normal)
-            .maxLines(1)
-            .fontColor(this.isBottomNavActive(target) ? $r('app.color.text_primary') : $r('app.color.text_secondary'))
-        }
-      }
+  private PhoneNavigationTab(label: string, icon: Resource, index: number) {
+    Column({ space: 3 }) {
+      SymbolGlyph(icon)
+        .fontSize(this.isNarrowPhone() ? 20 : 22)
+        .fontColor([this.phoneNavIndex === index ? $r('app.color.accent') : $r('app.color.text_secondary')])
+      Text(label)
+        .fontSize(this.isNarrowPhone() ? 9 : 10)
+        .fontWeight(this.phoneNavIndex === index ? FontWeight.Medium : FontWeight.Normal)
+        .fontColor(this.phoneNavIndex === index ? $r('app.color.accent') : $r('app.color.text_secondary'))
+        .maxLines(1)
     }
-    .layoutWeight(1)
-    .height(this.isNarrowPhone() ? 48 : 52)
-    .borderRadius(this.isNarrowPhone() ? 18 : 22)
-    .backgroundColor(this.isBottomNavActive(target) ? $r('app.color.bottom_nav_active_background') : '#00000000')
-    .border({
-      width: this.isBottomNavActive(target) ? 1 : 0,
-      color: this.isBottomNavActive(target) ? $r('app.color.bottom_nav_active_border') : '#00000000'
-    })
-    .stateEffect(true)
-    .onClick(onClick)
+    .width('100%')
+    .height(this.isNarrowPhone() ? 52 : 56)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
   }
 
   @Builder
-  private BottomBar() {
-    Stack({ alignContent: Alignment.Center }) {
-      Row() {
-        this.BottomItem('内建', $r('sys.symbol.house_fill'), 'builtin', () => this.selectFilter('builtin'))
-        this.BottomItem('收藏', $r('sys.symbol.star'), 'favorite', () => this.selectFilter('favorite'))
-        this.BottomItem('运行中', $r('sys.symbol.play_fill'), 'running', () => this.selectFilter('running'))
-        this.BottomItem('菜单', $r('sys.symbol.list_bullet'), 'menu', () => this.mobileSidebarVisible = true)
-        this.BottomItem('设置', $r('sys.symbol.gearshape'), 'settings', () => router.pushUrl({ url: 'pages/SystemSettings' }))
-      }
-      .width('100%')
-      .height('100%')
-      .padding({ left: 4, right: 4, top: 4, bottom: 4 })
+  private PhoneNavigationContents() {
+    TabContent() { Column() }
+      .tabBar(this.PhoneNavigationTab('内建', $r('sys.symbol.house_fill'), PHONE_NAV_BUILTIN))
+    TabContent() { Column() }
+      .tabBar(this.PhoneNavigationTab('Windows', $r('sys.symbol.folder'), PHONE_NAV_WINDOWS))
+    TabContent() { Column() }
+      .tabBar(this.PhoneNavigationTab('收藏', $r('sys.symbol.star'), PHONE_NAV_FAVORITE))
+    TabContent() { Column() }
+      .tabBar(this.PhoneNavigationTab('运行中', $r('sys.symbol.play_fill'), PHONE_NAV_RUNNING))
+    TabContent() { Column() }
+      .tabBar(this.PhoneNavigationTab('菜单', $r('sys.symbol.list_bullet'), PHONE_NAV_MENU))
+  }
 
-      // A narrow highlight gives the floating material the same illuminated
-      // edge used by VintagePomelo's API 23 immersive HdsTabs surface.
-      Row()
-        .width('84%')
-        .height(1)
-        .linearGradient({
-          angle: 90,
-          colors: [['#00FFFFFF', 0], [$r('app.color.bottom_nav_highlight'), 0.5], ['#00FFFFFF', 1]]
-        })
-        .position({ x: '8%', y: 1 })
-        .hitTestBehavior(HitTestMode.None)
+  @Builder
+  private PhoneNavigation() {
+    HdsTabs({
+      barPosition: BarPosition.End,
+      index: this.phoneNavIndex,
+      controller: this.phoneNavController
+    }) {
+      this.PhoneNavigationContents()
     }
-    .height(this.isNarrowPhone() ? 56 : 64)
-    .width('auto')
-    .margin({
-      left: this.isNarrowPhone() ? 8 : 16,
-      right: this.isNarrowPhone() ? 8 : 16,
-      bottom: this.isNarrowPhone() ? 10 : 16
+    .vertical(false)
+    .scrollable(false)
+    .barOverlap(true)
+    .divider({ mode: DividerMode.FOLLOW_SCROLL })
+    .barBackgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+    .barFloatingStyle({
+      barBottomMargin: this.isNarrowPhone() ? 10 : 16,
+      barSideMargin: this.isNarrowPhone() ? 8 : 16,
+      gradientMask: { maskColor: $r('app.color.page_background') },
+      systemMaterialEffect: {
+        materialType: HDS_MATERIAL_TYPE_IMMERSIVE,
+        materialLevel: HDS_MATERIAL_LEVEL_EXQUISITE
+      },
+      adaptToHandedness: false,
+      thermoCtrl: true
     })
-    .borderRadius(this.isNarrowPhone() ? 28 : 32)
-    .backgroundColor($r('app.color.bottom_nav_background'))
-    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
-    .border({ width: 1, color: $r('app.color.bottom_nav_border') })
-    .shadow({ radius: 22, color: $r('app.color.bottom_nav_shadow'), offsetX: 0, offsetY: 8 })
+    .onContentWillChange((_currentIndex: number, comingIndex: number): boolean => {
+      return comingIndex !== PHONE_NAV_MENU;
+    })
+    .onTabBarClick((index: number): void => {
+      if (index === PHONE_NAV_MENU) this.mobileSidebarVisible = true;
+    })
+    .onChange((index: number): void => {
+      const target = this.phoneFilterForIndex(index);
+      if (target === null) return;
+      this.phoneNavIndex = index;
+      this.selectFilter(target, false);
+    })
+    .width('100%')
+    .height(this.isNarrowPhone() ? 86 : 96)
     .id('library-bottom-bar')
   }
 
@@ -708,7 +732,7 @@ struct Index {
         this.Library()
       }.width('100%').height('100%')
       if (this.isPhone()) {
-        this.BottomBar()
+        this.PhoneNavigation()
       }
       if (this.isPhone() && this.mobileSidebarVisible) {
         Row() {

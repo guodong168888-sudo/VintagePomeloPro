@@ -41,34 +41,6 @@
       "value": "#FF303B58"
     },
     {
-      "name": "bottom_nav_background",
-      "value": "#D9282D35"
-    },
-    {
-      "name": "bottom_nav_border",
-      "value": "#4CFFFFFF"
-    },
-    {
-      "name": "bottom_nav_highlight",
-      "value": "#78FFFFFF"
-    },
-    {
-      "name": "bottom_nav_shadow",
-      "value": "#66000000"
-    },
-    {
-      "name": "bottom_nav_active_background",
-      "value": "#D9333E58"
-    },
-    {
-      "name": "bottom_nav_active_border",
-      "value": "#3FFFFFFF"
-    },
-    {
-      "name": "bottom_nav_glow",
-      "value": "#3882A9FF"
-    },
-    {
       "name": "keyboard_background",
       "value": "#FF262A31"
     },
