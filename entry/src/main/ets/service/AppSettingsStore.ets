@@ -81,13 +81,18 @@ export class AppSettingsStore {
   }
 
   private detectManagedWineWindowsHost(): boolean {
-    const model = (deviceInfo.productModel ?? '').toLowerCase();
-    return deviceInfo.deviceType === '2in1' || model.indexOf('emulator') >= 0;
+    // Device model is commonly just "emulator" for both tablet and PC HVDs.
+    // Window topology must follow the declared device class so the tablet
+    // emulator keeps the composed Wine desktop while 2-in-1/PC stays multiton.
+    return deviceInfo.deviceType === '2in1' || deviceInfo.deviceType === 'pc';
   }
 
   /** PC/2-in-1 exposes every Wine toplevel through a multiton ArkUI window. */
   usesManagedWineWindows(): boolean {
-    return this.managedWineWindowsHost;
+    // WineWindowManager is created by EntryAbility before the settings store
+    // finishes its asynchronous preference load. Detect the host on demand so
+    // the first native callback never observes the temporary tablet default.
+    return this.managedWineWindowsHost || this.detectManagedWineWindowsHost();
   }
 
   private loadGlobal(): void {

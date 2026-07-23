@@ -5,6 +5,7 @@ import testNapi from 'libentry.so';
 import { WinePresentationMode } from '../model/AppModels';
 import { PopupWindowManager } from './PopupWindowManager';
 import { ArgbWindowManager } from './ArgbWindowManager';
+import { AppSettingsStore } from './AppSettingsStore';
 
 const DOMAIN = 0x0000;
 const TAG = 'WineWM';
@@ -111,6 +112,13 @@ export class WineWindowManager {
     hilog.info(DOMAIN, TAG, '[MW] init: mainWindow=%{public}s ctx=%{public}s',
       this.mainWindow ? 'ok' : 'NULL', this.uiAbilityContext ? 'ok' : 'NULL');
 
+    // EntryAbility owns the window stage and reaches this point before the
+    // asynchronous settings load. Resolve the host policy synchronously so a
+    // PC never registers callbacks using the temporary desktop default.
+    if (AppSettingsStore.getInstance().usesManagedWineWindows()) {
+      this.presentationMode = WinePresentationMode.MANAGED_WINDOWS;
+      this.isDesktopMode = false;
+    }
     testNapi.setDesktopMode(this.isDesktopMode);
     hilog.info(DOMAIN, TAG, '[MW] configured presentation mode=%{public}s', this.presentationMode);
 
@@ -373,10 +381,15 @@ export class WineWindowManager {
           if (this.sessionAssociationCallback) this.sessionAssociationCallback(DESKTOP_SESSION_ID, 0, id);
           this.desktopRootId = id;
           this.startDesktopAbility(id);
-        } else if (this.singleAppRootId !== id) {
+        } else if (this.presentationMode === WinePresentationMode.SINGLE_APP && this.singleAppRootId !== id) {
           hilog.info(DOMAIN, TAG, '[MW] desktop_root #%{public}d -> start SingleAppAbility', id);
           this.singleAppRootId = id;
           this.startSingleAppAbility(id, data);
+        } else {
+          // A stale explorer root may arrive while changing from an older PC
+          // desktop session. Managed-window hosts expose only actual program
+          // toplevels and must never promote that root to an ArkUI Ability.
+          hilog.warn(DOMAIN, TAG, '[MW] suppress desktop_root #%{public}d in managed-window mode', id);
         }
         break;
       case 'destroyed':
@@ -762,6 +775,10 @@ export class WineWindowManager {
 
   // Desktop 模式: 打开 DesktopAbility
   private startDesktopAbility(rootId: number): void {
+    if (AppSettingsStore.getInstance().usesManagedWineWindows()) {
+      hilog.warn(DOMAIN, TAG, '[MW] suppress DesktopAbility #%{public}d on managed-window host', rootId);
+      return;
+    }
     // 同一个 explorer root 可能同时收到 created/promote 两次事件。只让
     // 第一个事件唤起 Ability，避免 PC 上每次启动都弹出重复桌面窗口。
     if (this.desktopAbilityRunning && this.desktopAbilityRootId === rootId) {

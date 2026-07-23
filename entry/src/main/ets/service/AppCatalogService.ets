@@ -211,6 +211,11 @@ export class AppCatalogService {
     const result: AppDescriptor[] = [];
     catalog.apps.forEach((item: BuiltinCatalogItem) => {
       const kind = this.parseLaunchKind(item.launchKind);
+      // PC/2-in-1 hosts expose each Wine program as its own ArkUI window.
+      // Hiding the tablet-only shell card prevents an explicit desktop launch
+      // while keeping File Explorer and every other system tool available.
+      if (kind === LaunchKind.WINE_DESKTOP &&
+        AppSettingsStore.getInstance().usesManagedWineWindows()) return;
       // A built-in manifest may request single-app explicitly. Otherwise it
       // follows the global desktop default. PC/2-in-1 hosts present that mode
       // as independent managed Wine windows rather than a singleton window.

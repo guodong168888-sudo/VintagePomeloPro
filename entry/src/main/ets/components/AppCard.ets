@@ -23,7 +23,7 @@ export struct AppCard {
 
   private coverHeight(): number {
     if (this.viewMode === ViewMode.COMPACT) return 104;
-    if (this.narrowPhone) return this.viewMode === ViewMode.LARGE ? 156 : 140;
+    if (this.narrowPhone) return this.viewMode === ViewMode.LARGE ? 148 : 120;
     return this.viewMode === ViewMode.LARGE ? 246 : 220;
   }
 
@@ -119,27 +119,28 @@ export struct AppCard {
   private DownloadFallback(height: number) {
     Stack({ alignContent: Alignment.Center }) {
       Circle()
-        .width(this.viewMode === ViewMode.COMPACT ? 96 : 190)
-        .height(this.viewMode === ViewMode.COMPACT ? 96 : 190)
+        .width(this.viewMode === ViewMode.COMPACT ? 96 : (this.narrowPhone ? 104 : 190))
+        .height(this.viewMode === ViewMode.COMPACT ? 96 : (this.narrowPhone ? 104 : 190))
         .fill('#0FFFFFFF')
-        .position({ x: this.viewMode === ViewMode.COMPACT ? 58 : '62%', y: this.viewMode === ViewMode.COMPACT ? -34 : -62 })
+        .position({ x: this.viewMode === ViewMode.COMPACT ? 58 : '62%',
+          y: this.viewMode === ViewMode.COMPACT ? -34 : (this.narrowPhone ? -26 : -62) })
       Circle()
-        .width(this.viewMode === ViewMode.COMPACT ? 72 : 150)
-        .height(this.viewMode === ViewMode.COMPACT ? 72 : 150)
+        .width(this.viewMode === ViewMode.COMPACT ? 72 : (this.narrowPhone ? 78 : 150))
+        .height(this.viewMode === ViewMode.COMPACT ? 72 : (this.narrowPhone ? 78 : 150))
         .fill('#0AFFFFFF')
         .position({ x: this.viewMode === ViewMode.COMPACT ? -24 : -38, y: this.viewMode === ViewMode.COMPACT ? 60 : '58%' })
       Column({ space: this.viewMode === ViewMode.COMPACT ? 4 : 8 }) {
         Stack({ alignContent: Alignment.Center }) {
           Text(this.fallbackMonogram())
-            .fontSize(this.viewMode === ViewMode.COMPACT ? 31 : 54)
+            .fontSize(this.viewMode === ViewMode.COMPACT ? 31 : (this.narrowPhone ? 34 : 54))
             .fontWeight(FontWeight.Bold)
             .fontColor('#F2FFFFFF')
         }
-        .width(this.viewMode === ViewMode.COMPACT ? 54 : 92)
-        .height(this.viewMode === ViewMode.COMPACT ? 54 : 92)
+        .width(this.viewMode === ViewMode.COMPACT ? 54 : (this.narrowPhone ? 58 : 92))
+        .height(this.viewMode === ViewMode.COMPACT ? 54 : (this.narrowPhone ? 58 : 92))
         .backgroundColor('#24FFFFFF')
         .border({ width: 1.5, color: '#38FFFFFF' })
-        .borderRadius(this.viewMode === ViewMode.COMPACT ? 16 : 26)
+        .borderRadius(this.viewMode === ViewMode.COMPACT ? 16 : (this.narrowPhone ? 18 : 26))
         .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 5 })
         if (this.viewMode !== ViewMode.COMPACT) {
           Text('EXE')

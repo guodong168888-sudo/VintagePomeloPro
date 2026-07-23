@@ -178,11 +178,11 @@ struct Index {
   }
 
   private filterTitle(): string {
-    if (this.filter === 'builtin') return 'Wine 桌面';
+    if (this.filter === 'builtin') return '内建应用';
     if (this.filter === 'windows') return 'Windows 程序';
     if (this.filter === 'running') return '运行中的应用';
     if (this.filter === 'favorite') return '收藏的应用';
-    return 'Wine 桌面';
+    return '内建应用';
   }
 
   private filterDescription(): string {
@@ -231,7 +231,10 @@ struct Index {
   }
 
   private gridColumns(): string {
-    if (this.settings.viewMode === ViewMode.COMPACT || this.isPhone()) return '1fr';
+    if (this.settings.viewMode === ViewMode.COMPACT) return '1fr';
+    // VintagePomelo keeps cover cards in two columns on phones. A single
+    // flexible column makes one icon fill almost the entire compact window.
+    if (this.isPhone()) return '1fr 1fr';
     if (this.breakpoint === 'md') return '1fr 1fr';
     if (this.breakpoint === 'xl') return this.settings.viewMode === ViewMode.LARGE ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr 1fr 1fr';
     return this.settings.viewMode === ViewMode.LARGE ? '1fr 1fr' : '1fr 1fr 1fr';
@@ -324,6 +327,22 @@ struct Index {
     this.settings = AppSettingsStore.getInstance().getGlobalSettings();
   }
 
+  /** Phone header follows VintagePomelo: one menu entry, not three large buttons. */
+  private showViewModeMenu(): void {
+    promptAction.showActionMenu({
+      title: '卡片视图',
+      buttons: [
+        { text: (this.settings.viewMode === ViewMode.GRID ? '✓ ' : '') + '网格封面', color: $r('sys.color.ohos_id_color_text_primary') },
+        { text: (this.settings.viewMode === ViewMode.COMPACT ? '✓ ' : '') + '紧凑列表', color: $r('sys.color.ohos_id_color_text_primary') },
+        { text: (this.settings.viewMode === ViewMode.LARGE ? '✓ ' : '') + '大封面', color: $r('sys.color.ohos_id_color_text_primary') }
+      ]
+    }).then((result) => {
+      if (result.index === 0) this.setViewMode(ViewMode.GRID);
+      else if (result.index === 1) this.setViewMode(ViewMode.COMPACT);
+      else if (result.index === 2) this.setViewMode(ViewMode.LARGE);
+    }).catch(() => {});
+  }
+
   @Builder
   private NavItem(label: string, value: CatalogFilter, icon: Resource, mobile: boolean = false) {
     Row({ space: 12 }) {
@@ -413,23 +432,24 @@ struct Index {
   @Builder
   private Header() {
     Column({ space: 12 }) {
-      if (this.isNarrowPhone()) {
-        Text(this.filterTitle())
-          .fontSize(19).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary')).width('100%')
-        Row({ space: 8 }) {
-          Button() { SymbolGlyph($r('sys.symbol.square_grid_2x2')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
-            .layoutWeight(1).height(48).borderRadius(16)
-            .backgroundColor(this.settings.viewMode === ViewMode.GRID ? $r('app.color.selected_background') : $r('app.color.search_background'))
-            .onClick(() => this.setViewMode(ViewMode.GRID))
-          Button() { SymbolGlyph($r('sys.symbol.list_bullet')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
-            .layoutWeight(1).height(48).borderRadius(16)
-            .backgroundColor(this.settings.viewMode === ViewMode.COMPACT ? $r('app.color.selected_background') : $r('app.color.search_background'))
-            .onClick(() => this.setViewMode(ViewMode.COMPACT))
-          Button() { SymbolGlyph($r('sys.symbol.rectangle_grid_1x2')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
-            .layoutWeight(1).height(48).borderRadius(16)
-            .backgroundColor(this.settings.viewMode === ViewMode.LARGE ? $r('app.color.selected_background') : $r('app.color.search_background'))
-            .onClick(() => this.setViewMode(ViewMode.LARGE))
-        }.width('100%').id('library-xs-view-modes')
+      if (this.isPhone()) {
+        Row() {
+          Column({ space: 2 }) {
+            Text(this.filterTitle())
+              .fontSize(this.isNarrowPhone() ? 19 : 22).fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.text_primary'))
+            Text(this.filterDescription()).fontSize(11).fontColor($r('app.color.text_secondary'))
+              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+          Button({ type: ButtonType.Circle }) {
+            SymbolGlyph($r('sys.symbol.rectangle_grid_1x2')).fontSize(17)
+              .fontColor([$r('app.color.text_primary')])
+          }
+          .width(48).height(48)
+          .backgroundColor($r('app.color.search_background'))
+          .id('library-phone-view-menu')
+          .onClick((): void => this.showViewModeMenu())
+        }.width('100%').height(48)
       } else {
         Row() {
           Column({ space: 3 }) {
@@ -467,7 +487,7 @@ struct Index {
     // The wide layout has no second search row.  Keep its header deliberately
     // compact so that the first application row starts in the visible area.
     .height((this.breakpoint === 'lg' || this.breakpoint === 'xl') ? 64 :
-      (this.breakpoint === 'md' ? 172 : (this.isNarrowPhone() ? 148 : 112)))
+      (this.breakpoint === 'md' ? 172 : 112))
     .justifyContent(FlexAlign.Start)
   }
 
@@ -500,7 +520,7 @@ struct Index {
             running: this.runningAppIds.has(app.id),
             useGlassEffect: this.settings.useGlassEffect,
             resolvedDisplayMode: AppSessionService.getInstance().resolveMode(app, this.settings),
-            narrowPhone: this.isNarrowPhone(),
+            narrowPhone: this.isPhone(),
             onLaunch: (target: AppDescriptor): void => { this.launch(target); },
             onSettings: (target: AppDescriptor): void => { this.openAppSettings(target); },
             onLongPress: (target: AppDescriptor): void => { this.showAppLongPressMenu(target); }
@@ -608,11 +628,11 @@ struct Index {
       top: this.isNarrowPhone() ? 4 : 8, bottom: this.isNarrowPhone() ? 8 : 12 })
     .backgroundColor($r('app.color.card_glass_background'))
     .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-    .align(Alignment.Bottom)
+    .id('library-bottom-bar')
   }
 
   build() {
-    Stack() {
+    Stack({ alignContent: Alignment.Bottom }) {
       if (this.settings.usePageBackground && this.settings.pageBackgroundUri.length > 0) {
         Image(this.pageBackgroundSource())
           .width('100%').height('100%')

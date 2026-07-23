@@ -62,18 +62,8 @@ export class AppSessionService {
   }
 
   resolvePresentationMode(app: AppDescriptor, settings: GlobalSettings): WinePresentationMode {
-    const requested = resolveWinePresentationMode(app.launchTarget.kind, this.resolveMode(app, settings),
+    return resolveWinePresentationMode(app.launchTarget.kind, this.resolveMode(app, settings),
       AppSettingsStore.getInstance().usesManagedWineWindows());
-    // A full Wine desktop is already a multi-program session.  On a PC the
-    // cold-start topology is MANAGED_WINDOWS, but once the desktop shell is
-    // active, ordinary programs must stay in that same desktop session rather
-    // than triggering a mode-switch dialog or tearing down explorer.exe.
-    if (requested === WinePresentationMode.MANAGED_WINDOWS &&
-      WineEngineService.getInstance().isReady() &&
-      WineEngineService.getInstance().getPresentationMode() === WinePresentationMode.DESKTOP) {
-      return WinePresentationMode.DESKTOP;
-    }
-    return requested;
   }
 
   hasModeConflict(app: AppDescriptor, settings: GlobalSettings): boolean {
@@ -112,6 +102,11 @@ export class AppSessionService {
 
   async launch(app: AppDescriptor, settings: GlobalSettings, homeDirectory: string): Promise<RuntimeSession | null> {
     if (!app.available) return null;
+    // PC/2-in-1 uses one Harmony window per Wine toplevel. The explicit
+    // explorer desktop target is tablet-only and must not create a blue shell
+    // window (or a hidden desktop process) on a managed-window host.
+    if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP &&
+      AppSettingsStore.getInstance().usesManagedWineWindows()) return null;
     if ((app.launchTarget.kind === LaunchKind.WINE_EXE ||
       app.launchTarget.kind === LaunchKind.WINE_SYSTEM ||
       app.launchTarget.kind === LaunchKind.WINE_DESKTOP) &&
