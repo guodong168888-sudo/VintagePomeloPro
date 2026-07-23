@@ -2,6 +2,7 @@ import { AbilityConstant, UIAbility, Want, bundleManager } from '@kit.AbilityKit
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { display, window } from '@kit.ArkUI';
 import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
+import deviceInfo from '@ohos.deviceInfo';
 import { WineWindowManager } from '../service/WineWindowManager';
 
 const DOMAIN = 0x0000;
@@ -81,6 +82,18 @@ export default class EntryAbility extends UIAbility {
       if (mainWin) {
         this.mainWindow = mainWin;
         mainWin.setWindowDecorVisible(false);
+        if (this.isPcWindowHost()) {
+          // A 2-in-1 keeps the system three-button area even when the visual
+          // title decoration is hidden. Re-enable that area's native drag and
+          // double-click handling so the borderless library window still
+          // behaves like a normal PC window.
+          try {
+            mainWin.setWindowDecorHeight(48);
+            mainWin.setWindowTitleMoveEnabled(true);
+          } catch (error) {
+            hilog.warn(DOMAIN, 'EntryAbility', 'PC title drag unavailable: %{public}s', JSON.stringify(error));
+          }
+        }
         // The gesture navigation indicator otherwise reserves a light strip
         // below every routed page. Gesture navigation remains available.
         mainWin.setSpecificSystemBarEnabled('navigationIndicator', false).catch(() => {});
@@ -88,6 +101,10 @@ export default class EntryAbility extends UIAbility {
       }
       hilog.info(DOMAIN, 'testTag', 'Succeeded in loading the content.');
     });
+  }
+
+  private isPcWindowHost(): boolean {
+    return deviceInfo.deviceType === '2in1' || deviceInfo.deviceType === 'pc';
   }
 
   onWindowStageDestroy(): void {

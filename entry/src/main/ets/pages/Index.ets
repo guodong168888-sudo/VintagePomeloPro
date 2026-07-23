@@ -26,6 +26,7 @@ import { InputProfileService } from '../service/InputProfileService';
 import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
 
 type CatalogFilter = 'builtin' | 'windows' | 'running' | 'favorite';
+type BottomNavTarget = CatalogFilter | 'menu' | 'settings';
 
 @Entry
 @Component
@@ -56,6 +57,13 @@ struct Index {
 
   private isNarrowPhone(): boolean {
     return this.breakpoint === 'xs';
+  }
+
+  private shouldUsePhoneSwipeGesture(): boolean {
+    // A narrow 2-in-1 window uses the phone visual layout, but it must keep
+    // native title dragging. The full-page swipe recognizer is only useful on
+    // touch-first devices where it opens/closes the mobile side sheet.
+    return this.isPhone() && !AppSettingsStore.getInstance().usesManagedWineWindows();
   }
 
   private contentPadding(): number {
@@ -228,6 +236,12 @@ struct Index {
       return;
     }
     if (this.filter === 'windows') this.rescan();
+  }
+
+  private isBottomNavActive(target: BottomNavTarget): boolean {
+    if (target === 'menu') return this.mobileSidebarVisible;
+    if (target === 'settings') return false;
+    return this.filter === target;
   }
 
   private gridColumns(): string {
@@ -601,37 +615,83 @@ struct Index {
   }
 
   @Builder
-  private BottomItem(label: string, icon: Resource, active: boolean, onClick: () => void) {
+  private BottomItem(label: string, icon: Resource, target: BottomNavTarget, onClick: () => void) {
     Button() {
-      Column({ space: 3 }) {
-        SymbolGlyph(icon).fontSize(this.isNarrowPhone() ? 16 : 18).fontColor([active ? $r('app.color.accent') : $r('app.color.text_secondary')])
-        Text(label).fontSize(this.isNarrowPhone() ? 9 : 10).maxLines(1)
-          .fontColor(active ? $r('app.color.text_primary') : $r('app.color.text_secondary'))
+      Stack({ alignContent: Alignment.Center }) {
+        if (this.isBottomNavActive(target)) {
+          Circle()
+            .width(this.isNarrowPhone() ? 31 : 35)
+            .height(this.isNarrowPhone() ? 31 : 35)
+            .fill($r('app.color.bottom_nav_glow'))
+            .shadow({ radius: 10, color: $r('app.color.bottom_nav_glow'), offsetX: 0, offsetY: 2 })
+        }
+        Column({ space: 2 }) {
+          SymbolGlyph(icon)
+            .fontSize(this.isNarrowPhone() ? 17 : 19)
+            .fontColor([this.isBottomNavActive(target) ? $r('app.color.accent') : $r('app.color.text_secondary')])
+          Text(label)
+            .fontSize(this.isNarrowPhone() ? 9 : 10)
+            .fontWeight(this.isBottomNavActive(target) ? FontWeight.Medium : FontWeight.Normal)
+            .maxLines(1)
+            .fontColor(this.isBottomNavActive(target) ? $r('app.color.text_primary') : $r('app.color.text_secondary'))
+        }
       }
     }
-    .layoutWeight(1).height(this.isNarrowPhone() ? 48 : 56).borderRadius(this.isNarrowPhone() ? 12 : 16)
-    .backgroundColor(active ? $r('app.color.selected_background') : '#00000000')
+    .layoutWeight(1)
+    .height(this.isNarrowPhone() ? 48 : 52)
+    .borderRadius(this.isNarrowPhone() ? 18 : 22)
+    .backgroundColor(this.isBottomNavActive(target) ? $r('app.color.bottom_nav_active_background') : '#00000000')
+    .border({
+      width: this.isBottomNavActive(target) ? 1 : 0,
+      color: this.isBottomNavActive(target) ? $r('app.color.bottom_nav_active_border') : '#00000000'
+    })
+    .stateEffect(true)
     .onClick(onClick)
   }
 
   @Builder
   private BottomBar() {
-    Row() {
-      this.BottomItem('内建', $r('sys.symbol.house_fill'), this.filter === 'builtin', () => this.selectFilter('builtin'))
-      this.BottomItem('收藏', $r('sys.symbol.star'), this.filter === 'favorite', () => this.selectFilter('favorite'))
-      this.BottomItem('运行中', $r('sys.symbol.play_fill'), this.filter === 'running', () => this.selectFilter('running'))
-      this.BottomItem('菜单', $r('sys.symbol.list_bullet'), this.mobileSidebarVisible, () => this.mobileSidebarVisible = true)
-      this.BottomItem('设置', $r('sys.symbol.gearshape'), false, () => router.pushUrl({ url: 'pages/SystemSettings' }))
+    Stack({ alignContent: Alignment.Center }) {
+      Row() {
+        this.BottomItem('内建', $r('sys.symbol.house_fill'), 'builtin', () => this.selectFilter('builtin'))
+        this.BottomItem('收藏', $r('sys.symbol.star'), 'favorite', () => this.selectFilter('favorite'))
+        this.BottomItem('运行中', $r('sys.symbol.play_fill'), 'running', () => this.selectFilter('running'))
+        this.BottomItem('菜单', $r('sys.symbol.list_bullet'), 'menu', () => this.mobileSidebarVisible = true)
+        this.BottomItem('设置', $r('sys.symbol.gearshape'), 'settings', () => router.pushUrl({ url: 'pages/SystemSettings' }))
+      }
+      .width('100%')
+      .height('100%')
+      .padding({ left: 4, right: 4, top: 4, bottom: 4 })
+
+      // A narrow highlight gives the floating material the same illuminated
+      // edge used by VintagePomelo's API 23 immersive HdsTabs surface.
+      Row()
+        .width('84%')
+        .height(1)
+        .linearGradient({
+          angle: 90,
+          colors: [['#00FFFFFF', 0], [$r('app.color.bottom_nav_highlight'), 0.5], ['#00FFFFFF', 1]]
+        })
+        .position({ x: '8%', y: 1 })
+        .hitTestBehavior(HitTestMode.None)
     }
-    .height(this.isNarrowPhone() ? 64 : 80).width('100%')
-    .padding({ left: this.isNarrowPhone() ? 4 : 8, right: this.isNarrowPhone() ? 4 : 8,
-      top: this.isNarrowPhone() ? 4 : 8, bottom: this.isNarrowPhone() ? 8 : 12 })
-    .backgroundColor($r('app.color.card_glass_background'))
-    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+    .height(this.isNarrowPhone() ? 56 : 64)
+    .width('auto')
+    .margin({
+      left: this.isNarrowPhone() ? 8 : 16,
+      right: this.isNarrowPhone() ? 8 : 16,
+      bottom: this.isNarrowPhone() ? 10 : 16
+    })
+    .borderRadius(this.isNarrowPhone() ? 28 : 32)
+    .backgroundColor($r('app.color.bottom_nav_background'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
+    .border({ width: 1, color: $r('app.color.bottom_nav_border') })
+    .shadow({ radius: 22, color: $r('app.color.bottom_nav_shadow'), offsetX: 0, offsetY: 8 })
     .id('library-bottom-bar')
   }
 
-  build() {
+  @Builder
+  private PageSurface() {
     Stack({ alignContent: Alignment.Bottom }) {
       if (this.settings.usePageBackground && this.settings.pageBackgroundUri.length > 0) {
         Image(this.pageBackgroundSource())
@@ -661,11 +721,21 @@ struct Index {
     }
     .width('100%').height('100%')
     .backgroundColor($r('app.color.page_background'))
-    .gesture(PanGesture({ fingers: 1 })
-      .onActionEnd((event: GestureEvent): void => {
-        if (!this.isPhone()) return;
-        if (event.offsetX > 64) this.mobileSidebarVisible = true;
-        else if (event.offsetX < -64) this.mobileSidebarVisible = false;
-      }))
+  }
+
+  build() {
+    if (this.shouldUsePhoneSwipeGesture()) {
+      Stack() {
+        this.PageSurface()
+      }
+      .width('100%').height('100%')
+      .gesture(PanGesture({ fingers: 1 })
+        .onActionEnd((event: GestureEvent): void => {
+          if (event.offsetX > 64) this.mobileSidebarVisible = true;
+          else if (event.offsetX < -64) this.mobileSidebarVisible = false;
+        }))
+    } else {
+      this.PageSurface()
+    }
   }
 }
