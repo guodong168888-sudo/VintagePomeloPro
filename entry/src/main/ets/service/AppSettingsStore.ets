@@ -1,6 +1,6 @@
 import preferences from '@ohos.data.preferences';
-import deviceInfo from '@ohos.deviceInfo';
 import { common } from '@kit.AbilityKit';
+import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
 import {
   AppSettings,
   AppDescriptor,
@@ -84,7 +84,7 @@ export class AppSettingsStore {
     // Device model is commonly just "emulator" for both tablet and PC HVDs.
     // Window topology must follow the declared device class so the tablet
     // emulator keeps the composed Wine desktop while 2-in-1/PC stays multiton.
-    return deviceInfo.deviceType === '2in1' || deviceInfo.deviceType === 'pc';
+    return DeviceCapabilityPolicy.usesManagedWineWindows();
   }
 
   /** PC/2-in-1 exposes every Wine toplevel through a multiton ArkUI window. */

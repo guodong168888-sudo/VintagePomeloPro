@@ -389,3 +389,40 @@ extern "C" __attribute__((visibility("default"))) void Main(NativeChildProcess_A
     dlclose(handle);
     free(buffer);
 }
+
+// phone/TV cannot create a system NativeChildProcess. GraphicsBroker loads this
+// library in the application process and calls these narrow control exports;
+// frames still go directly through the existing OHNativeWindow BufferQueue.
+extern "C" __attribute__((visibility("default"))) int WinehuaVirgl_AttachSurfaceTarget(
+    uint64_t surfaceKey, uint64_t framePeriodNs, OHNativeWindow* window)
+{
+    if (!window || OH_NativeWindow_NativeObjectReference(window) != 0) return -1;
+    const int result = winehua::AttachVirglSurfaceTarget(surfaceKey, framePeriodNs, window);
+    if (result != 0) OH_NativeWindow_NativeObjectUnreference(window);
+    return result;
+}
+
+extern "C" __attribute__((visibility("default"))) int WinehuaVirgl_DetachSurfaceTarget(
+    uint64_t surfaceKey)
+{
+    return winehua::DetachVirglSurfaceTarget(surfaceKey);
+}
+
+extern "C" __attribute__((visibility("default"))) int WinehuaVirgl_SetSurfaceFramePeriod(
+    uint64_t surfaceKey, uint64_t framePeriodNs)
+{
+    return winehua::SetVirglSurfaceFramePeriod(surfaceKey, framePeriodNs);
+}
+
+extern "C" __attribute__((visibility("default"))) int WinehuaVirgl_QuerySurfaces(
+    winehua::virgl_ipc::SurfaceQueryReply* reply)
+{
+    if (!reply) return -1;
+    *reply = winehua::QueryVirglSurfaces();
+    return 0;
+}
+
+extern "C" __attribute__((visibility("default"))) void WinehuaVirgl_ResetSurfaces()
+{
+    winehua::ResetVirglSurfaces();
+}

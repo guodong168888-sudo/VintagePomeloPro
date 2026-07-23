@@ -13,6 +13,7 @@ import { AppSessionService } from '../service/AppSessionService';
 import { DisplayMode, resolveInputProfileId } from '../model/AppModels';
 import { EngineState } from '../model/AppModels';
 import { WineEngineService } from '../service/WineEngineService';
+import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
 
 const DOMAIN = 0x0000;
 const TAG = 'SingleAppAbility';
@@ -22,6 +23,7 @@ export default class SingleAppAbility extends UIAbility {
   private sessionId: string = '';
   private stage: window.WindowStage | null = null;
   private mainWindow: window.Window | null = null;
+  private windowSizeCallback: ((size: window.Size) => void) | null = null;
 
   onCreate(want: Want, _launchParam: AbilityConstant.LaunchParam): void {
     this.applyWant(want);
@@ -53,6 +55,14 @@ export default class SingleAppAbility extends UIAbility {
         return;
       }
       try {
+        DeviceCapabilityPolicy.enableSensorRotation(mainWindow, TAG);
+        if (DeviceCapabilityPolicy.usesForkNativeChildProcess()) {
+          this.windowSizeCallback = (size: window.Size): void => {
+            WineWindowManager.getInstance().syncOutputSize(size.width, size.height);
+            InputOverlayWindowCoordinator.getInstance().syncBounds().catch(() => {});
+          };
+          mainWindow.on('windowSizeChange', this.windowSizeCallback);
+        }
         mainWindow.setWindowDecorVisible(false);
         mainWindow.setWindowLayoutFullScreen(true).catch((_error: BusinessError) => {});
         mainWindow.setSpecificSystemBarEnabled('status', false).catch((_error: BusinessError) => {});
@@ -82,6 +92,10 @@ export default class SingleAppAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    if (this.mainWindow && this.windowSizeCallback) {
+      this.mainWindow.off('windowSizeChange', this.windowSizeCallback);
+    }
+    this.windowSizeCallback = null;
     GamepadManager.getInstance().releaseAll();
     InputDispatcher.getInstance().releaseAll('single-app-destroy');
     InputRouter.getInstance().releaseAllKeys();

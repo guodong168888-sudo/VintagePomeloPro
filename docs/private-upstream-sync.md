@@ -31,3 +31,17 @@
 - 真机状态：本轮 HDC 无在线目标，因此未执行安装与真机 UI/输入回归；产物已完成构建、release 签名和离线验签。
 
 后续仍仅接受 Wine/Box64、Wayland、图形/音频/输入、HarmonyOS API 或构建运行时修复；每个提交继续在此记录来源 SHA、文件范围、选择原因和验证结果。
+
+### 2026-07-23 PR #34 手机与 TV 运行后端
+
+- 来源：WineHua PR #34，提交 `516c420`、`5c56bfc`、`3a80575`。
+- 目标分支：`feature/phone_support`，基于私有 `main` 的 `2d0ceac`。
+- 纳入：phone/TV 的 fork NativeChildProcess 后端、phone 横竖屏尺寸同步、TV 设备声明，以及设备能力分流。
+- 设备范围：fork 后端仅在 `phone` 和 `tv` 启用；`tablet` 保持原桌面合成路径；`2in1` 和 `pc` 继续使用系统 NCP、Binder 和独立 Wine 窗口。
+- 图形调整：未采用 `3a80575` 的 VirGL socketpair Surface relay 和 shm 降级。phone/TV 改为在应用进程的专用线程中运行 VirGL host，并通过窄 C 接口直接绑定现有 `OHNativeWindow`；帧仍提交到 SurfaceQueue/NativeBuffer。保留的 Unix socket 仅承载 x86_64 guest Mesa 与 VirGL/vtest host 之间的命令和资源协议。
+- 隔离：Wine/wineserver 仍由 fork shim 在子进程运行；VirGL 不通过 fork shim。未修改任何子模块 URL、gitlink 或第三方源码。
+- 静态验证：`git diff --check` 通过；ARM64 和 x86_64 的 `libvirgl_child.so` 均导出五个进程内控制符号，`libentry.so` 均不静态依赖 `libvirgl_child.so`。
+- 规则验证：目录与模型规则测试 24 项通过。
+- 构建验证：使用 `winehua-dev` 和 Makefile Docker 链路分别完成 API 23 x86_64 与 ARM64 Debug HAP；两者均启用 `BUILD_GUEST_GFX=1`，guest ABI 均为 x86_64。
+- 包验证：两个 HAP 均为 `com.vintage.pomelopro` 1.0.8、单一目标 ABI，并包含 guest Mesa/VirGL 环境、`virtio_gpu_dri.so`、图形 smoke 和音频 smoke；官方签名工具验证通过。
+- 未覆盖：phone/TV 真机上的 fork Wine、旋转、VirGL 重绘和触摸输入仍需设备回归，不能用 x86 模拟器或 ARM 平板结果替代。

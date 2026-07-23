@@ -12,6 +12,7 @@
 #include "wine_process.h"
 #include "wine_launch.h"
 #include "wine_mmap_test.h"
+#include "ncp_shim/native_child_process.h"
 
 #include <unistd.h>
 #include <signal.h>
@@ -420,6 +421,18 @@ static napi_value SetDesktopMode(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
+static napi_value SetForkNcpEnabled(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc >= 1) {
+        bool enabled = false;
+        napi_get_value_bool(env, args[0], &enabled);
+        winehua::ncp::SetForkBackendEnabled(enabled);
+    }
+    return nullptr;
+}
+
 static napi_value GetDesktopRootId(napi_env env, napi_callback_info) {
     uint32_t id = WaylandServer::GetInstance()->GetDesktopRootToplevelId();
     napi_value r;
@@ -734,6 +747,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setOutputSize",   nullptr, SetOutputSize,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setDisplayScale",  nullptr, SetDisplayScale,  nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setDesktopMode",   nullptr, SetDesktopMode,   nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setForkNcpEnabled", nullptr, SetForkNcpEnabled, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getDesktopRootId", nullptr, GetDesktopRootId, nullptr, nullptr, nullptr, napi_default, nullptr},
         // ArkTS input forwarding (unified InputManager path)
         {"sendPointerEvent", nullptr, SendPointerEvent, nullptr, nullptr, nullptr, napi_default, nullptr},

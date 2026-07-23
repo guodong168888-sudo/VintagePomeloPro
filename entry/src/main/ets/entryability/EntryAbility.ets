@@ -2,8 +2,9 @@ import { AbilityConstant, UIAbility, Want, bundleManager } from '@kit.AbilityKit
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { display, window } from '@kit.ArkUI';
 import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
-import deviceInfo from '@ohos.deviceInfo';
 import { WineWindowManager } from '../service/WineWindowManager';
+import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
+import testNapi from 'libentry.so';
 
 const DOMAIN = 0x0000;
 export default class EntryAbility extends UIAbility {
@@ -12,6 +13,10 @@ export default class EntryAbility extends UIAbility {
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
+    const useForkNcp = DeviceCapabilityPolicy.usesForkNativeChildProcess();
+    testNapi.setForkNcpEnabled(useForkNcp);
+    hilog.info(DOMAIN, 'EntryAbility', 'NCP backend=%{public}s deviceType=%{public}s',
+      useForkNcp ? 'fork' : 'system', DeviceCapabilityPolicy.deviceType());
     // 与 VintagePomelo 相同，使用 docs FileUri 而非 Environment 的可选能力。
     // 这会在冷启动就创建 Download/包名/games，不依赖扫描或目录授权。
     this.ensureDownloadGamesDirectory();
@@ -81,6 +86,7 @@ export default class EntryAbility extends UIAbility {
       let mainWin = windowStage.getMainWindowSync();
       if (mainWin) {
         this.mainWindow = mainWin;
+        DeviceCapabilityPolicy.enableSensorRotation(mainWin, 'EntryAbility');
         mainWin.setWindowDecorVisible(false);
         if (this.isPcWindowHost()) {
           // A 2-in-1 keeps the system three-button area even when the visual
@@ -104,7 +110,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   private isPcWindowHost(): boolean {
-    return deviceInfo.deviceType === '2in1' || deviceInfo.deviceType === 'pc';
+    return DeviceCapabilityPolicy.usesManagedWineWindows();
   }
 
   onWindowStageDestroy(): void {

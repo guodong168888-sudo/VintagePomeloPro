@@ -28,7 +28,7 @@ std::string gBrokerHomeDir;
 #include <utility>
 #include <vector>
 #include <memory>
-#include <AbilityKit/native_child_process.h>
+#include "ncp_shim/native_child_process.h"
 
 #undef LOG_DOMAIN
 #undef LOG_TAG
@@ -212,7 +212,7 @@ static void HandleRequest(int conn_fd)
         : "libwine_child.so:Main";
     OH_LOG_INFO(LOG_APP, "[Broker] child entry=%{public}s", childEntry);
     int32_t childPid = -1;
-    int32_t ret = OH_Ability_StartNativeChildProcess(
+    int32_t ret = winehua::ncp::StartNativeChildProcess(
         const_cast<char*>(childEntry), args, options, &childPid);
 
     OH_LOG_INFO(LOG_APP, "[Broker] StartNativeChildProcess ret=%{public}d childPid=%{public}d",

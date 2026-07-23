@@ -11,6 +11,7 @@ import { AppSettingsStore } from '../service/AppSettingsStore';
 import { DisplayMode } from '../model/AppModels';
 import { EngineState } from '../model/AppModels';
 import { WineEngineService } from '../service/WineEngineService';
+import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
 
 const DOMAIN = 0x0000;
 const TAG = 'DWA';
@@ -19,6 +20,7 @@ export default class DesktopAbility extends UIAbility {
   private toplevelId: number = 0;
   private stage: window.WindowStage | null = null;
   private mainWindow: window.Window | null = null;
+  private windowSizeCallback: ((size: window.Size) => void) | null = null;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
@@ -46,6 +48,14 @@ export default class DesktopAbility extends UIAbility {
         const mw = windowStage.getMainWindowSync();
         if (mw) {
           this.mainWindow = mw;
+          DeviceCapabilityPolicy.enableSensorRotation(mw, TAG);
+          if (DeviceCapabilityPolicy.usesForkNativeChildProcess()) {
+            this.windowSizeCallback = (size: window.Size): void => {
+              WineWindowManager.getInstance().syncOutputSize(size.width, size.height);
+              InputOverlayWindowCoordinator.getInstance().syncBounds().catch(() => {});
+            };
+            mw.on('windowSizeChange', this.windowSizeCallback);
+          }
           mw.setWindowLayoutFullScreen(true).catch((e: BusinessError) => {
             hilog.error(DOMAIN, TAG, '[DWA] fullScreen failed: %{public}s', JSON.stringify(e));
           });
@@ -94,6 +104,10 @@ export default class DesktopAbility extends UIAbility {
   onDestroy(): void {
     hilog.info(DOMAIN, TAG, '[DWA] onDestroy tl=%{public}d', this.toplevelId);
     try {
+      if (this.mainWindow && this.windowSizeCallback) {
+        this.mainWindow.off('windowSizeChange', this.windowSizeCallback);
+      }
+      this.windowSizeCallback = null;
       GamepadManager.getInstance().releaseAll();
       InputDispatcher.getInstance().releaseAll('desktop-destroy');
       InputRouter.getInstance().releaseAllKeys();

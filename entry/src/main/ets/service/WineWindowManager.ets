@@ -125,19 +125,7 @@ export class WineWindowManager {
     // 获取设备显示密度 + 主窗口可用区域
     try {
       const d = display.getDefaultDisplaySync();
-      this.displayScale = d.densityPixels;
-      this.scaleBoost = 2.0 / this.displayScale;  // 使 effectiveScale = 2.0
-      hilog.info(DOMAIN, TAG, '[MW] display %{public}dx%{public}d deviceDPI=%{public}s boost=%{public}s -> effective=2.0',
-        d.width, d.height, this.displayScale.toFixed(2), this.scaleBoost.toFixed(2));
-      testNapi.setDisplayScale(this.displayScale * this.scaleBoost);
-
-      // Wine 输出尺寸: 沉浸模式下 avoid area 为 0, 直接用显示尺寸
-      const s = this.displayScale * this.scaleBoost;
-      const outW = Math.round(d.width / s);
-      const outH = Math.round(d.height / s);
-      hilog.info(DOMAIN, TAG, '[MW] display %{public}dx%{public}d → output %{public}dx%{public}d',
-        d.width, d.height, outW, outH);
-      testNapi.setOutputSize(outW, outH);
+      this.syncOutputSize(d.width, d.height);
     } catch (_) {
       this.displayScale = 1.61;
       this.scaleBoost = 2.0 / 1.61;
@@ -171,16 +159,28 @@ export class WineWindowManager {
     this.outputScalePercent = Math.max(75, Math.min(150, value));
     try {
       const currentDisplay = display.getDefaultDisplaySync();
-      this.displayScale = currentDisplay.densityPixels;
-      const effectiveScale = 2.0 * this.outputScalePercent / 100;
-      this.scaleBoost = effectiveScale / this.displayScale;
-      testNapi.setDisplayScale(effectiveScale);
-      testNapi.setOutputSize(Math.round(currentDisplay.width / effectiveScale),
-        Math.round(currentDisplay.height / effectiveScale));
-      hilog.info(DOMAIN, TAG, '[MW] output scale=%{public}d%% effective=%{public}s',
-        this.outputScalePercent, effectiveScale.toFixed(2));
+      this.syncOutputSize(currentDisplay.width, currentDisplay.height);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, '[MW] setOutputScalePercent failed: %{public}s', JSON.stringify(error));
+    }
+  }
+
+  syncOutputSize(widthPx: number, heightPx: number): void {
+    if (widthPx <= 0 || heightPx <= 0) return;
+    try {
+      const currentDisplay = display.getDefaultDisplaySync();
+      this.displayScale = Math.max(0.1, currentDisplay.densityPixels);
+      const effectiveScale = 2.0 * this.outputScalePercent / 100;
+      this.scaleBoost = effectiveScale / this.displayScale;
+      const outW = Math.max(1, Math.round(widthPx / effectiveScale));
+      const outH = Math.max(1, Math.round(heightPx / effectiveScale));
+      testNapi.setDisplayScale(effectiveScale);
+      testNapi.setOutputSize(outW, outH);
+      hilog.info(DOMAIN, TAG,
+        '[MW] host size=%{public}dx%{public}d output=%{public}dx%{public}d scale=%{public}s',
+        widthPx, heightPx, outW, outH, effectiveScale.toFixed(2));
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, '[MW] syncOutputSize failed: %{public}s', JSON.stringify(error));
     }
   }
 
