@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import util from '@ohos.util';
 import {
   AppDescriptor,
@@ -41,7 +42,16 @@ interface BuiltinCatalogFile {
 const CATALOG_RAWFILE = 'builtin_apps/catalog.json';
 const APPLICATION_DIRECTORY = 'com.vintage.pomelopro';
 const GAMES_DIRECTORY = 'games';
-const DOWNLOAD_LIBRARY_URI = 'file://docs/storage/Users/currentUser/Download/com.vintage.pomelopro';
+const DOWNLOAD_LIBRARY_URI = 'file://docs/storage/Users/currentUser/Download/' + APPLICATION_DIRECTORY;
+const DOMAIN = 0x0000;
+const TAG = 'AppCatalog';
+
+export interface GamesDirectoryStatus {
+  root: string;
+  games: string;
+  ready: boolean;
+  error: string;
+}
 
 function exists(path: string): boolean {
   if (!path || path.trim().length === 0) return false;
@@ -58,6 +68,46 @@ function isDirectory(path: string): boolean {
     return fs.statSync(path).isDirectory();
   } catch (_) {
     return false;
+  }
+}
+
+function describeFileError(error: Object): string {
+  try {
+    const encoded = JSON.stringify(error);
+    if (encoded && encoded !== '{}') return encoded;
+  } catch (_) {
+  }
+  return 'filesystem operation failed';
+}
+
+/**
+ * Create one directory and all missing parents, then verify the result. The
+ * Download mount may not have the app-specific parent yet on a cold install,
+ * so a single-level mkdir is not sufficient here.
+ */
+function ensureDirectory(path: string): string {
+  if (!path || path.trim().length === 0) return 'resolved path is empty';
+  try {
+    const existing = fs.statSync(path);
+    return existing.isDirectory() ? '' : 'path exists but is not a directory';
+  } catch (_) {
+  }
+  try {
+    fs.mkdirSync(path, true);
+  } catch (error) {
+    // Another process may have created it between stat and mkdir.
+    try {
+      const created = fs.statSync(path);
+      if (created.isDirectory()) return '';
+    } catch (_) {
+    }
+    return describeFileError(error);
+  }
+  try {
+    const created = fs.statSync(path);
+    return created.isDirectory() ? '' : 'created path is not a directory';
+  } catch (error) {
+    return describeFileError(error);
   }
 }
 
@@ -78,6 +128,12 @@ export class AppCatalogService {
   private context: common.UIAbilityContext | null = null;
   private apps: AppDescriptor[] = [];
   private libraryRoot: string = '';
+  private directoryStatus: GamesDirectoryStatus = {
+    root: '',
+    games: '',
+    ready: false,
+    error: 'games directory has not been checked'
+  };
 
   static getInstance(): AppCatalogService {
     if (!AppCatalogService.instance) AppCatalogService.instance = new AppCatalogService();
@@ -104,9 +160,10 @@ export class AppCatalogService {
   }
 
   getWineHomeDirectory(): string {
-    const gamesPath = this.ensureGamesDirectory();
-    if (gamesPath) return this.getLibraryRoot();
-    return '/storage/Users/currentUser/Download/' + APPLICATION_DIRECTORY;
+    const status = this.ensureGamesDirectory();
+    // Never hand Wine an unverified HOME. Starting with a guessed path makes
+    // the engine fail later and hides the actual storage error from the user.
+    return status.ready ? status.root : '';
   }
 
   getGamesDirectory(): string {
@@ -120,27 +177,72 @@ export class AppCatalogService {
    * “目录授权”暴露成用户操作。
    */
   isGamesDirectoryReady(): boolean {
-    return this.ensureGamesDirectory().length > 0;
+    return this.ensureGamesDirectory().ready;
   }
 
-  private ensureGamesDirectory(): string {
+  getGamesDirectoryStatus(): GamesDirectoryStatus {
+    const status = this.ensureGamesDirectory();
+    return {
+      root: status.root,
+      games: status.games,
+      ready: status.ready,
+      error: status.error
+    };
+  }
+
+  getGamesDirectoryError(): string {
+    return this.ensureGamesDirectory().error;
+  }
+
+  ensureGamesDirectory(): GamesDirectoryStatus {
     const libraryRoot = this.getLibraryRoot();
-    if (!libraryRoot) return '';
     const gamesPath = joinPath(libraryRoot, GAMES_DIRECTORY);
-    try {
-      // 与 VintagePomelo 一致，分两级创建且不传非标准 recursive 参数。
-      if (!isDirectory(libraryRoot)) fs.mkdirSync(libraryRoot);
-      if (!isDirectory(gamesPath)) fs.mkdirSync(gamesPath);
-      return isDirectory(gamesPath) ? gamesPath : '';
-    } catch (_) {
-      return '';
+    if (!libraryRoot) {
+      this.directoryStatus = {
+        root: '',
+        games: '',
+        ready: false,
+        error: 'Download library path could not be resolved'
+      };
+      hilog.error(DOMAIN, TAG, 'Download library path could not be resolved');
+      return this.directoryStatus;
     }
+
+    const rootError = ensureDirectory(libraryRoot);
+    if (rootError) {
+      this.directoryStatus = {
+        root: libraryRoot,
+        games: gamesPath,
+        ready: false,
+        error: 'library: ' + rootError
+      };
+      hilog.error(DOMAIN, TAG, 'Failed to prepare Download library %{public}s: %{public}s',
+        libraryRoot, rootError);
+      return this.directoryStatus;
+    }
+
+    const gamesError = ensureDirectory(gamesPath);
+    if (gamesError) {
+      this.directoryStatus = {
+        root: libraryRoot,
+        games: gamesPath,
+        ready: false,
+        error: 'games: ' + gamesError
+      };
+      hilog.error(DOMAIN, TAG, 'Failed to prepare games directory %{public}s: %{public}s',
+        gamesPath, gamesError);
+      return this.directoryStatus;
+    }
+
+    this.directoryStatus = { root: libraryRoot, games: gamesPath, ready: true, error: '' };
+    hilog.info(DOMAIN, TAG, 'Download games directory ready: %{public}s', gamesPath);
+    return this.directoryStatus;
   }
 
   /** 兼容旧调用方；实际行为仅为确保专用目录存在，不弹授权。 */
   async authorizeLibrary(): Promise<string> {
-    const gamesPath = this.ensureGamesDirectory();
-    return gamesPath ? this.getLibraryRoot() : '';
+    const status = this.ensureGamesDirectory();
+    return status.ready ? status.root : '';
   }
 
   async scan(): Promise<AppDescriptor[]> {
@@ -148,9 +250,9 @@ export class AppCatalogService {
     const builtins = this.loadBuiltins();
     builtins.forEach((item: AppDescriptor) => merged.push(item));
 
-    const gamesPath = this.ensureGamesDirectory();
-    if (gamesPath) {
-      const external = this.scanExternal(gamesPath);
+    const directoryStatus = this.ensureGamesDirectory();
+    if (directoryStatus.ready) {
+      const external = this.scanExternal(directoryStatus.games);
       external.forEach((item: AppDescriptor) => merged.push(item));
     }
 

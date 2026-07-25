@@ -243,6 +243,12 @@ struct SystemSettingsPage {
     const engine = WineEngineService.getInstance();
     const mode = engine.getMode() ?? this.settings.defaultDisplayMode;
     const homeDirectory = AppCatalogService.getInstance().getWineHomeDirectory();
+    if (!homeDirectory) {
+      promptAction.showToast({
+        message: '无法创建 Download/com.vintage.pomelopro/games，请先重试目录扫描'
+      });
+      return;
+    }
     this.runEngineOperation('正在关闭 Windows 会话并重建 Wine/Wayland 服务…',
       (): Promise<boolean> => AppSessionService.getInstance().restartEngine(mode, homeDirectory),
       'Wine 引擎已重新启动');

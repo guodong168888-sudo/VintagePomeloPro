@@ -1,8 +1,8 @@
-import { AbilityConstant, UIAbility, Want, bundleManager } from '@kit.AbilityKit';
+import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { display, window } from '@kit.ArkUI';
-import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
 import { WineWindowManager } from '../service/WineWindowManager';
+import { AppCatalogService, GamesDirectoryStatus } from '../service/AppCatalogService';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
 import testNapi from 'libentry.so';
 
@@ -17,34 +17,14 @@ export default class EntryAbility extends UIAbility {
     testNapi.setForkNcpEnabled(useForkNcp);
     hilog.info(DOMAIN, 'EntryAbility', 'NCP backend=%{public}s deviceType=%{public}s',
       useForkNcp ? 'fork' : 'system', DeviceCapabilityPolicy.deviceType());
-    // 与 VintagePomelo 相同，使用 docs FileUri 而非 Environment 的可选能力。
-    // 这会在冷启动就创建 Download/包名/games，不依赖扫描或目录授权。
-    this.ensureDownloadGamesDirectory();
+    this.ensureDownloadGamesDirectory('onCreate');
   }
 
-  private ensureDirectoryExists(path: string): void {
-    try {
-      if (fs.statSync(path).isDirectory()) return;
-    } catch (_) {
-      try {
-        fs.mkdirSync(path);
-      } catch (error) {
-        hilog.error(DOMAIN, 'EntryAbility', 'Failed to create %{public}s: %{public}s', path, JSON.stringify(error));
-      }
-    }
-  }
-
-  private ensureDownloadGamesDirectory(): void {
-    try {
-      const bundleInfo = bundleManager.getBundleInfoForSelfSync(
-        bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION);
-      const libraryUri = 'file://docs/storage/Users/currentUser/Download/' + bundleInfo.name;
-      const libraryPath = new fileUri.FileUri(libraryUri).path;
-      this.ensureDirectoryExists(libraryPath);
-      this.ensureDirectoryExists(libraryPath + '/games');
-      hilog.info(DOMAIN, 'EntryAbility', 'Download games directory ready: %{public}s', libraryPath + '/games');
-    } catch (error) {
-      hilog.error(DOMAIN, 'EntryAbility', 'Failed to resolve Download games directory: %{public}s', JSON.stringify(error));
+  private ensureDownloadGamesDirectory(trigger: string): void {
+    const status: GamesDirectoryStatus = AppCatalogService.getInstance().ensureGamesDirectory();
+    if (!status.ready) {
+      hilog.error(DOMAIN, 'EntryAbility',
+        'Download games directory unavailable during %{public}s: %{public}s', trigger, status.error);
     }
   }
 
@@ -53,6 +33,9 @@ export default class EntryAbility extends UIAbility {
   }
 
   onNewWant(want: Want): void {
+    // A singleton Ability may receive the next launch without another
+    // onCreate. Re-check the app-owned Download directory on every handoff.
+    this.ensureDownloadGamesDirectory('onNewWant');
     const parameters = want.parameters ?? {};
     if (parameters.overlayRoute === 'input-layout' || parameters.overlayRoute === 'key-mapping') {
       // 覆盖层属于 Desktop/SingleApp Ability，不能直接把它的子窗口替换为
@@ -73,6 +56,7 @@ export default class EntryAbility extends UIAbility {
   onWindowStageCreate(windowStage: window.WindowStage): void {
     // Main window is created, set main page for this ability
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageCreate');
+    this.ensureDownloadGamesDirectory('onWindowStageCreate');
 
     // 初始化多窗口管理器
     WineWindowManager.getInstance().init(windowStage, this.context);
@@ -168,6 +152,7 @@ export default class EntryAbility extends UIAbility {
   onForeground(): void {
     // Ability has brought to foreground
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
+    this.ensureDownloadGamesDirectory('onForeground');
   }
 
   onBackground(): void {

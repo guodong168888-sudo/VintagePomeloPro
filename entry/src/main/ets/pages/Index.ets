@@ -291,7 +291,12 @@ struct Index {
 
   private filterDescription(): string {
     if (this.filter === 'builtin') return '系统工具与内建测试程序';
-    if (this.filter === 'windows') return '来自 Download/com.vintage.pomelopro/games';
+    if (this.filter === 'windows') {
+      const catalog = AppCatalogService.getInstance();
+      return catalog.isGamesDirectoryReady() ?
+        '来自 Download/com.vintage.pomelopro/games' :
+        '游戏目录尚未就绪，点击重新扫描重试';
+    }
     if (this.filter === 'running') return '点击卡片可恢复，长按可关闭会话';
     if (this.filter === 'favorite') return '已收藏的内建应用和 Windows 程序';
     return this.engineMessage;
@@ -309,7 +314,13 @@ struct Index {
     if (this.searchQuery.trim()) return '请更换关键词，或清除搜索后查看当前分类的全部内容';
     if (this.filter === 'favorite') return '在应用设置中开启收藏后，应用会显示在这里';
     if (this.filter === 'running') return '启动 Wine 桌面或程序后，可在这里恢复或关闭会话';
-    if (this.filter === 'windows') return '将程序放入 Download/com.vintage.pomelopro/games，应用会自动扫描';
+    if (this.filter === 'windows') {
+      const catalog = AppCatalogService.getInstance();
+      if (!catalog.isGamesDirectoryReady()) {
+        return '游戏目录创建失败：' + catalog.getGamesDirectoryError() + '。点击重新扫描重试';
+      }
+      return '将程序放入 Download/com.vintage.pomelopro/games，应用会自动扫描';
+    }
     return '安装包中的内建应用清单为空，请检查应用资源';
   }
 
@@ -402,6 +413,15 @@ struct Index {
 
   private async doLaunch(app: AppDescriptor, switchMode: boolean): Promise<void> {
     const root = AppCatalogService.getInstance().getWineHomeDirectory();
+    if (!root && (app.launchTarget.kind === LaunchKind.WINE_EXE ||
+      app.launchTarget.kind === LaunchKind.WINE_SYSTEM ||
+      app.launchTarget.kind === LaunchKind.WINE_DESKTOP)) {
+      promptAction.showToast({
+        message: '无法创建 Download/com.vintage.pomelopro/games，请点击 Windows 程序中的重新扫描重试'
+      });
+      this.refreshRunningState();
+      return;
+    }
     let session: RuntimeSession | null = null;
     if (switchMode) {
       session = await AppSessionService.getInstance().switchModeAndLaunch(app, this.settings, root);
