@@ -33,11 +33,24 @@ add_library(entry SHARED
     wine_mmap_test.cpp
     broker.cpp
     ncp_shim/ncp_shim.cpp
+    perf_utils.cpp
     wayland_server.cpp
+    wl_core.cpp
+    compositor/toplevel_manager.cpp
+    compositor/move_grab.cpp
+    compositor/compositor_utils.cpp
+    compositor/geometry.cpp
+    compositor/desktop_compositor.cpp
+    compositor/input_resolver.cpp
+    compositor/desktop_root_manager.cpp
     egl_renderer.cpp
+    fs_utils.cpp
     plugin_manager.cpp
+    process_utils.cpp
     ring_buffer.cpp
     seat.cpp
+    shader_utils.cpp
+    string_utils.cpp
     input_manager.cpp
     xdg_shell.cpp
     xdg-shell-protocol.c
@@ -60,7 +73,10 @@ target_link_libraries(entry PUBLIC
     ${WAYLAND_LIBS_DIR}/libwayland-server.so.0
 )
 
-add_library(wine_child SHARED wine_child.cpp)
+add_library(wine_child SHARED
+    wine_child.cpp
+    wine_mmap_child.cpp
+)
 target_link_libraries(wine_child PUBLIC libhilog_ndk.z.so libchild_process.so)
 
 add_library(virgl_child SHARED
