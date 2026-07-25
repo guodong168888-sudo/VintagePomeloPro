@@ -1,5 +1,5 @@
 export const startServer: (sockPath: string) => boolean;
-export const launchClient: (exePath: string, argv: string[], sockPath: string, libPath: string, homeDir: string) => number;
+export const launchClient: (exePath: string, argv: string[], sockPath: string, libPath: string, homeDir: string, forcePrefixRefresh?: boolean) => number;
 export const stopClient: () => void;
 export const stopAll: () => void;
 export const setStateCallback: (cb: (state: string) => void) => void;

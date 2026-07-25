@@ -136,15 +136,21 @@ export struct VirtualInputOverlay {
     return this.config().colorScheme === VirtualKeyColorScheme.WHITE ? '#FFF2F6FF' : '#FF2196F3';
   }
 
-  private outlineBackdropColor(): string {
-    return this.config().colorScheme === VirtualKeyColorScheme.WHITE ? '#FF101820' : '#FFF4F8FF';
+  private themedAccent(accent: string): string {
+    return this.config().colorScheme === VirtualKeyColorScheme.WHITE ? this.strokeColor() : accent;
   }
 
-  private fillColor(pressed: boolean): string {
-    return pressed ? this.strokeColor() : '#8032323A';
+  private fillColor(pressed: boolean, accent: string = this.strokeColor()): string {
+    if (this.config().colorScheme === VirtualKeyColorScheme.WHITE) {
+      return pressed ? '#66FFFFFF' : '#2EFFFFFF';
+    }
+    return pressed ? accent : '#CC404040';
   }
 
   private textColor(pressed: boolean, accent?: string): string {
+    if (this.config().colorScheme === VirtualKeyColorScheme.WHITE) {
+      return pressed ? '#FF30343A' : '#FFF2F6FF';
+    }
     if (pressed) return '#FFFFFFFF';
     return accent ?? this.strokeColor();
   }
@@ -198,7 +204,10 @@ export struct VirtualInputOverlay {
   }
 
   private auxWidth(): number {
-    return this.config().showButtonMenu ? Math.max(48, 35 * this.config().buttonSize / 100) : 0;
+    const count = (this.config().showButtonMenu ? 1 : 0) + (this.config().showButtonStart ? 1 : 0);
+    if (count === 0) return 0;
+    const size = 35 * this.config().buttonSize / 100;
+    return Math.max(48, count * size + (count - 1) * 12);
   }
 
   private auxHeight(): number {
@@ -493,11 +502,15 @@ export struct VirtualInputOverlay {
     const origin = this.actionOrigin();
     const action = this.actionButtonAtLocal(x - origin.x, y - origin.y);
     if (action) return action;
-    if (this.config().showButtonMenu && this.auxWidth() > 0) {
+    if ((this.config().showButtonMenu || this.config().showButtonStart) && this.auxWidth() > 0) {
       const aux = this.groupPosition(this.layout().aux.centerX, this.layout().aux.centerY,
         this.auxWidth(), this.auxHeight());
       if (this.rectContains(x, y, aux.x, aux.y, this.auxWidth(), this.auxHeight())) {
-        return [VirtualKey.BUTTON_MENU, 1];
+        if (this.config().showButtonMenu && this.config().showButtonStart) {
+          return x < aux.x + this.auxWidth() / 2 ?
+            [VirtualKey.BUTTON_MENU, 1] : [VirtualKey.BUTTON_START, 28];
+        }
+        return this.config().showButtonMenu ? [VirtualKey.BUTTON_MENU, 1] : [VirtualKey.BUTTON_START, 28];
       }
     }
     return null;
@@ -521,6 +534,7 @@ export struct VirtualInputOverlay {
       case VirtualKey.BUTTON_A: return 57;
       case VirtualKey.BUTTON_B: return 45;
       case VirtualKey.BUTTON_MENU: return 1;
+      case VirtualKey.BUTTON_START: return 28;
       case VirtualKey.RIGHT_STICK_UP: return 23;
       case VirtualKey.RIGHT_STICK_DOWN: return 37;
       case VirtualKey.RIGHT_STICK_LEFT: return 36;
@@ -1002,10 +1016,11 @@ export struct VirtualInputOverlay {
   private GameButton(label: string, key: VirtualKey, fallback: number, accent: string = this.strokeColor(), small: boolean = false) {
     Stack({ alignContent: Alignment.Center }) {
       Circle().width((small ? 35 : 50) * this.config().buttonSize / 100).height((small ? 35 : 50) * this.config().buttonSize / 100)
-        .fill(this.isPressed(key) ? accent : this.fillColor(false)).stroke(accent).strokeWidth(small ? 1.5 : 2)
+        .fill(this.fillColor(this.isPressed(key), this.themedAccent(accent)))
+        .stroke(this.themedAccent(accent)).strokeWidth(small ? 1.5 : 2)
         .opacity(this.visibleOpacity(this.config().transparency)).shadow({ radius: this.isPressed(key) ? 2 : 4, color: '#66000000' })
       Text(label).fontSize((small ? 10 : 16) * this.config().buttonSize / 100).fontWeight(FontWeight.Bold)
-        .fontColor(this.textColor(this.isPressed(key), accent))
+        .fontColor(this.textColor(this.isPressed(key), this.themedAccent(accent)))
     }
     .width((small ? 35 : 50) * this.config().buttonSize / 100).height((small ? 35 : 50) * this.config().buttonSize / 100)
     .hitTestBehavior(HitTestMode.None)
@@ -1014,13 +1029,7 @@ export struct VirtualInputOverlay {
   @Builder
   private Dpad() {
     Stack() {
-      // Keep the VintagePomelo circular base, but add a contrasting halo so
-      // the blue outline does not disappear on Wine's blue desktop.
-      Circle().width(this.directionSize()).height(this.directionSize()).fill('#16000000')
-        .stroke(this.outlineBackdropColor()).strokeWidth(4)
-        .opacity(this.visibleOpacity(this.config().joystickTransparency))
-        .shadow({ radius: 5, color: '#88000000' })
-      Circle().width(this.directionSize() - 4).height(this.directionSize() - 4).fill('#00000000')
+      Circle().width(this.directionSize()).height(this.directionSize()).fill('#00000000')
         .stroke(this.strokeColor()).strokeWidth(2)
         .opacity(this.visibleOpacity(this.config().joystickTransparency))
       Rect().width(this.joystickRadius() * 0.6).height(this.joystickRadius() * 0.9).fill(this.fillColor(this.dpadUp)).borderRadius({ topLeft: this.joystickRadius() * 0.3, topRight: this.joystickRadius() * 0.3 })
@@ -1039,11 +1048,7 @@ export struct VirtualInputOverlay {
   @Builder
   private Joystick() {
     Stack() {
-      Circle().width(this.directionSize()).height(this.directionSize()).fill('#16000000')
-        .stroke(this.outlineBackdropColor()).strokeWidth(4)
-        .opacity(this.visibleOpacity(this.config().joystickTransparency))
-        .shadow({ radius: 5, color: '#88000000' })
-      Circle().width(this.directionSize() - 4).height(this.directionSize() - 4).fill('#00000000')
+      Circle().width(this.directionSize()).height(this.directionSize()).fill('#00000000')
         .stroke(this.strokeColor()).strokeWidth(2)
         .opacity(this.visibleOpacity(this.config().joystickTransparency))
       ForEach([0, 45, 90, 135, 180, 225, 270, 315], (angle: number): void => {
@@ -1051,7 +1056,7 @@ export struct VirtualInputOverlay {
           .rotate({ angle: angle }).position({ x: this.joystickRadius() + 10 + Math.cos(angle * Math.PI / 180) * (this.joystickRadius() - 5) - 5, y: this.joystickRadius() + 10 + Math.sin(angle * Math.PI / 180) * (this.joystickRadius() - 5) - 1 })
       }, (angle: number): string => angle.toString())
       Circle().width(50 * this.config().joystickSize / 100).height(50 * this.config().joystickSize / 100)
-        .fill(this.fillColor(this.joystickActive)).stroke(this.strokeColor()).strokeWidth(2)
+        .fill(this.fillColor(this.joystickActive))
         .opacity(this.visibleOpacity(this.config().joystickTransparency) * (this.joystickActive ? 1 : 0.7)).translate({ x: this.joystickX, y: this.joystickY })
     }
     .width(this.directionSize()).height(this.directionSize()).hitTestBehavior(HitTestMode.None).id('wine-vintage-direction-joystick')
@@ -1072,15 +1077,11 @@ export struct VirtualInputOverlay {
   private RightJoystickGroup() {
     if (this.config().showRightJoystick) {
       Stack() {
-        Circle().width(this.rightJoystickSize()).height(this.rightJoystickSize()).fill('#16000000')
-          .stroke(this.outlineBackdropColor()).strokeWidth(4)
-          .opacity(this.visibleOpacity(this.config().joystickTransparency))
-          .shadow({ radius: 5, color: '#88000000' })
-        Circle().width(this.rightJoystickSize() - 4).height(this.rightJoystickSize() - 4).fill('#00000000')
-          .stroke('#FF8BC34A').strokeWidth(2)
+        Circle().width(this.rightJoystickSize()).height(this.rightJoystickSize()).fill('#00000000')
+          .stroke(this.themedAccent('#FF8BC34A')).strokeWidth(2)
           .opacity(this.visibleOpacity(this.config().joystickTransparency))
         ForEach([0, 90, 180, 270], (angle: number): void => {
-          Line().width(10).height(2).backgroundColor('#FF8BC34A')
+          Line().width(10).height(2).backgroundColor(this.themedAccent('#FF8BC34A'))
             .opacity(this.visibleOpacity(this.config().joystickTransparency) * 0.6)
             .rotate({ angle: angle })
             .position({
@@ -1091,8 +1092,8 @@ export struct VirtualInputOverlay {
         Circle().width(6).height(6).fill('#B38BC34A')
           .opacity(this.visibleOpacity(this.config().joystickTransparency) * 0.7)
         Circle().width(this.rightJoystickKnobSize()).height(this.rightJoystickKnobSize())
-          .fill(this.rightJoystickActive ? '#738BC34A' : '#428BC34A')
-          .stroke('#FF8BC34A').strokeWidth(1.5)
+          .fill(this.fillColor(this.rightJoystickActive, this.themedAccent('#FF8BC34A')))
+          .stroke(this.themedAccent('#FF8BC34A')).strokeWidth(1.5)
           .opacity(this.visibleOpacity(this.config().joystickTransparency) * (this.rightJoystickActive ? 1 : 0.8))
           .shadow({ radius: 4, color: '#66000000' })
           .translate({ x: this.rightJoystickX, y: this.rightJoystickY })
@@ -1133,12 +1134,12 @@ export struct VirtualInputOverlay {
   private ShoulderButton(label: string, key: VirtualKey, accent: string, position: ButtonGroupPosition, id: string) {
     Stack({ alignContent: Alignment.Center }) {
       Rect().width(this.shoulderWidth()).height(this.shoulderHeight())
-        .fill(this.isPressed(key) ? accent : this.fillColor(false))
-        .stroke(accent).strokeWidth(2).borderRadius(this.shoulderHeight() / 2)
+        .fill(this.fillColor(this.isPressed(key), this.themedAccent(accent)))
+        .stroke(this.themedAccent(accent)).strokeWidth(2).borderRadius(this.shoulderHeight() / 2)
         .opacity(this.visibleOpacity(this.config().transparency))
         .shadow({ radius: this.isPressed(key) ? 2 : 5, color: '#66000000' })
       Text(label).fontSize(12 * this.config().buttonSize / 100).fontWeight(FontWeight.Bold)
-        .fontColor(this.textColor(this.isPressed(key), accent))
+        .fontColor(this.textColor(this.isPressed(key), this.themedAccent(accent)))
     }
     .width(this.shoulderHitWidth()).height(this.shoulderHitHeight())
     .position(this.groupPosition(position.centerX, position.centerY, this.shoulderHitWidth(), this.shoulderHitHeight()))
@@ -1164,8 +1165,9 @@ export struct VirtualInputOverlay {
   @Builder
   private AuxGroup() {
     if (this.auxWidth() > 0) {
-      Row() {
+      Row({ space: 12 }) {
         if (this.config().showButtonMenu) this.GameButton('菜单', VirtualKey.BUTTON_MENU, 1, this.strokeColor(), true)
+        if (this.config().showButtonStart) this.GameButton('Start', VirtualKey.BUTTON_START, 28, this.strokeColor(), true)
       }
       .width(this.auxWidth()).height(this.auxHeight()).justifyContent(FlexAlign.Center).hitTestBehavior(HitTestMode.None)
       .id('wine-vintage-aux')

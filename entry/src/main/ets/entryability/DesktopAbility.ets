@@ -8,7 +8,7 @@ import { InputRouter } from '../service/InputRouter';
 import { InputDispatcher } from '../service/InputDispatcher';
 import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
 import { AppSettingsStore } from '../service/AppSettingsStore';
-import { DisplayMode } from '../model/AppModels';
+import { DisplayMode, ScreenOrientationSetting } from '../model/AppModels';
 import { EngineState } from '../model/AppModels';
 import { WineEngineService } from '../service/WineEngineService';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
@@ -22,13 +22,26 @@ export default class DesktopAbility extends UIAbility {
   private mainWindow: window.Window | null = null;
   private windowSizeCallback: ((size: window.Size) => void) | null = null;
   private windowResizeGeneration: number = 0;
+  private desktopOrientation: ScreenOrientationSetting = ScreenOrientationSetting.SENSOR_LANDSCAPE;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
       const params = want.parameters ?? {};
       this.toplevelId = Number(params.toplevelId) || 0;
+      const requestedOrientation = String(params.desktopOrientation ?? '');
+      if (requestedOrientation === ScreenOrientationSetting.LANDSCAPE ||
+        requestedOrientation === ScreenOrientationSetting.PORTRAIT ||
+        requestedOrientation === ScreenOrientationSetting.SENSOR_LANDSCAPE) {
+        this.desktopOrientation = requestedOrientation as ScreenOrientationSetting;
+      } else {
+        // Ability launches can come from an older caller without the new
+        // parameter. Read persisted settings only as a compatibility fallback.
+        this.desktopOrientation = AppSettingsStore.getInstance().getGlobalSettings().desktopOrientation
+          ?? ScreenOrientationSetting.SENSOR_LANDSCAPE;
+      }
       AppStorage.setOrCreate('desktopToplevelId', this.toplevelId);
-      hilog.info(DOMAIN, TAG, '[DWA]  onCreate: tl=%{public}d', this.toplevelId);
+      hilog.info(DOMAIN, TAG, '[DWA] onCreate: tl=%{public}d orientation=%{public}s',
+        this.toplevelId, this.desktopOrientation);
     } catch (e) {
       hilog.error(DOMAIN, TAG, '[DWA] ERR onCreate: %{public}s', JSON.stringify(e));
     }
@@ -37,6 +50,29 @@ export default class DesktopAbility extends UIAbility {
   onWindowStageCreate(windowStage: window.WindowStage): void {
     this.stage = windowStage;
     hilog.info(DOMAIN, TAG, '[DWA] onWindowStageCreate tl=%{public}d', this.toplevelId);
+    let initialWindow: window.Window | null = null;
+    try {
+      initialWindow = windowStage.getMainWindowSync();
+      if (initialWindow) {
+        this.mainWindow = initialWindow;
+        // Wait for the orientation transaction before constructing the ArkUI
+        // scene. Otherwise the scene and native Wine output are born with the
+        // default portrait rectangle and can remain a white, stale surface.
+        DeviceCapabilityPolicy.applyDesktopOrientation(initialWindow, this.desktopOrientation, TAG)
+          .then(() => this.loadDesktopContent(windowStage))
+          .catch((error: Error) => {
+            hilog.warn(DOMAIN, TAG, '[DWA] orientation failed, loading content: %{public}s', JSON.stringify(error));
+            this.loadDesktopContent(windowStage);
+          });
+        return;
+      }
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, '[DWA] pre-load window setup failed: %{public}s', JSON.stringify(e));
+    }
+    this.loadDesktopContent(windowStage);
+  }
+
+  private async loadDesktopContent(windowStage: window.WindowStage): Promise<void> {
     windowStage.loadContent('pages/DesktopWindow', (err) => {
       if (err.code) {
         hilog.error(DOMAIN, TAG, '[DWA] loadContent FAILED: %{public}s', JSON.stringify(err));
@@ -45,11 +81,27 @@ export default class DesktopAbility extends UIAbility {
       hilog.info(DOMAIN, TAG, '[DWA] loadContent OK tl=%{public}d', this.toplevelId);
 
       // 沉浸模式: 全屏 + 隐藏状态栏和导航栏
-      try {
+      void this.finishDesktopWindowSetup(windowStage);
+    });
+  }
+
+  private async finishDesktopWindowSetup(windowStage: window.WindowStage): Promise<void> {
+    try {
         const mw = windowStage.getMainWindowSync();
         if (mw) {
           this.mainWindow = mw;
-          DeviceCapabilityPolicy.enableSensorRotation(mw, TAG);
+          // The orientation request and the immersive layout are asynchronous.
+          // Measuring windowRect before both transactions settle can feed the
+          // old portrait rectangle into Wayland and leave a white strip after
+          // a landscape launch. Apply the window chrome first, then wait for
+          // the final rectangle before the first compositor resize.
+          await mw.setWindowLayoutFullScreen(true);
+          await Promise.all([
+            mw.setSpecificSystemBarEnabled('status', false),
+            mw.setSpecificSystemBarEnabled('navigationIndicator', false)
+          ]);
+          await this.waitForRequestedOrientation(mw);
+
           if (DeviceCapabilityPolicy.usesForkNativeChildProcess()) {
             this.windowSizeCallback = (size: window.Size): void => {
               this.synchronizeDesktopWindow(size.width, size.height);
@@ -58,15 +110,6 @@ export default class DesktopAbility extends UIAbility {
             const initialRect = mw.getWindowProperties().windowRect;
             this.synchronizeDesktopWindow(initialRect.width, initialRect.height);
           }
-          mw.setWindowLayoutFullScreen(true).catch((e: BusinessError) => {
-            hilog.error(DOMAIN, TAG, '[DWA] fullScreen failed: %{public}s', JSON.stringify(e));
-          });
-          mw.setSpecificSystemBarEnabled('status', false).catch((e: BusinessError) => {
-            hilog.error(DOMAIN, TAG, '[DWA] statusBar failed: %{public}s', JSON.stringify(e));
-          });
-          mw.setSpecificSystemBarEnabled('navigationIndicator', false).catch((e: BusinessError) => {
-            hilog.error(DOMAIN, TAG, '[DWA] navBar failed: %{public}s', JSON.stringify(e));
-          });
           mw.on('windowRectChange', () => {
             InputOverlayWindowCoordinator.getInstance().syncBounds().catch(() => {});
           });
@@ -75,7 +118,29 @@ export default class DesktopAbility extends UIAbility {
       } catch (e) {
         hilog.error(DOMAIN, TAG, '[DWA] immersive ERR: %{public}s', JSON.stringify(e));
       }
-    });
+  }
+
+  private async waitForRequestedOrientation(target: window.Window): Promise<void> {
+    const needLandscape = this.desktopOrientation !== ScreenOrientationSetting.PORTRAIT;
+    for (let attempt = 0; attempt < 16; attempt++) {
+      try {
+        const rect = target.getWindowProperties().windowRect;
+        if (rect.width > 0 && rect.height > 0 &&
+          (needLandscape ? rect.width >= rect.height : rect.height >= rect.width)) {
+          hilog.info(DOMAIN, TAG, '[DWA] final window rect=%{public}dx%{public}d orientation=%{public}s',
+            rect.width, rect.height, this.desktopOrientation);
+          return;
+        }
+      } catch (_) {
+      }
+      await new Promise<void>((resolve: () => void) => setTimeout(resolve, 100));
+    }
+    try {
+      const rect = target.getWindowProperties().windowRect;
+      hilog.warn(DOMAIN, TAG, '[DWA] orientation settle timeout rect=%{public}dx%{public}d requested=%{public}s',
+        rect.width, rect.height, this.desktopOrientation);
+    } catch (_) {
+    }
   }
 
   onForeground(): void {

@@ -14,7 +14,7 @@ import {
 
 const STORE_NAME = 'vintage_pomelo_input_profiles';
 const PROFILES_KEY = 'profiles_v2';
-const INPUT_PROFILE_SCHEMA_VERSION = 4;
+const INPUT_PROFILE_SCHEMA_VERSION = 5;
 
 /**
  * Persists the VintagePomelo-compatible grouped layout contract.  Version one
@@ -75,13 +75,14 @@ export class InputProfileService {
       if (value.schemaVersion !== INPUT_PROFILE_SCHEMA_VERSION ||
         !value.layoutLandscape.camera || !value.layoutPortrait.camera ||
         value.virtualKeyConfig.showRightJoystick === undefined ||
+        value.virtualKeyConfig.showButtonStart === undefined ||
         value.virtualKeyConfig.rightJoystickOutputMode === undefined ||
         !(value.virtualKeyMappings ?? []).some((mapping: VirtualKeyMapping): boolean =>
           mapping.virtualKey === VirtualKey.RIGHT_STICK_UP) ||
         !value.layoutLandscape.leftTrigger || !value.layoutLandscape.leftBumper ||
         !value.layoutLandscape.rightBumper || !value.layoutLandscape.rightTrigger) {
-        // Version four adds an independently configurable camera joystick while
-        // retaining every existing control position and key mapping.
+        // Version five adds an independent Start key while retaining every
+        // existing control position and customized key mapping.
         this.profiles.set(id, this.cloneProfile(value));
         changed = true;
       }

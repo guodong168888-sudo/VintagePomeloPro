@@ -1,6 +1,6 @@
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
-import { common, Want } from '@kit.AbilityKit';
+import { common, ConfigurationConstant, Want } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
 import {
   ButtonGroupPosition,
@@ -11,6 +11,7 @@ import {
   FreeButtonsConfig,
   InputProfile,
   RightJoystickOutputMode,
+  ThemeMode,
   VirtualGamepadLayout,
   VirtualKeyConfig,
   VirtualKeyColorScheme,
@@ -59,12 +60,21 @@ struct InputLayoutEditor {
   @State private returnAbilityName: string = '';
   @State private returnSessionId: string = '';
   @State private returnToplevelId: string = '0';
+  @State private safeAreaTop: number = 0;
+  @State private safeAreaBottom: number = 0;
+  @State private safeAreaLeft: number = 0;
+  @State private safeAreaRight: number = 0;
+  @State private panelX: number = -1;
+  @State private panelY: number = -1;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private originalOrientation: window.Orientation = window.Orientation.UNSPECIFIED;
   private orientationRestored: boolean = false;
   private returnScheduled: boolean = false;
   private dragStartX: number = 0;
   private dragStartY: number = 0;
+  private panelDragStartX: number = 0;
+  private panelDragStartY: number = 0;
+  private readonly configPanelWidth: number = 280;
   private readonly groups: GroupDisplayInfo[] = [
     { key: 'direction', label: '方向', color: '#4CAF50' },
     { key: 'leftTrigger', label: 'LT', color: '#FFB74D' },
@@ -98,16 +108,48 @@ struct InputLayoutEditor {
     this.resumeWineAbility();
   }
 
-  /** Same full-screen editor contract as VintagePomelo's ButtonLayoutEditor. */
+  /** Same full-screen landscape editor contract as VintagePomelo's ButtonLayoutEditor. */
   private async enterImmersive(): Promise<void> {
     try {
       const editorWindow = await window.getLastWindow(this.context);
       this.originalOrientation = editorWindow.getPreferredOrientation();
+      await editorWindow.setPreferredOrientation(window.Orientation.AUTO_ROTATION_LANDSCAPE_RESTRICTED);
       await editorWindow.setWindowLayoutFullScreen(true);
-      await editorWindow.setSpecificSystemBarEnabled('status', false);
-      await editorWindow.setSpecificSystemBarEnabled('navigationIndicator', false);
+      try {
+        await editorWindow.setSpecificSystemBarEnabled('status', false);
+        await editorWindow.setSpecificSystemBarEnabled('navigationIndicator', false);
+      } catch (_) {
+        await editorWindow.setWindowSystemBarProperties({
+          statusBarColor: '#00000000',
+          navigationBarColor: '#00000000',
+          isStatusBarLightIcon: true,
+          isNavigationBarLightIcon: true
+        });
+      }
+      this.refreshSafeAreas(editorWindow);
+      // Preferred-orientation completion can precede the final avoid-area
+      // transaction. Refresh once more after the landscape frame settles.
+      setTimeout((): void => { this.refreshSafeAreas(editorWindow); }, 180);
     } catch (_) {
       // The editor remains usable on devices that reject one of the immersive calls.
+    }
+  }
+
+  private refreshSafeAreas(editorWindow: window.Window): void {
+    try {
+      const systemAvoid = editorWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
+      const cutoutAvoid = editorWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_CUTOUT);
+      const navigationAvoid = editorWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
+      this.safeAreaTop = Math.max(systemAvoid.topRect.height, cutoutAvoid.topRect.height);
+      this.safeAreaBottom = Math.max(systemAvoid.bottomRect.height, cutoutAvoid.bottomRect.height,
+        navigationAvoid.bottomRect.height);
+      this.safeAreaLeft = Math.max(systemAvoid.leftRect.width, cutoutAvoid.leftRect.width);
+      this.safeAreaRight = Math.max(systemAvoid.rightRect.width, cutoutAvoid.rightRect.width);
+    } catch (_) {
+      this.safeAreaTop = 0;
+      this.safeAreaBottom = 0;
+      this.safeAreaLeft = 0;
+      this.safeAreaRight = 0;
     }
   }
 
@@ -116,8 +158,42 @@ struct InputLayoutEditor {
     this.orientationRestored = true;
     try {
       const editorWindow = await window.getLastWindow(this.context);
-      // As in VintagePomelo, the destination Ability owns its system bars.
       await editorWindow.setPreferredOrientation(this.originalOrientation);
+      try {
+        await editorWindow.setWindowLayoutFullScreen(true);
+      } catch (_) {
+      }
+      try {
+        await editorWindow.setWindowSystemBarEnable(['status']);
+      } catch (_) {
+      }
+      try {
+        await editorWindow.setSpecificSystemBarEnabled('status', true);
+      } catch (_) {
+      }
+      try {
+        await editorWindow.setSpecificSystemBarEnabled('navigationIndicator', false);
+      } catch (_) {
+      }
+      try {
+        const settings = AppSettingsStore.getInstance().getGlobalSettings();
+        let useLightIcons = settings.themeMode === ThemeMode.DARK;
+        if (settings.themeMode === ThemeMode.SYSTEM) {
+          useLightIcons = this.context.config.colorMode ===
+            ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
+        }
+        await editorWindow.setWindowSystemBarProperties({
+          statusBarColor: '#00000000',
+          navigationBarColor: '#00000000',
+          isStatusBarLightIcon: useLightIcons,
+          isNavigationBarLightIcon: useLightIcons
+        });
+      } catch (_) {
+      }
+      this.safeAreaTop = 0;
+      this.safeAreaBottom = 0;
+      this.safeAreaLeft = 0;
+      this.safeAreaRight = 0;
     } catch (_) {
     }
   }
@@ -162,7 +238,7 @@ struct InputLayoutEditor {
     this.profile = {
       id: this.profile.id,
       name: this.profile.name,
-      schemaVersion: 4,
+      schemaVersion: 5,
       virtualKeyConfig: cloneVirtualKeyConfig(config),
       layoutLandscape: cloneGamepadLayout(landscape),
       layoutPortrait: cloneGamepadLayout(portrait, DEFAULT_GAMEPAD_LAYOUT_PORTRAIT),
@@ -202,7 +278,10 @@ struct InputLayoutEditor {
       key === 'rightBumper' || key === 'rightTrigger') {
       return [Math.max(48, 56 * config.buttonSize / 100), Math.max(48, 40 * config.buttonSize / 100)];
     }
-    return [config.showButtonMenu ? 35 * config.buttonSize / 100 : 0, 35 * config.buttonSize / 100];
+    const count = (config.showButtonMenu ? 1 : 0) + (config.showButtonStart ? 1 : 0);
+    const buttonSize = 35 * config.buttonSize / 100;
+    if (count === 0) return [48, Math.max(48, buttonSize)];
+    return [Math.max(48, count * buttonSize + (count - 1) * 12), Math.max(48, buttonSize)];
   }
 
   private moveGroup(key: ButtonGroupKey, centerX: number, centerY: number): void {
@@ -239,6 +318,31 @@ struct InputLayoutEditor {
     const next = cloneVirtualKeyConfig(this.config());
     mutator(next);
     this.replace(next);
+  }
+
+  private panelPositionX(): number {
+    if (this.panelX >= 0) return this.panelX;
+    return clamp(16, 8, Math.max(8, this.previewW - this.configPanelWidth - 8));
+  }
+
+  private panelPositionY(): number {
+    return this.panelY >= 0 ? this.panelY : 64;
+  }
+
+  private beginPanelDrag(): void {
+    this.panelX = this.panelPositionX();
+    this.panelY = this.panelPositionY();
+    this.panelDragStartX = this.panelX;
+    this.panelDragStartY = this.panelY;
+  }
+
+  private movePanel(offsetX: number, offsetY: number): void {
+    const maxX = Math.max(8, this.previewW - this.configPanelWidth - 8);
+    // Keep the title bar reachable even when the scrollable body is taller
+    // than the current landscape viewport.
+    const maxY = Math.max(8, this.previewH - 52);
+    this.panelX = clamp(this.panelDragStartX + offsetX, 8, maxX);
+    this.panelY = clamp(this.panelDragStartY + offsetY, 8, maxY);
   }
 
   private reset(): void {
@@ -318,72 +422,89 @@ struct InputLayoutEditor {
 
   @Builder
   private ConfigPanel() {
-    Column({ space: 10 }) {
-      Row() {
-        Text('虚拟按键设置').fontSize(13).fontColor('#FFFFFFFF').fontWeight(FontWeight.Medium).layoutWeight(1)
-        Text('✕').fontSize(14).fontColor('#FFFF5252').onClick((): void => { this.showConfig = false; })
-      }.width('100%')
-      Text('方向控制').fontSize(11).fontColor('#FFFFFFAA').width('100%')
-      Row({ space: 8 }) {
-        this.ToggleChip('十字键', this.config().dpadMode === DirectionControlMode.DPAD, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.dpadMode = DirectionControlMode.DPAD; }))
-        this.ToggleChip('摇杆', this.config().dpadMode === DirectionControlMode.JOYSTICK, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.dpadMode = DirectionControlMode.JOYSTICK; }))
-        if (this.config().dpadMode === DirectionControlMode.JOYSTICK) {
-          this.ToggleChip('8 方向', this.config().eightDirectionJoystick, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.eightDirectionJoystick = !config.eightDirectionJoystick; }))
+    Scroll() {
+      Column({ space: 10 }) {
+        Row() {
+          Row({ space: 7 }) {
+            Text('::').fontSize(12).fontColor('#FF64B5F6').fontWeight(FontWeight.Bold)
+            Text('虚拟按键设置').fontSize(13).fontColor('#FFFFFFFF').fontWeight(FontWeight.Medium)
+          }
+          .layoutWeight(1)
+          Text('✕').fontSize(14).fontColor('#FFFF5252').onClick((): void => { this.showConfig = false; })
         }
-      }.width('100%')
-      Text('按键配色').fontSize(11).fontColor('#FFFFFFAA').width('100%')
-      Row({ space: 8 }) {
-        this.ToggleChip('蓝色', this.config().colorScheme === VirtualKeyColorScheme.DEFAULT, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.colorScheme = VirtualKeyColorScheme.DEFAULT; }))
-        this.ToggleChip('高对比白色', this.config().colorScheme === VirtualKeyColorScheme.WHITE, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.colorScheme = VirtualKeyColorScheme.WHITE; }))
-      }.width('100%')
-      this.SliderRow('方向大小', this.config().joystickSize, 50, 200, '#FF4CAF50', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.joystickSize = value; }))
-      if (this.config().dpadMode === DirectionControlMode.JOYSTICK) {
-        this.SliderRow('摇杆死区', this.config().joystickDeadzone, 5, 50, '#FF66BB6A', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.joystickDeadzone = value; }))
-      }
-      Text('右摇杆视角').fontSize(11).fontColor('#FFFFFFAA').width('100%')
-      Row({ space: 8 }) {
-        this.ToggleChip('显示右摇杆', this.config().showRightJoystick,
-          (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showRightJoystick = !config.showRightJoystick; }))
-      }.width('100%')
-      if (this.config().showRightJoystick) {
+        .width('100%')
+        .height(32)
+        .gesture(PanGesture({ fingers: 1 })
+          .onActionStart((): void => { this.beginPanelDrag(); })
+          .onActionUpdate((event: GestureEvent): void => { this.movePanel(event.offsetX, event.offsetY); }))
+        Text('方向控制').fontSize(11).fontColor('#FFFFFFAA').width('100%')
         Row({ space: 8 }) {
-          this.ToggleChip('鼠标视角', this.config().rightJoystickOutputMode === RightJoystickOutputMode.MOUSE,
-            (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.rightJoystickOutputMode = RightJoystickOutputMode.MOUSE; }))
-          this.ToggleChip('四向按键', this.config().rightJoystickOutputMode === RightJoystickOutputMode.KEYS,
-            (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.rightJoystickOutputMode = RightJoystickOutputMode.KEYS; }))
+          this.ToggleChip('十字键', this.config().dpadMode === DirectionControlMode.DPAD, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.dpadMode = DirectionControlMode.DPAD; }))
+          this.ToggleChip('摇杆', this.config().dpadMode === DirectionControlMode.JOYSTICK, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.dpadMode = DirectionControlMode.JOYSTICK; }))
+          if (this.config().dpadMode === DirectionControlMode.JOYSTICK) {
+            this.ToggleChip('8 方向', this.config().eightDirectionJoystick, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.eightDirectionJoystick = !config.eightDirectionJoystick; }))
+          }
         }.width('100%')
-        this.SliderRow('右摇杆大小', this.config().rightJoystickSize, 60, 200, '#FF8BC34A',
-          (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.rightJoystickSize = value; }))
-        this.SliderRow('右摇杆死区', this.config().rightJoystickDeadzone, 0, 50, '#FF9CCC65',
-          (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.rightJoystickDeadzone = value; }))
-        if (this.config().rightJoystickOutputMode === RightJoystickOutputMode.MOUSE) {
-          this.SliderRow('视角灵敏度', this.config().rightJoystickSensitivity, 25, 300, '#FFAED581',
-            (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.rightJoystickSensitivity = value; }))
+        Text('按键配色').fontSize(11).fontColor('#FFFFFFAA').width('100%')
+        Row({ space: 8 }) {
+          this.ToggleChip('蓝色', this.config().colorScheme === VirtualKeyColorScheme.DEFAULT, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.colorScheme = VirtualKeyColorScheme.DEFAULT; }))
+          this.ToggleChip('高对比白色', this.config().colorScheme === VirtualKeyColorScheme.WHITE, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.colorScheme = VirtualKeyColorScheme.WHITE; }))
+        }.width('100%')
+        this.SliderRow('方向大小', this.config().joystickSize, 50, 200, '#FF4CAF50', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.joystickSize = value; }))
+        if (this.config().dpadMode === DirectionControlMode.JOYSTICK) {
+          this.SliderRow('摇杆死区', this.config().joystickDeadzone, 5, 50, '#FF66BB6A', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.joystickDeadzone = value; }))
         }
+        Text('右摇杆视角').fontSize(11).fontColor('#FFFFFFAA').width('100%')
+        Row({ space: 8 }) {
+          this.ToggleChip('显示右摇杆', this.config().showRightJoystick,
+            (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showRightJoystick = !config.showRightJoystick; }))
+        }.width('100%')
+        if (this.config().showRightJoystick) {
+          Row({ space: 8 }) {
+            this.ToggleChip('鼠标视角', this.config().rightJoystickOutputMode === RightJoystickOutputMode.MOUSE,
+              (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.rightJoystickOutputMode = RightJoystickOutputMode.MOUSE; }))
+            this.ToggleChip('四向按键', this.config().rightJoystickOutputMode === RightJoystickOutputMode.KEYS,
+              (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.rightJoystickOutputMode = RightJoystickOutputMode.KEYS; }))
+          }.width('100%')
+          this.SliderRow('右摇杆大小', this.config().rightJoystickSize, 60, 200, '#FF8BC34A',
+            (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.rightJoystickSize = value; }))
+          this.SliderRow('右摇杆死区', this.config().rightJoystickDeadzone, 0, 50, '#FF9CCC65',
+            (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.rightJoystickDeadzone = value; }))
+          if (this.config().rightJoystickOutputMode === RightJoystickOutputMode.MOUSE) {
+            this.SliderRow('视角灵敏度', this.config().rightJoystickSensitivity, 25, 300, '#FFAED581',
+              (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.rightJoystickSensitivity = value; }))
+          }
+        }
+        this.SliderRow('按键大小', this.config().buttonSize, 50, 200, '#FF2196F3', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.buttonSize = value; }))
+        this.SliderRow('方向透明', this.config().joystickTransparency, 0, 100, '#FF4CAF50', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.joystickTransparency = value; }))
+        this.SliderRow('按键透明', this.config().transparency, 0, 100, '#FF2196F3', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.transparency = value; }))
+        Text('按键映射与自由按键在应用设置中的“编辑按键映射与自由按键”里配置。').fontSize(10).fontColor('#FFFFFF88').width('100%')
+        Text('显示按键').fontSize(11).fontColor('#FFFFFFAA').width('100%')
+        Column({ space: 6 }) {
+          Row({ space: 6 }) {
+            this.ToggleChip('A', this.config().showButtonA, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonA = !config.showButtonA; }))
+            this.ToggleChip('B', this.config().showButtonB, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonB = !config.showButtonB; }))
+            this.ToggleChip('X', this.config().showButtonX, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonX = !config.showButtonX; }))
+            this.ToggleChip('Y', this.config().showButtonY, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonY = !config.showButtonY; }))
+            this.ToggleChip('LB', this.config().showButtonL, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonL = !config.showButtonL; }))
+            this.ToggleChip('RB', this.config().showButtonR, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonR = !config.showButtonR; }))
+          }.width('100%')
+          Row({ space: 6 }) {
+            this.ToggleChip('菜单', this.config().showButtonMenu, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonMenu = !config.showButtonMenu; }))
+            this.ToggleChip('Start', this.config().showButtonStart, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonStart = !config.showButtonStart; }))
+            this.ToggleChip('LT', this.config().showButtonShift, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonShift = !config.showButtonShift; }))
+            this.ToggleChip('RT', this.config().showButtonCtrl, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonCtrl = !config.showButtonCtrl; }))
+          }.width('100%')
+        }.width('100%')
       }
-      this.SliderRow('按键大小', this.config().buttonSize, 50, 200, '#FF2196F3', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.buttonSize = value; }))
-      this.SliderRow('方向透明', this.config().joystickTransparency, 0, 100, '#FF4CAF50', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.joystickTransparency = value; }))
-      this.SliderRow('按键透明', this.config().transparency, 0, 100, '#FF2196F3', (value: number): void => this.updateConfig((config: VirtualKeyConfig): void => { config.transparency = value; }))
-      Text('按键映射与自由按键在应用设置中的“编辑按键映射与自由按键”里配置。').fontSize(10).fontColor('#FFFFFF88').width('100%')
-      Text('显示按键').fontSize(11).fontColor('#FFFFFFAA').width('100%')
-      Column({ space: 6 }) {
-        Row({ space: 6 }) {
-          this.ToggleChip('A', this.config().showButtonA, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonA = !config.showButtonA; }))
-          this.ToggleChip('B', this.config().showButtonB, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonB = !config.showButtonB; }))
-          this.ToggleChip('X', this.config().showButtonX, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonX = !config.showButtonX; }))
-          this.ToggleChip('Y', this.config().showButtonY, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonY = !config.showButtonY; }))
-          this.ToggleChip('LB', this.config().showButtonL, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonL = !config.showButtonL; }))
-          this.ToggleChip('RB', this.config().showButtonR, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonR = !config.showButtonR; }))
-        }.width('100%')
-        Row({ space: 6 }) {
-          this.ToggleChip('菜单', this.config().showButtonMenu, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonMenu = !config.showButtonMenu; }))
-          this.ToggleChip('LT', this.config().showButtonShift, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonShift = !config.showButtonShift; }))
-          this.ToggleChip('RT', this.config().showButtonCtrl, (): void => this.updateConfig((config: VirtualKeyConfig): void => { config.showButtonCtrl = !config.showButtonCtrl; }))
-        }.width('100%')
-      }.width('100%')
+      .width('100%').padding(14)
     }
-    .width(260).padding(14).backgroundColor('#EE111111').borderRadius(14).border({ width: 1, color: '#44FFFFFF' })
-    .position({ x: 16, y: 64 }).zIndex(100).id('vintage-layout-config')
+    .width(this.configPanelWidth)
+    .constraintSize({ maxHeight: Math.max(180, this.previewH - 80) })
+    .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring)
+    .backgroundColor('#EE111111').borderRadius(14).border({ width: 1, color: '#44FFFFFF' })
+    .position({ x: this.panelPositionX(), y: this.panelPositionY() }).zIndex(100).id('vintage-layout-config')
   }
 
   @Builder
@@ -399,8 +520,12 @@ struct InputLayoutEditor {
   }
 
   build() {
-    Stack() {
-      Column().width('100%').height('100%').backgroundColor('#FF1A1A2E')
+    Column() {
+      if (this.safeAreaTop > 0) {
+        Row().width('100%').height(this.safeAreaTop + 'px').backgroundColor('#FF000000')
+      }
+      Stack() {
+        Column().width('100%').height('100%').backgroundColor('#FF1A1A2E')
       // ArkUI keeps a custom component instance alive even when nested fields
       // inside an object-valued @Prop are replaced. Key the editor-only preview
       // by revision so the rendered control and its drag handle stay aligned.
@@ -429,13 +554,20 @@ struct InputLayoutEditor {
         this.FloatingButton('⊞', '#FF64B5F6', (): void => { this.showConfig = !this.showConfig; }, 'input-layout-config')
         this.FloatingButton('✓', '#FF81C784', () => { this.save(); }, 'input-layout-save')
       }.position({ x: '50%', y: 16 }).translate({ x: '-50%' })
-      if (this.showConfig) this.ConfigPanel()
+        if (this.showConfig) this.ConfigPanel()
+      }
+      .width('100%').layoutWeight(1).backgroundColor('#FF000000')
+      .onAreaChange((_oldValue: Area, area: Area): void => {
+        this.previewW = area.width as number;
+        this.previewH = area.height as number;
+        this.isPortrait = this.previewH > this.previewW;
+      })
     }
     .width('100%').height('100%').backgroundColor('#FF000000')
-    .onAreaChange((_oldValue: Area, area: Area): void => {
-      this.previewW = area.width as number;
-      this.previewH = area.height as number;
-      this.isPortrait = this.previewH > this.previewW;
+    .padding({
+      left: this.safeAreaLeft + 'px',
+      right: this.safeAreaRight + 'px',
+      bottom: this.safeAreaBottom + 'px'
     })
   }
 }

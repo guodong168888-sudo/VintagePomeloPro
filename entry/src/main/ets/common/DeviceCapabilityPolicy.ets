@@ -1,6 +1,7 @@
 import deviceInfo from '@ohos.deviceInfo';
 import { window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { ScreenOrientationSetting } from '../model/AppModels';
 
 const DOMAIN = 0x0000;
 
@@ -33,6 +34,20 @@ export class DeviceCapabilityPolicy {
       hilog.info(DOMAIN, tag, 'Phone auto rotation enabled');
     }).catch((error: Error) => {
       hilog.warn(DOMAIN, tag, 'Phone auto rotation unavailable: %{public}s', JSON.stringify(error));
+    });
+  }
+
+  static applyDesktopOrientation(target: window.Window, setting: ScreenOrientationSetting, tag: string): Promise<void> {
+    let orientation: window.Orientation = window.Orientation.AUTO_ROTATION_LANDSCAPE_RESTRICTED;
+    if (setting === ScreenOrientationSetting.LANDSCAPE) {
+      orientation = window.Orientation.LANDSCAPE;
+    } else if (setting === ScreenOrientationSetting.PORTRAIT) {
+      orientation = window.Orientation.PORTRAIT;
+    }
+    return target.setPreferredOrientation(orientation).then(() => {
+      hilog.info(DOMAIN, tag, 'Desktop orientation applied: %{public}s', setting);
+    }).catch((error: Error) => {
+      hilog.warn(DOMAIN, tag, 'Desktop orientation unavailable: %{public}s', JSON.stringify(error));
     });
   }
 }

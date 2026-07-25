@@ -58,6 +58,7 @@ export class AppSettingsStore {
     const current = this.globalSettings;
     this.globalSettings = {
       defaultDisplayMode: DisplayMode.DESKTOP,
+      desktopOrientation: current.desktopOrientation,
       desktopInputProfileId: current.desktopInputProfileId,
       viewMode: current.viewMode,
       themeMode: current.themeMode,
@@ -103,7 +104,8 @@ export class AppSettingsStore {
       const stored = JSON.parse(raw) as GlobalSettings;
       const defaults = createDefaultGlobalSettings();
       this.globalSettings = {
-        defaultDisplayMode: stored.defaultDisplayMode ?? defaults.defaultDisplayMode,
+      defaultDisplayMode: stored.defaultDisplayMode ?? defaults.defaultDisplayMode,
+        desktopOrientation: stored.desktopOrientation ?? defaults.desktopOrientation,
         desktopInputProfileId: stored.desktopInputProfileId ?? defaults.desktopInputProfileId,
         viewMode: stored.viewMode ?? defaults.viewMode,
         themeMode: stored.themeMode ?? defaults.themeMode,
@@ -167,6 +169,7 @@ export class AppSettingsStore {
     const current = this.globalSettings;
     await this.saveGlobalSettings({
       defaultDisplayMode: current.defaultDisplayMode,
+      desktopOrientation: current.desktopOrientation,
       desktopInputProfileId: current.desktopInputProfileId,
       viewMode: value,
       themeMode: current.themeMode,
@@ -188,6 +191,7 @@ export class AppSettingsStore {
     const current = this.globalSettings;
     await this.saveGlobalSettings({
       defaultDisplayMode: value,
+      desktopOrientation: current.desktopOrientation,
       desktopInputProfileId: current.desktopInputProfileId,
       viewMode: current.viewMode,
       themeMode: current.themeMode,

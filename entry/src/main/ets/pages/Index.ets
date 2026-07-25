@@ -1,4 +1,4 @@
-import { common } from '@kit.AbilityKit';
+import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import { AppSearchBar } from '../components/SearchBar';
@@ -11,6 +11,7 @@ import {
   GlobalSettings,
   LaunchKind,
   RuntimeSession,
+  ThemeMode,
   ViewMode,
   normalizeLaunchPath
 } from '../model/AppModels';
@@ -26,6 +27,7 @@ import { InputProfileService } from '../service/InputProfileService';
 import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
 import { LengthMetrics } from '@kit.ArkUI';
+import deviceInfo from '@ohos.deviceInfo';
 import {
   DividerMode,
   DividerShowType,
@@ -34,7 +36,8 @@ import {
   HdsNavigationTitleMode,
   HdsTabs,
   HdsTabsController,
-  ScrollEffectType
+  ScrollEffectType,
+  hdsMaterial
 } from '@kit.UIDesignKit';
 
 type CatalogFilter = 'builtin' | 'windows' | 'running' | 'favorite';
@@ -43,9 +46,17 @@ const PHONE_NAV_BUILTIN: number = 0;
 const PHONE_NAV_WINDOWS: number = 1;
 const PHONE_NAV_FAVORITE: number = 2;
 const PHONE_NAV_RUNNING: number = 3;
+const DEVICE_SDK_API_VERSION: number = (() => {
+  try {
+    return deviceInfo.sdkApiVersion as number;
+  } catch (_) {
+    return 0;
+  }
+})();
+const SUPPORTS_HDS_FLOATING: boolean =
+  canIUse('SystemCapability.UIDesign.HDSComponent.Core') && DEVICE_SDK_API_VERSION >= 23;
 const HDS_MATERIAL_TYPE_IMMERSIVE: number = 101;
 const HDS_MATERIAL_LEVEL_EXQUISITE: number = 0;
-
 @Entry
 @Component
 struct Index {
@@ -88,12 +99,43 @@ struct Index {
     return DeviceCapabilityPolicy.isPhoneDevice() && this.viewportWidth > this.viewportHeight && this.viewportHeight > 0;
   }
 
+  private usesDarkAppearance(): boolean {
+    if (this.settings.themeMode === ThemeMode.DARK) return true;
+    if (this.settings.themeMode === ThemeMode.LIGHT) return false;
+    try {
+      return this.context.config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  private navigationTitleBackground(scrolled: boolean): string {
+    // Match VintagePomelo's HDS glass alpha. The page surface remains visible
+    // below the title instead of becoming a white opaque strip.
+    if (this.usesDarkAppearance()) return scrolled ? '#80121821' : '#26121821';
+    return scrolled ? '#99FFFFFF' : '#18FFFFFF';
+  }
+
+  private navigationControlBackground(): string {
+    return this.usesDarkAppearance() ? '#30FFFFFF' : '#28FFFFFF';
+  }
+
+  private navigationTitleColor(): string {
+    return this.usesDarkAppearance() ? '#F4F7FB' : '#182431';
+  }
+
   private contentPadding(): number {
     if (this.isPhoneLandscape()) return 12;
     if (this.breakpoint === 'xs') return 10;
     if (this.breakpoint === 'sm') return 16;
     if (this.breakpoint === 'md') return 20;
     return 28;
+  }
+
+  // The HDS title is an overlay. Put its height into the scroll content so
+  // the initial gap moves away with the first swipe instead of staying fixed.
+  private phoneTitleBarScrollInset(): number {
+    return this.isPhoneLandscape() ? 72 : 88;
   }
 
   aboutToAppear(): void {
@@ -179,7 +221,13 @@ struct Index {
 
   private pageBackgroundSource(): string {
     const value = this.settings.pageBackgroundUri;
-    if (value.startsWith('file://')) return value;
+    // DocumentViewPicker may return file://, datashare:// or another
+    // provider URI. Preserve provider schemes; blindly prefixing file://
+    // makes the selected image fail to load and leaves a solid white surface
+    // below the translucent HDS title bar.
+    if (value.indexOf('://') > 0) {
+      return value;
+    }
     return value.length > 0 ? 'file://' + value : '';
   }
 
@@ -290,7 +338,7 @@ struct Index {
     if (this.settings.viewMode === ViewMode.COMPACT) return '1fr';
     // VintagePomelo keeps cover cards in two columns on phones. A single
     // flexible column makes one icon fill almost the entire compact window.
-    if (this.isPhoneLandscape()) return '1fr 1fr 1fr';
+    if (this.isPhoneLandscape()) return '1fr 1fr';
     if (this.isPhone()) return '1fr 1fr';
     if (this.breakpoint === 'md') return '1fr 1fr';
     if (this.breakpoint === 'xl') return '1fr 1fr 1fr 1fr 1fr';
@@ -309,6 +357,14 @@ struct Index {
   }
 
   private compactGridColumns(): string {
+    if (this.isPhoneLandscape()) return '1fr 1fr';
+    if (this.isPhone()) return '1fr';
+    if (this.breakpoint === 'md') return '1fr 1fr';
+    if (this.breakpoint === 'xl') return '1fr 1fr 1fr';
+    return '1fr 1fr';
+  }
+
+  private largeGridColumns(): string {
     if (this.isPhoneLandscape()) return '1fr 1fr';
     if (this.isPhone()) return '1fr';
     if (this.breakpoint === 'md') return '1fr 1fr';
@@ -447,8 +503,8 @@ struct Index {
   }
 
   private phoneBottomInset(): number {
-    if (this.isPhoneLandscape()) return 92;
-    return this.isNarrowPhone() ? 108 : 116;
+    if (this.isPhoneLandscape()) return 72;
+    return this.isNarrowPhone() ? 80 : 84;
   }
 
   @Builder
@@ -539,7 +595,7 @@ struct Index {
       }
       .layoutWeight(1)
       .width('100%')
-      .scrollBar(BarState.Auto)
+      .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
     }
     .width(this.sidebarCollapsed ? 72 : 264)
@@ -619,30 +675,21 @@ struct Index {
 
   @Builder
   private AppGrid(items: AppDescriptor[]) {
-    if (this.settings.viewMode === ViewMode.LARGE) {
-      Column({ space: 8 }) {
-        ForEach(items, (app: AppDescriptor): void => {
+    Grid() {
+      ForEach(items, (app: AppDescriptor): void => {
+        GridItem() {
           this.CatalogCard(app)
-        }, (app: AppDescriptor): string => app.id)
-      }
-      .width('100%')
-      .padding({ left: 4, right: 4, top: 4, bottom: 12 })
-    } else {
-      Grid() {
-        ForEach(items, (app: AppDescriptor): void => {
-          GridItem() {
-            this.CatalogCard(app)
-          }
-          // Shadows extend beyond the card's measured bounds.  Without this
-          // inset Grid clips the last row's rounded bottom edge and shadow.
-          .padding({ left: 4, right: 4, top: 4, bottom: 12 })
-        }, (app: AppDescriptor): string => app.id)
-      }
-      .columnsTemplate(this.settings.viewMode === ViewMode.COMPACT ? this.compactGridColumns() : this.gridColumns())
-      .columnsGap(8)
-      .rowsGap(4)
-      .width('100%')
+        }
+        // Shadows extend beyond the card's measured bounds. Without this
+        // inset Grid clips the last row's rounded bottom edge and shadow.
+        .padding({ left: 4, right: 4, top: 4, bottom: 12 })
+      }, (app: AppDescriptor): string => app.id)
     }
+    .columnsTemplate(this.settings.viewMode === ViewMode.COMPACT ? this.compactGridColumns() :
+      (this.settings.viewMode === ViewMode.LARGE ? this.largeGridColumns() : this.gridColumns()))
+    .columnsGap(8)
+    .rowsGap(4)
+    .width('100%')
   }
 
   @Builder
@@ -676,12 +723,75 @@ struct Index {
       .justifyContent(FlexAlign.Start)
       // Keep the last row above the phone navigation gesture area and the
       // overlaid bottom bar. The extra inset is harmless on tablet layouts.
-      .padding({ top: 2, bottom: this.isPhone() ? this.phoneBottomInset() : 36 })
+      .padding({
+        top: this.isPhone() ? this.phoneTitleBarScrollInset() : 2,
+        bottom: this.isPhone() ? this.phoneBottomInset() : 36
+      })
     }
     .layoutWeight(1)
     .width('100%')
-    .scrollBar(BarState.Auto)
+    .scrollBar(BarState.Off)
     .id('library-scroll-' + filter)
+  }
+
+  @Builder
+  private EmptyLibraryState() {
+    Column({ space: 12 }) {
+      SymbolGlyph(this.emptyIcon()).fontSize(this.isNarrowPhone() ? 34 : 48)
+        .fontColor([$r('app.color.text_secondary')])
+      Text(this.emptyTitle()).fontSize(this.isNarrowPhone() ? 16 : 20)
+        .fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+      Text(this.emptyDescription()).fontSize(this.isNarrowPhone() ? 11 : 13)
+        .fontColor($r('app.color.text_secondary')).textAlign(TextAlign.Center)
+        .constraintSize({ maxWidth: this.isNarrowPhone() ? 240 : 420 })
+      if (this.emptyActionLabel()) {
+        Button(this.emptyActionLabel()).height(48).borderRadius(24).id('library-empty-action')
+          .onClick((): void => this.handleEmptyAction())
+      }
+    }
+    .layoutWeight(1)
+    .justifyContent(this.isPhone() ? FlexAlign.Start : FlexAlign.Center)
+    .padding({ top: this.isNarrowPhone() ? 18 : (this.breakpoint === 'sm' ? 30 : 0),
+      bottom: this.isNarrowPhone() ? 72 : (this.breakpoint === 'sm' ? 96 : 0) })
+  }
+
+  @Builder
+  private CatalogEmptyScroll(filter: CatalogFilter) {
+    Scroll(this.catalogScroller(filter)) {
+      Column() {
+        this.EmptyLibraryState()
+      }
+      .width('100%')
+      .constraintSize({ minHeight: '100%' })
+      .padding({
+        top: this.isPhone() ? this.phoneTitleBarScrollInset() : 2,
+        bottom: this.isPhone() ? this.phoneBottomInset() : 36
+      })
+    }
+    .layoutWeight(1)
+    .width('100%')
+    .scrollBar(BarState.Off)
+    .id('library-empty-scroll-' + filter)
+  }
+
+  @Builder
+  private WindowsRefreshContent() {
+    Refresh({ refreshing: $$this.scanning }) {
+      if (this.scanning) {
+        Row({ space: 10 }) {
+          LoadingProgress().width(20).height(20)
+          Text('正在扫描应用目录…').fontColor($r('app.color.text_secondary'))
+        }.layoutWeight(1).justifyContent(FlexAlign.Center)
+      } else if (this.visibleApps.length === 0) {
+        this.CatalogEmptyScroll('windows')
+      } else {
+        this.CatalogScroll(this.visibleApps, 'windows')
+      }
+    }
+    .layoutWeight(1)
+    .width('100%')
+    .onRefreshing((): void => { void this.rescan(); })
+    .id('windows-library-refresh')
   }
 
   @Builder
@@ -690,30 +800,17 @@ struct Index {
       if (!this.isPhone()) {
         this.Header()
       }
-      if (this.scanning) {
+      if (this.filter === 'windows') {
+        this.WindowsRefreshContent()
+      } else if (this.scanning) {
         Row({ space: 10 }) {
           LoadingProgress().width(20).height(20)
           Text('正在扫描应用目录…').fontColor($r('app.color.text_secondary'))
         }.margin({ top: this.isNarrowPhone() ? 12 : 22 })
       } else if (this.visibleApps.length === 0) {
-        Column({ space: 12 }) {
-          SymbolGlyph(this.emptyIcon()).fontSize(this.isNarrowPhone() ? 34 : 48).fontColor([$r('app.color.text_secondary')])
-          Text(this.emptyTitle()).fontSize(this.isNarrowPhone() ? 16 : 20).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
-          Text(this.emptyDescription()).fontSize(this.isNarrowPhone() ? 11 : 13).fontColor($r('app.color.text_secondary')).textAlign(TextAlign.Center)
-            .constraintSize({ maxWidth: this.isNarrowPhone() ? 240 : 420 })
-          if (this.emptyActionLabel()) {
-            Button(this.emptyActionLabel()).height(48).borderRadius(24).id('library-empty-action')
-              .onClick((): void => this.handleEmptyAction())
-          }
-        }
-        .layoutWeight(1)
-        .justifyContent(this.isPhone() ? FlexAlign.Start : FlexAlign.Center)
-        .padding({ top: this.isNarrowPhone() ? 18 : (this.breakpoint === 'sm' ? 30 : 0),
-          bottom: this.isNarrowPhone() ? 72 : (this.breakpoint === 'sm' ? 96 : 0) })
+        this.CatalogEmptyScroll(this.filter)
       } else if (this.filter === 'builtin') {
         this.CatalogScroll(this.visibleApps, 'builtin')
-      } else if (this.filter === 'windows') {
-        this.CatalogScroll(this.visibleApps, 'windows')
       } else if (this.filter === 'running') {
         this.CatalogScroll(this.visibleApps, 'running')
       } else {
@@ -725,15 +822,15 @@ struct Index {
     .padding({
       left: this.contentPadding(),
       right: this.contentPadding(),
-      top: this.isPhone() ? (this.isPhoneLandscape() ? 6 : 10) : 16
+      top: this.isPhone() ? 0 : 16
     })
   }
 
   @Builder
   private PhoneNavigationTab(label: string, icon: Resource, index: number) {
-    Column({ space: 3 }) {
+    Column({ space: 1 }) {
       SymbolGlyph(icon)
-        .fontSize(24)
+        .fontSize(20)
         .fontColor([this.phoneNavIndex === index ? $r('app.color.accent') : $r('app.color.text_secondary')])
       Text(label)
         .fontSize(10)
@@ -742,7 +839,10 @@ struct Index {
         .maxLines(1)
     }
     .width('100%')
-    .height(this.isPhoneLandscape() ? 48 : (this.isNarrowPhone() ? 58 : 60))
+    // Keep the custom content within the compact HDS tab slot. The previous
+    // 64vp slot became a 224px bar on the tablet density and made the bottom
+    // navigation look vertically misaligned.
+    .height(48)
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
     .id('library-nav-tab-' + index)
@@ -770,22 +870,18 @@ struct Index {
       this.PhoneNavigationContents()
     }
     .vertical(false)
+    .barHeight(48)
     .scrollable(false)
     .barOverlap(true)
     .divider({ mode: DividerMode.FOLLOW_SCROLL })
     .barBackgroundBlurStyle(BlurStyle.COMPONENT_THICK)
     .barFloatingStyle({
-      barBottomMargin: this.isPhoneLandscape() ? 12 : (this.isNarrowPhone() ? 14 : 18),
-      barSideMargin: this.isPhoneLandscape() ? 24 : (this.isNarrowPhone() ? 10 : 16),
-      barWidth: {
-        smallWidth: 320,
-        mediumWidth: 328,
-        largeWidth: 328
-      },
+      barBottomMargin: this.isPhoneLandscape() ? 10 : 14,
+      barSideMargin: this.isPhoneLandscape() ? 24 : 20,
       gradientMask: { maskColor: $r('app.color.page_background') },
       systemMaterialEffect: {
-        materialType: HDS_MATERIAL_TYPE_IMMERSIVE,
-        materialLevel: HDS_MATERIAL_LEVEL_EXQUISITE
+        materialType: hdsMaterial.MaterialType.ADAPTIVE,
+        materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
       },
       adaptToHandedness: false,
       thermoCtrl: true
@@ -797,7 +893,7 @@ struct Index {
       this.selectFilter(target, false);
     })
     .width('100%')
-    .height(this.isPhoneLandscape() ? 84 : (this.isNarrowPhone() ? 104 : 112))
+    .height(this.isPhoneLandscape() ? 72 : 80)
     .id('library-bottom-bar')
   }
 
@@ -812,42 +908,52 @@ struct Index {
       style: {
         scrollEffectOpts: {
           enableScrollEffect: true,
-          scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR,
+          scrollEffectType: SUPPORTS_HDS_FLOATING ? ScrollEffectType.IMMERSIVE_GRADIENT_BLUR : ScrollEffectType.GRADUAL_BLUR,
           blurEffectiveStartOffset: LengthMetrics.vp(0),
-          blurEffectiveEndOffset: LengthMetrics.vp(this.isPhoneLandscape() ? 56 : 84)
+          blurEffectiveEndOffset: LengthMetrics.vp(SUPPORTS_HDS_FLOATING ? 96 : 68)
         },
         originalStyle: {
+          backgroundStyle: {
+            backgroundColor: this.navigationTitleBackground(false)
+          },
           contentStyle: {
             titleStyle: {
               mainTitleColor: $r('app.color.text_primary'),
               subTitleColor: $r('app.color.text_secondary')
             },
             menuStyle: {
+              backgroundColor: this.navigationControlBackground(),
               iconColor: $r('app.color.text_primary')
             },
             backIconStyle: {
+              backgroundColor: this.navigationControlBackground(),
               iconColor: $r('app.color.text_primary')
             }
           }
         },
         scrollEffectStyle: {
+          backgroundStyle: {
+            backgroundColor: this.navigationTitleBackground(true)
+          },
           contentStyle: {
             titleStyle: {
               mainTitleColor: $r('app.color.text_primary'),
               subTitleColor: $r('app.color.text_secondary')
             },
             menuStyle: {
+              backgroundColor: this.navigationControlBackground(),
               iconColor: $r('app.color.text_primary')
             },
             backIconStyle: {
+              backgroundColor: this.navigationControlBackground(),
               iconColor: $r('app.color.text_primary')
             }
           }
         },
-        systemMaterialEffect: {
+        systemMaterialEffect: SUPPORTS_HDS_FLOATING ? {
           materialType: HDS_MATERIAL_TYPE_IMMERSIVE,
           materialLevel: HDS_MATERIAL_LEVEL_EXQUISITE
-        }
+        } : undefined
       },
       content: {
         title: {
@@ -858,11 +964,14 @@ struct Index {
         divider: { showType: DividerShowType.OFF }
       },
       avoidLayoutSafeArea: true,
-      enableComponentSafeArea: true
     })
     .titleMode(HdsNavigationTitleMode.MINI)
     .hideBackButton(true)
     .hideToolBar(true)
+    .systemBarStyle(
+      { statusBarContentColor: this.navigationTitleColor() },
+      { statusBarContentColor: this.navigationTitleColor() }
+    )
     .width('100%')
     .height('100%')
     .backgroundColor('#00FFFFFF')
@@ -879,7 +988,7 @@ struct Index {
         Image(this.pageBackgroundSource())
           .width('100%').height('100%')
           .objectFit(ImageFit.Cover)
-          .opacity(0.34)
+          .opacity(0.72)
           .hitTestBehavior(HitTestMode.None)
           .id('library-page-background')
       }

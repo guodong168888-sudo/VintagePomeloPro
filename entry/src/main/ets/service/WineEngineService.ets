@@ -8,9 +8,11 @@ import {
   EngineState,
   NativeLaunchResult,
   NativeProcessInfo,
+  ScreenOrientationSetting,
   WinePresentationMode,
   canTransitionEngineState
 } from '../model/AppModels';
+import { AppSettingsStore } from './AppSettingsStore';
 import { WineWindowManager } from './WineWindowManager';
 
 const DOMAIN = 0x0000;
@@ -24,10 +26,14 @@ const SOCK = FILES_BASE + '/.wine/wine-wayland';
 const PREFIX_MARKER = WINE_ROOT + '/share/wine/wine.inf';
 const RUNTIME_VERSION_RAWFILE = 'wine_runtime.version';
 const RUNTIME_VERSION_MARKER = WINE_ROOT + '/.winehua-runtime-version';
-// Native wineboot allows up to 3 minutes, followed by a 60 second prefix
-// flush window. Keep a margin so slow ARM first-run initialization is not
-// reported as a failure while the desktop is still being prepared.
-const ENGINE_READY_TIMEOUT_MS = 6 * 60 * 1000;
+// Runtime extraction and prefix configuration are versioned independently.
+// A new wine-data.zip may require wineboot to refresh an existing prefix, but
+// the user's prefix and Download games must remain intact.
+const PREFIX_RUNTIME_VERSION_MARKER = FILES_BASE + '/.wine/.winehua-prefix-runtime-version';
+// Native wineboot allows up to 8 minutes on slow ARM devices, followed by a
+// registry flush window. Keep a margin so a valid first-run/update operation
+// is not reported as failed while it is still making progress.
+const ENGINE_READY_TIMEOUT_MS = 10 * 60 * 1000;
 
 interface RuntimePathRequirement {
   path: string;
@@ -78,6 +84,8 @@ export class WineEngineService {
   private waiters: Array<(ready: boolean) => void> = [];
   private callbackInstalled: boolean = false;
   private restartPromise: Promise<boolean> | null = null;
+  private prefixRefreshRequired: boolean = false;
+  private pendingPrefixVersion: Uint8Array = new Uint8Array(0);
 
   static getInstance(): WineEngineService {
     if (!WineEngineService.instance) WineEngineService.instance = new WineEngineService();
@@ -140,15 +148,29 @@ export class WineEngineService {
     this.setState(EngineState.PREPARING, '正在准备 Wine 引擎');
 
     try {
-      await this.ensureRuntimeInstalled();
+      const bundledRuntimeVersion = this.getBundledRuntimeVersion();
+      const prefixRefreshRequired = await this.ensureRuntimeInstalled(bundledRuntimeVersion);
+      this.prefixRefreshRequired = prefixRefreshRequired;
+      this.pendingPrefixVersion = prefixRefreshRequired ? bundledRuntimeVersion : new Uint8Array(0);
       WineWindowManager.getInstance().setPresentationMode(presentationMode);
+      if (presentationMode !== WinePresentationMode.MANAGED_WINDOWS) {
+        const orientation = AppSettingsStore.getInstance().getGlobalSettings().desktopOrientation
+          ?? ScreenOrientationSetting.SENSOR_LANDSCAPE;
+        // This must happen before startServer/launchClient. A later ArkUI
+        // window resize can correct the surface, but cannot prevent the first
+        // Wayland desktop frame from being created at the old orientation.
+        WineWindowManager.getInstance().prepareOutputForOrientation(orientation);
+      }
       const serverReady = testNapi.startServer(SOCK) as boolean;
       if (!serverReady) {
         this.setState(EngineState.ERROR, 'Wayland 服务启动失败');
         this.finishWaiters(false);
         return false;
       }
-      testNapi.launchClient(BOX64, [], SOCK, WINE_BIN + ':' + WINE_LIB, homeDirectory);
+      // The native launcher runs wineboot --init for a new prefix and
+      // wineboot --update when this runtime version has not configured it yet.
+      testNapi.launchClient(BOX64, [], SOCK, WINE_BIN + ':' + WINE_LIB,
+        homeDirectory, prefixRefreshRequired);
       return this.waitForReady();
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'ensureReady failed: %{public}s', JSON.stringify(error));
@@ -286,6 +308,18 @@ export class WineEngineService {
     const processScoped = separator > 0;
     const value = separator >= 0 ? raw.substring(separator + 1) : raw;
     if (value === 'wine-ready' || value === 'wine-running') {
+      if (value === 'wine-ready' && this.prefixRefreshRequired) {
+        // Do not claim a refreshed prefix until native wineboot completed and
+        // the marker is durable. A failed write deliberately leaves the
+        // marker stale so the next launch retries the refresh.
+        if (!this.writeVersionMarker(PREFIX_RUNTIME_VERSION_MARKER, this.pendingPrefixVersion)) {
+          this.setState(EngineState.ERROR, 'Wine 环境配置结果保存失败');
+          this.finishWaiters(false);
+          return;
+        }
+        this.prefixRefreshRequired = false;
+        this.pendingPrefixVersion = new Uint8Array(0);
+      }
       this.setState(EngineState.READY, value === 'wine-running' ? 'Windows 程序运行中' : 'Wine 引擎已就绪');
       this.finishWaiters(true);
     } else if (value === 'wineserver-starting' || value === 'wineboot-starting') {
@@ -334,13 +368,13 @@ export class WineEngineService {
     return this.context.resourceManager.getRawFileContentSync(RUNTIME_VERSION_RAWFILE);
   }
 
-  private runtimeVersionMatches(expected: Uint8Array): boolean {
-    if (expected.byteLength === 0 || !pathExists(RUNTIME_VERSION_MARKER)) return false;
+  private versionMarkerMatches(path: string, expected: Uint8Array): boolean {
+    if (expected.byteLength === 0 || !pathExists(path)) return false;
     let input: fs.File | null = null;
     try {
-      const stat = fs.statSync(RUNTIME_VERSION_MARKER);
+      const stat = fs.statSync(path);
       if (stat.size !== expected.byteLength) return false;
-      input = fs.openSync(RUNTIME_VERSION_MARKER, fs.OpenMode.READ_ONLY);
+      input = fs.openSync(path, fs.OpenMode.READ_ONLY);
       const buffer = new ArrayBuffer(expected.byteLength);
       const length = fs.readSync(input.fd, buffer, { length: expected.byteLength });
       if (length !== expected.byteLength) return false;
@@ -358,27 +392,61 @@ export class WineEngineService {
     }
   }
 
-  private writeRuntimeVersion(expected: Uint8Array): void {
-    const output = fs.openSync(RUNTIME_VERSION_MARKER,
-      fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC);
+  private runtimeVersionMatches(expected: Uint8Array): boolean {
+    return this.versionMarkerMatches(RUNTIME_VERSION_MARKER, expected);
+  }
+
+  private prefixVersionMatches(expected: Uint8Array): boolean {
+    return this.versionMarkerMatches(PREFIX_RUNTIME_VERSION_MARKER, expected);
+  }
+
+  private writeVersionMarker(path: string, expected: Uint8Array): boolean {
+    let output: fs.File | null = null;
     try {
+      output = fs.openSync(path,
+      fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC);
       const buffer = new ArrayBuffer(expected.byteLength);
       new Uint8Array(buffer).set(expected);
       fs.writeSync(output.fd, buffer, { length: expected.byteLength });
+      return true;
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'write version marker failed path=%{public}s error=%{public}s',
+        path, JSON.stringify(error));
+      return false;
     } finally {
-      fs.closeSync(output);
+      if (output) {
+        try { fs.closeSync(output); } catch (_) {}
+      }
     }
   }
 
-  private async ensureRuntimeInstalled(): Promise<void> {
-    const bundledVersion = this.getBundledRuntimeVersion();
+  private async ensureRuntimeInstalled(bundledVersion: Uint8Array): Promise<boolean> {
     const missingBefore = this.getMissingRuntimePaths();
     const versionMatches = this.runtimeVersionMatches(bundledVersion);
-    if (missingBefore.length === 0 && versionMatches) return;
+    const prefixMatches = this.prefixVersionMatches(bundledVersion);
+    if (missingBefore.length === 0 && versionMatches) {
+      if (prefixMatches) return false;
+      // Upgrade path for versions released before the prefix marker existed:
+      // when the extracted runtime itself did not change and the prefix is
+      // complete, adopt it as the baseline. Running wineboot --update here
+      // would make every existing user pay a multi-minute migration for no
+      // runtime change. A future runtime-content hash change still refreshes.
+      let prefixInitialized = false;
+      try { prefixInitialized = testNapi.checkWinePrefix() as boolean; } catch (_) {}
+      if (prefixInitialized) {
+        hilog.info(DOMAIN, TAG, 'adopting initialized prefix for unchanged runtime version');
+        if (!this.writeVersionMarker(PREFIX_RUNTIME_VERSION_MARKER, bundledVersion)) {
+          throw new Error('Unable to persist Wine prefix baseline marker');
+        }
+        return false;
+      }
+      return true;
+    }
     if (!this.context) throw new Error('Ability context unavailable');
     hilog.warn(DOMAIN, TAG,
-      'runtime refresh required, extracting wine-data.zip, versionMatch=%{public}s missing=%{public}s',
-      versionMatches ? 'true' : 'false', missingBefore.join(','));
+      'runtime refresh required, extracting wine-data.zip, runtimeVersionMatch=%{public}s '
+        + 'prefixVersionMatch=%{public}s missing=%{public}s',
+      versionMatches ? 'true' : 'false', prefixMatches ? 'true' : 'false', missingBefore.join(','));
     const rawFd = this.context.resourceManager.getRawFdSync('wine-data.zip');
     const temporaryZip = FILES_BASE + '/wine-data.zip';
     try {
@@ -403,10 +471,13 @@ export class WineEngineService {
       if (missingAfter.length > 0) {
         throw new Error('Wine runtime incomplete after extract: ' + missingAfter.join(', '));
       }
-      this.writeRuntimeVersion(bundledVersion);
+      if (!this.writeVersionMarker(RUNTIME_VERSION_MARKER, bundledVersion)) {
+        throw new Error('Unable to persist Wine runtime version marker');
+      }
     } finally {
       this.context.resourceManager.closeRawFdSync('wine-data.zip');
       try { fs.unlinkSync(temporaryZip); } catch (_) {}
     }
+    return true;
   }
 }

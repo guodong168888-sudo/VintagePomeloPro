@@ -12,6 +12,7 @@ struct LaunchParams {
     std::string sockDir;
     std::string sockName;
     std::string winehuaBin;
+    bool forcePrefixRefresh = false;
 };
 
 void LaunchThreadFunc(LaunchParams* p);

@@ -45,6 +45,7 @@ const VIRTUAL_KEYS: VirtualKeyInfo[] = [
   { key: VirtualKey.BUTTON_L, title: 'LB', detail: '默认 Q' },
   { key: VirtualKey.BUTTON_R, title: 'RB', detail: '默认 W' },
   { key: VirtualKey.BUTTON_MENU, title: '菜单', detail: '默认 Esc' },
+  { key: VirtualKey.BUTTON_START, title: 'Start', detail: '默认 Enter' },
   { key: VirtualKey.BUTTON_SHIFT, title: 'LT / 加速', detail: '默认 Shift' },
   { key: VirtualKey.BUTTON_CTRL, title: 'RT / 跳过', detail: '默认 Ctrl' }
 ];
@@ -285,7 +286,7 @@ struct AdvancedKeyMappingPage {
     }
     .width(compact ? '100%' : 300)
     .height(compact ? 230 : '100%')
-    .scrollBar(BarState.Auto)
+    .scrollBar(BarState.Off)
   }
 
   @Builder
@@ -295,7 +296,7 @@ struct AdvancedKeyMappingPage {
         .fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
       Text('键盘上的键值直接使用 Wine 的 Linux evdev 编码，不经过二次转换。').fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
       Scroll() { KeyboardLayout({ selectedEvdevCode: this.selectedKey ? (this.mappingFor(this.selectedKey)?.evdevCode ?? -1) : -1, onKeySelected: (code: number, label: string): void => this.setVirtualMapping(code, label) }) }
-        .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Auto).layoutWeight(1).width('100%')
+        .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).layoutWeight(1).width('100%')
     }.layoutWeight(1).width('100%').height('100%').alignItems(HorizontalAlign.Start)
   }
 
@@ -334,7 +335,7 @@ struct AdvancedKeyMappingPage {
     Column({ space: 12 }) {
       Text('在完整 PC 键盘上选择一个按键').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
       Scroll() { KeyboardLayout({ selectedEvdevCode: -1, onKeySelected: (code: number, label: string): void => this.addOrChangeFreeButton(code, label) }) }
-        .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Auto).layoutWeight(1).width('100%')
+        .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).layoutWeight(1).width('100%')
     }.width('100%').height('100%').padding(16)
   }
 
@@ -383,7 +384,7 @@ struct AdvancedKeyMappingPage {
           }
         }.width('100%').padding(18).backgroundColor($r('app.color.card_background')).borderRadius(18)
       }.width('100%').constraintSize({ maxWidth: 1120 }).padding({ bottom: 24 })
-    }.layoutWeight(1).width('100%').scrollBar(BarState.Auto)
+    }.layoutWeight(1).width('100%').scrollBar(BarState.Off)
   }
 
   @Builder

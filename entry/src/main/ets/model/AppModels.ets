@@ -52,6 +52,13 @@ export enum ThemeMode {
   DARK = 'dark'
 }
 
+/** Orientation policy for the Wine desktop host window. */
+export enum ScreenOrientationSetting {
+  SENSOR_LANDSCAPE = 'sensor-landscape',
+  LANDSCAPE = 'landscape',
+  PORTRAIT = 'portrait'
+}
+
 /** Matches VintagePomelo's control-bar behavior contract. */
 export enum ControlBarDirection {
   HORIZONTAL = 'horizontal',
@@ -115,6 +122,7 @@ export interface AppSettings {
 
 export interface GlobalSettings {
   defaultDisplayMode: DisplayMode;
+  desktopOrientation: ScreenOrientationSetting;
   /** Desktop mode always uses this global profile; single-app may override it. */
   desktopInputProfileId: string;
   viewMode: ViewMode;
@@ -256,6 +264,7 @@ export interface VirtualKeyConfig {
   showButtonL: boolean;
   showButtonR: boolean;
   showButtonMenu: boolean;
+  showButtonStart: boolean;
   showButtonShift: boolean;
   showButtonCtrl: boolean;
   joystickDeadzone: number;
@@ -285,6 +294,7 @@ export enum VirtualKey {
   BUTTON_L = 'button_l',
   BUTTON_R = 'button_r',
   BUTTON_MENU = 'button_menu',
+  BUTTON_START = 'button_start',
   BUTTON_SHIFT = 'button_shift',
   BUTTON_CTRL = 'button_ctrl'
 }
@@ -416,7 +426,7 @@ export const DEFAULT_GAMEPAD_LAYOUT: VirtualGamepadLayout = {
   camera: { centerX: 0.70, centerY: 0.78 },
   rightBumper: { centerX: 0.84, centerY: 0.45 },
   rightTrigger: { centerX: 0.925, centerY: 0.45 },
-  aux: { centerX: 0.50, centerY: 0.10 }
+  aux: { centerX: 0.50, centerY: 0.62 }
 };
 
 export const DEFAULT_GAMEPAD_LAYOUT_PORTRAIT: VirtualGamepadLayout = {
@@ -442,6 +452,7 @@ export const DEFAULT_VIRTUAL_KEY_CONFIG: VirtualKeyConfig = {
   showButtonL: true,
   showButtonR: true,
   showButtonMenu: true,
+  showButtonStart: true,
   showButtonShift: true,
   showButtonCtrl: true,
   joystickDeadzone: 15,
@@ -468,6 +479,7 @@ export function cloneVirtualKeyConfig(config: VirtualKeyConfig): VirtualKeyConfi
     showButtonL: config.showButtonL ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonL,
     showButtonR: config.showButtonR ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonR,
     showButtonMenu: config.showButtonMenu ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonMenu,
+    showButtonStart: config.showButtonStart ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonStart,
     showButtonShift: config.showButtonShift ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonShift,
     showButtonCtrl: config.showButtonCtrl ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonCtrl,
     joystickDeadzone: config.joystickDeadzone ?? DEFAULT_VIRTUAL_KEY_CONFIG.joystickDeadzone,
@@ -515,6 +527,7 @@ export function stableAppId(source: AppSource, path: string): string {
 export function createDefaultGlobalSettings(): GlobalSettings {
   return {
     defaultDisplayMode: DisplayMode.DESKTOP,
+    desktopOrientation: ScreenOrientationSetting.SENSOR_LANDSCAPE,
     desktopInputProfileId: 'default',
     viewMode: ViewMode.GRID,
     themeMode: ThemeMode.SYSTEM,
@@ -562,7 +575,7 @@ export function createDefaultInputProfile(): InputProfile {
   return {
     id: 'default',
     name: 'Vintage 默认手柄布局',
-    schemaVersion: 4,
+    schemaVersion: 5,
     virtualKeyConfig: cloneVirtualKeyConfig(DEFAULT_VIRTUAL_KEY_CONFIG),
     layoutLandscape: cloneGamepadLayout(DEFAULT_GAMEPAD_LAYOUT),
     layoutPortrait: cloneGamepadLayout(DEFAULT_GAMEPAD_LAYOUT_PORTRAIT, DEFAULT_GAMEPAD_LAYOUT_PORTRAIT),
@@ -582,6 +595,7 @@ export function createDefaultInputProfile(): InputProfile {
       { virtualKey: VirtualKey.BUTTON_L, evdevCode: 16, keyLabel: 'Q' },
       { virtualKey: VirtualKey.BUTTON_R, evdevCode: 17, keyLabel: 'W' },
       { virtualKey: VirtualKey.BUTTON_MENU, evdevCode: 1, keyLabel: 'Esc' },
+      { virtualKey: VirtualKey.BUTTON_START, evdevCode: 28, keyLabel: 'Enter' },
       { virtualKey: VirtualKey.BUTTON_SHIFT, evdevCode: 42, keyLabel: 'Shift' },
       { virtualKey: VirtualKey.BUTTON_CTRL, evdevCode: 29, keyLabel: 'Ctrl' }
     ],
@@ -599,7 +613,7 @@ export function createDefaultInputProfile(): InputProfile {
       { id: 'l2', label: 'L2', buttonCode: 2309, evdevCode: 42 },
       { id: 'r2', label: 'R2', buttonCode: 2310, evdevCode: 29 },
       { id: 'select', label: 'Select', buttonCode: 2311, evdevCode: 1 },
-      { id: 'start', label: 'Start', buttonCode: 2312, evdevCode: 1 },
+      { id: 'start', label: 'Start', buttonCode: 2312, evdevCode: 28 },
       { id: 'l3', label: 'L3', buttonCode: 2313, evdevCode: 28 },
       { id: 'r3', label: 'R3', buttonCode: 2314, evdevCode: 57 },
       { id: 'home', label: 'Home', buttonCode: 2315, evdevCode: 63 }

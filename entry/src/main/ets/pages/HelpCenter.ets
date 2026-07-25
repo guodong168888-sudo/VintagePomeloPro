@@ -1,7 +1,9 @@
 import router from '@ohos.router';
+import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
 import { LengthMetrics } from '@kit.ArkUI';
+import deviceInfo from '@ohos.deviceInfo';
 import {
   DividerShowType,
   HdsNavigation,
@@ -10,6 +12,16 @@ import {
 } from '@kit.UIDesignKit';
 
 type HelpCategory = 'start' | 'library' | 'controls' | 'runtime';
+
+const DEVICE_SDK_API_VERSION: number = (() => {
+  try {
+    return deviceInfo.sdkApiVersion as number;
+  } catch (_) {
+    return 0;
+  }
+})();
+const SUPPORTS_HDS_FLOATING: boolean =
+  canIUse('SystemCapability.UIDesign.HDSComponent.Core') && DEVICE_SDK_API_VERSION >= 23;
 const HDS_MATERIAL_TYPE_IMMERSIVE: number = 101;
 const HDS_MATERIAL_LEVEL_EXQUISITE: number = 0;
 
@@ -41,6 +53,7 @@ struct HelpCenter {
   @State private breakpoint: BreakpointType = 'lg';
   @State private viewportWidth: number = 0;
   @State private viewportHeight: number = 0;
+  private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private breakpointCallback: ((value: BreakpointType) => void) | null = null;
   private helpScroller: Scroller = new Scroller();
   private readonly topics: HelpTopic[] = [
@@ -115,6 +128,39 @@ struct HelpCenter {
     return DeviceCapabilityPolicy.isPhoneDevice() && this.viewportWidth > this.viewportHeight && this.viewportHeight > 0;
   }
 
+  private isLargeLayout(): boolean {
+    return this.breakpoint === 'lg' || this.breakpoint === 'xl';
+  }
+
+  private usesDarkAppearance(): boolean {
+    try {
+      return this.context.config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  private navigationTitleBackground(scrolled: boolean): string {
+    if (this.usesDarkAppearance()) return scrolled ? '#80121821' : '#26121821';
+    return scrolled ? '#99FFFFFF' : '#18FFFFFF';
+  }
+
+  private navigationControlBackground(): string {
+    return this.usesDarkAppearance() ? '#30FFFFFF' : '#28FFFFFF';
+  }
+
+  private navigationTitleColor(): string {
+    return this.usesDarkAppearance() ? '#F4F7FB' : '#182431';
+  }
+
+  private topicSurfaceColor(): string {
+    return this.usesDarkAppearance() ? '#36202833' : '#DDF5F9FD';
+  }
+
+  private topicBorderColor(): string {
+    return this.usesDarkAppearance() ? '#52FFFFFF' : '#8CFFFFFF';
+  }
+
   private helpContentMaxWidth(): number {
     if (this.breakpoint === 'xl') return 1120;
     if (this.breakpoint === 'lg') return 980;
@@ -130,9 +176,12 @@ struct HelpCenter {
   }
 
   private helpTopInset(): number {
-    if (this.breakpoint === 'xs' || this.breakpoint === 'sm') return 8;
-    if (this.breakpoint === 'md') return 10;
-    return 12;
+    // This padding belongs to the Scroll content, so the title clearance is
+    // consumed when the user scrolls instead of remaining as a fixed band.
+    // Help has a two-line title on portrait phones. Give the first section a
+    // little more room than the library cards while keeping the spacer in the
+    // scroll content.
+    return this.breakpoint === 'xs' ? 88 : 96;
   }
 
   private titleButtonMargin(): number {
@@ -143,11 +192,19 @@ struct HelpCenter {
     return this.topics.filter((topic: HelpTopic): boolean => topic.category === category);
   }
 
+  private helpColumnSections(column: number): HelpSectionData[] {
+    return this.sections.filter((_section: HelpSectionData, index: number): boolean => index % 2 === column);
+  }
+
   @Builder
   private TopicCard(topic: HelpTopic) {
     Column() {
       Row({ space: 12 }) {
-        SymbolGlyph(topic.icon).fontSize(19).fontColor([$r('app.color.accent')])
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph(topic.icon).fontSize(18).fontColor([$r('app.color.accent')])
+        }
+        .width(38).height(38).borderRadius(13)
+        .backgroundColor($r('app.color.selected_background'))
         Column({ space: 4 }) {
           Text(topic.title).fontSize(15).fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary')).width('100%')
@@ -161,13 +218,13 @@ struct HelpCenter {
       }
       .width('100%').padding(16)
       if (this.expandedTopicId === topic.id) {
-        Text(topic.details).fontSize(13).lineHeight(22).fontColor($r('app.color.text_secondary')).width('100%')
-          .padding({ left: 47, right: 16, bottom: 16 })
+        Text(topic.details).fontSize(13).lineHeight(21).fontColor($r('app.color.text_secondary')).width('100%')
+          .padding({ left: 66, right: 16, bottom: 18 })
       }
     }
-    .width('100%').backgroundColor($r('app.color.card_glass_background'))
-    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK).borderRadius(16)
-    .border({ width: 1, color: '#28FFFFFF' })
+    .width('100%').backgroundColor(this.topicSurfaceColor())
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK).borderRadius(18)
+    .border({ width: 1, color: this.topicBorderColor() })
     .onClick((): void => { this.expandedTopicId = this.expandedTopicId === topic.id ? '' : topic.id; })
   }
 
@@ -175,9 +232,19 @@ struct HelpCenter {
   private HelpSection(section: HelpSectionData) {
     Column({ space: 12 }) {
       Row({ space: 10 }) {
-        SymbolGlyph(section.icon).fontSize(21).fontColor([$r('app.color.accent')])
-        Text(section.title).fontSize(18).fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.text_primary')).layoutWeight(1)
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph(section.icon).fontSize(19).fontColor([$r('app.color.accent')])
+        }
+        .width(36).height(36).borderRadius(12)
+        .backgroundColor($r('app.color.selected_background'))
+        Column({ space: 2 }) {
+          Text(section.title).fontSize(18).fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.text_primary')).width('100%')
+          Text(this.sectionTopics(section.id).length.toString() + ' 个主题')
+            .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
       }.width('100%')
       Column({ space: 10 }) {
         ForEach(this.sectionTopics(section.id), (topic: HelpTopic): void => {
@@ -191,26 +258,63 @@ struct HelpCenter {
     Stack() {
       HdsNavigation() {
         Scroll(this.helpScroller) {
-        Column({ space: 24 }) {
-          ForEach(this.sections, (section: HelpSectionData): void => {
-            this.HelpSection(section)
-          }, (section: HelpSectionData): string => section.id)
+          Column({ space: this.isLargeLayout() ? 28 : 22 }) {
+            if (this.isLargeLayout()) {
+              Row({ space: 24 }) {
+                Column({ space: 28 }) {
+                  ForEach(this.helpColumnSections(0), (section: HelpSectionData): void => {
+                    this.HelpSection(section)
+                  }, (section: HelpSectionData): string => section.id)
+                }
+                .layoutWeight(1)
+                .alignItems(HorizontalAlign.Start)
+                Column({ space: 28 }) {
+                  ForEach(this.helpColumnSections(1), (section: HelpSectionData): void => {
+                    this.HelpSection(section)
+                  }, (section: HelpSectionData): string => section.id)
+                }
+                .layoutWeight(1)
+                .alignItems(HorizontalAlign.Start)
+              }
+              .width('100%')
+              .alignItems(VerticalAlign.Top)
+            } else {
+              ForEach(this.sections, (section: HelpSectionData): void => {
+                this.HelpSection(section)
+              }, (section: HelpSectionData): string => section.id)
+            }
 
-          Button('打开系统设置').width('100%').height(48).borderRadius(16)
-            .backgroundColor($r('app.color.accent')).fontColor('#FFFFFFFF')
-            .onClick((): void => { router.pushUrl({ url: 'pages/SystemSettings' }); })
-        }
+            Row({ space: 12 }) {
+              Stack({ alignContent: Alignment.Center }) {
+                SymbolGlyph($r('sys.symbol.gearshape')).fontSize(18).fontColor([$r('app.color.accent')])
+              }
+              .width(40).height(40).borderRadius(14).backgroundColor($r('app.color.selected_background'))
+              Column({ space: 2 }) {
+                Text('仍需帮助？').fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
+                Text('可在系统设置中检查 Wine 引擎与输入配置。').fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+              Button('系统设置').height(40).borderRadius(14).fontSize(13)
+                .backgroundColor($r('app.color.selected_background')).fontColor($r('app.color.accent'))
+                .onClick((): void => { router.pushUrl({ url: 'pages/SystemSettings' }); })
+            }
+            .width('100%').padding(14).borderRadius(18)
+            .backgroundColor(this.topicSurfaceColor())
+            .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
+            .border({ width: 1, color: this.topicBorderColor() })
+          }
         // Scroll content must be allowed to grow beyond the viewport. A fixed
         // 100% height makes the last topic render under the bottom inset.
         .width('100%').constraintSize({ minHeight: '100%' }).justifyContent(FlexAlign.Start)
         .padding({
           left: this.helpSidePadding(), right: this.helpSidePadding(),
-          top: this.helpTopInset(), bottom: this.isNarrowPhone() ? 32 : 48
+          top: this.helpTopInset(), bottom: this.isNarrowPhone() ? 32 : 52
         })
         .constraintSize({ maxWidth: this.helpContentMaxWidth() })
-        .alignSelf(ItemAlign.Start)
+        .alignSelf(this.isLargeLayout() ? ItemAlign.Center : ItemAlign.Start)
       }
-      .width('100%').height('100%').scrollBar(BarState.Auto)
+      .width('100%').height('100%').scrollBar(BarState.Off)
       }
       .mode(NavigationMode.Stack)
       .titleBar({
@@ -218,42 +322,52 @@ struct HelpCenter {
         style: {
           scrollEffectOpts: {
             enableScrollEffect: true,
-            scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR,
+            scrollEffectType: SUPPORTS_HDS_FLOATING ? ScrollEffectType.IMMERSIVE_GRADIENT_BLUR : ScrollEffectType.GRADUAL_BLUR,
             blurEffectiveStartOffset: LengthMetrics.vp(0),
-            blurEffectiveEndOffset: LengthMetrics.vp(this.isPhoneLandscape() ? 56 : 84)
+            blurEffectiveEndOffset: LengthMetrics.vp(SUPPORTS_HDS_FLOATING ? 96 : 68)
+        },
+        originalStyle: {
+          backgroundStyle: {
+            backgroundColor: this.navigationTitleBackground(false)
           },
-          originalStyle: {
-            contentStyle: {
+          contentStyle: {
               titleStyle: {
                 mainTitleColor: $r('app.color.text_primary'),
                 subTitleColor: $r('app.color.text_secondary')
-              },
-              menuStyle: {
-                iconColor: $r('app.color.text_primary')
-              },
-              backIconStyle: {
-                iconColor: $r('app.color.text_primary')
+            },
+            menuStyle: {
+              backgroundColor: this.navigationControlBackground(),
+              iconColor: $r('app.color.text_primary')
+            },
+            backIconStyle: {
+              backgroundColor: this.navigationControlBackground(),
+              iconColor: $r('app.color.text_primary')
               }
             }
+        },
+        scrollEffectStyle: {
+          backgroundStyle: {
+            backgroundColor: this.navigationTitleBackground(true)
           },
-          scrollEffectStyle: {
-            contentStyle: {
+          contentStyle: {
               titleStyle: {
                 mainTitleColor: $r('app.color.text_primary'),
                 subTitleColor: $r('app.color.text_secondary')
-              },
-              menuStyle: {
-                iconColor: $r('app.color.text_primary')
-              },
-              backIconStyle: {
-                iconColor: $r('app.color.text_primary')
+            },
+            menuStyle: {
+              backgroundColor: this.navigationControlBackground(),
+              iconColor: $r('app.color.text_primary')
+            },
+            backIconStyle: {
+              backgroundColor: this.navigationControlBackground(),
+              iconColor: $r('app.color.text_primary')
               }
             }
-          },
-          systemMaterialEffect: {
-            materialType: HDS_MATERIAL_TYPE_IMMERSIVE,
-            materialLevel: HDS_MATERIAL_LEVEL_EXQUISITE
-          }
+        },
+        systemMaterialEffect: SUPPORTS_HDS_FLOATING ? {
+          materialType: HDS_MATERIAL_TYPE_IMMERSIVE,
+          materialLevel: HDS_MATERIAL_LEVEL_EXQUISITE
+        } : undefined
         },
         content: {
           title: {
@@ -261,12 +375,15 @@ struct HelpCenter {
             subTitle: this.isPhoneLandscape() ? undefined : 'Wine 应用库、输入控制与 Windows 会话使用指南'
           },
           divider: { showType: DividerShowType.OFF }
-        },
-        avoidLayoutSafeArea: true,
-        enableComponentSafeArea: true
+      },
+        avoidLayoutSafeArea: true
       })
       .titleMode(HdsNavigationTitleMode.MINI)
       .hideToolBar(true)
+      .systemBarStyle(
+        { statusBarContentColor: this.navigationTitleColor() },
+        { statusBarContentColor: this.navigationTitleColor() }
+      )
       .bindToScrollable([this.helpScroller])
       .width('100%').height('100%')
       .backgroundColor('#00FFFFFF')

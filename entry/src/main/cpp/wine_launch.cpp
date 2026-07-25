@@ -276,19 +276,30 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd, const std::stri
     }
     setenv("PROCESSBROKER", WINE_BROKER_SOCKET, 1);
 
-    // -- wineboot --init --
+    // -- wineboot --init / --update --
     bool prefixReady = IsWinePrefixInitialized();
+    const bool configurePrefix = !prefixReady || p->forcePrefixRefresh;
 
-    if (!prefixReady) {
-        OH_LOG_INFO(LOG_APP, "[Launch-Async] prefix not initialized, preparing WoW64 and running wineboot --init...");
+    if (configurePrefix) {
+        const char* winebootMode = prefixReady ? "--update" : "--init";
+        OH_LOG_INFO(LOG_APP,
+                    "[Launch-Async] prefix %s, preparing WoW64 and running wineboot %s...",
+                    prefixReady ? "refresh requested" : "not initialized", winebootMode);
         auto* ws = WaylandServer::GetInstance();
         ws->SetDesktopRootRecognitionEnabled(false);
-        EnsureWow64Files(p->winehuaBin);
+        if (!EnsureWow64Files(p->winehuaBin)) {
+            OH_LOG_ERROR(LOG_APP, "[Launch-Async] unable to prepare WoW64 files");
+            if (gStateTsfn)
+                napi_call_threadsafe_function(gStateTsfn, strdup("wineboot-failed"), napi_tsfn_blocking);
+            return false;
+        }
         const char* desktopTag = ws->IsDesktopMode() ? "__winehua_desktop__|" : "";
 #ifdef __aarch64__
-        std::string entryParams = p->homeDir + "|" + p->winehuaBin + "|" + desktopTag + "wineboot|--init";
+        std::string entryParams = p->homeDir + "|" + p->winehuaBin + "|" + desktopTag
+            + "wineboot|" + winebootMode;
 #else
-        std::string entryParams = p->homeDir + "|" + p->winehuaBin + "|" + desktopTag + "wine|wineboot|--init";
+        std::string entryParams = p->homeDir + "|" + p->winehuaBin + "|" + desktopTag
+            + "wine|wineboot|" + winebootMode;
 #endif
         // 注意: wineboot --init 只需要初始化 prefix, 不传完整环境变量以节省 entryParams 长度
         NativeChildProcess_Args childArgs = {};
@@ -313,7 +324,11 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd, const std::stri
          * 大超时仅作挂死安全网; 真正的失败由进程退出后 prefix 不完整触发。 */
         char procPath[64];
         snprintf(procPath, sizeof(procPath), "/proc/%d", childPid);
-        constexpr int kWinebootHangMs = 3 * 60 * 1000;
+        // ARM first-run and runtime upgrades can legitimately exceed three
+        // minutes while setupapi installs wine.inf. Keep the operation
+        // bounded, but align it with the ArkTS blocker instead of killing a
+        // healthy prefix update at the old 180-second threshold.
+        constexpr int kWinebootHangMs = 8 * 60 * 1000;
         int aliveMs = 0;
         while (IsProcessAliveNotZombie(childPid) && aliveMs < kWinebootHangMs) {
             usleep(500000);
@@ -341,7 +356,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd, const std::stri
         ws->SetDesktopRootRecognitionEnabled(true);
         ws->PromotePendingDesktopRoot();
     } else {
-        OH_LOG_INFO(LOG_APP, "[Launch-Async] prefix already initialized, skipping wineboot");
+        OH_LOG_INFO(LOG_APP, "[Launch-Async] prefix already configured for this runtime, skipping wineboot");
     }
 
     // Explorer is a desktop-session component. Single-app mode remains idle

@@ -1,6 +1,6 @@
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
-import { common } from '@kit.AbilityKit';
+import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { fileUri, picker } from '@kit.CoreFileKit';
 import {
   AppDescriptor,
@@ -13,6 +13,7 @@ import { AppCatalogService } from '../service/AppCatalogService';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import { LengthMetrics } from '@kit.ArkUI';
+import deviceInfo from '@ohos.deviceInfo';
 import {
   DividerShowType,
   HdsNavigation,
@@ -21,6 +22,15 @@ import {
   ScrollEffectType
 } from '@kit.UIDesignKit';
 
+const DEVICE_SDK_API_VERSION: number = (() => {
+  try {
+    return deviceInfo.sdkApiVersion as number;
+  } catch (_) {
+    return 0;
+  }
+})();
+const SUPPORTS_HDS_FLOATING: boolean =
+  canIUse('SystemCapability.UIDesign.HDSComponent.Core') && DEVICE_SDK_API_VERSION >= 23;
 const HDS_MATERIAL_TYPE_IMMERSIVE: number = 101;
 const HDS_MATERIAL_LEVEL_EXQUISITE: number = 0;
 
@@ -43,14 +53,35 @@ struct AppSettingsPage {
     return this.breakpoint === 'xs';
   }
 
+  private usesDarkAppearance(): boolean {
+    try {
+      return this.context.config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  private navigationTitleBackground(scrolled: boolean): string {
+    if (this.usesDarkAppearance()) return scrolled ? '#80121821' : '#26121821';
+    return scrolled ? '#99FFFFFF' : '#18FFFFFF';
+  }
+
+  private navigationControlBackground(): string {
+    return this.usesDarkAppearance() ? '#30FFFFFF' : '#28FFFFFF';
+  }
+
+  private navigationTitleColor(): string {
+    return this.usesDarkAppearance() ? '#F4F7FB' : '#182431';
+  }
+
   private cardPadding(): number {
     return this.isCompact() ? 12 : 20;
   }
 
   private contentTopInset(): number {
-    if (this.breakpoint === 'xs' || this.breakpoint === 'sm') return 8;
-    if (this.breakpoint === 'md') return 10;
-    return 12;
+    // Keep the immersive title clearance inside the Scroll content so it can
+    // move away together with the first settings card.
+    return this.breakpoint === 'xs' ? 72 : 88;
   }
 
   private contentSidePadding(): number {
@@ -387,7 +418,7 @@ struct AppSettingsPage {
         })
         .alignSelf(ItemAlign.Start)
       }
-      .width('100%').height('100%').scrollBar(BarState.Auto)
+      .width('100%').height('100%').scrollBar(BarState.Off)
       }
       .mode(NavigationMode.Stack)
       .titleBar({
@@ -395,42 +426,52 @@ struct AppSettingsPage {
         style: {
           scrollEffectOpts: {
             enableScrollEffect: true,
-            scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR,
+            scrollEffectType: SUPPORTS_HDS_FLOATING ? ScrollEffectType.IMMERSIVE_GRADIENT_BLUR : ScrollEffectType.GRADUAL_BLUR,
             blurEffectiveStartOffset: LengthMetrics.vp(0),
-            blurEffectiveEndOffset: LengthMetrics.vp(84)
+            blurEffectiveEndOffset: LengthMetrics.vp(SUPPORTS_HDS_FLOATING ? 96 : 68)
+        },
+        originalStyle: {
+          backgroundStyle: {
+            backgroundColor: this.navigationTitleBackground(false)
           },
-          originalStyle: {
-            contentStyle: {
+          contentStyle: {
               titleStyle: {
                 mainTitleColor: $r('app.color.text_primary'),
                 subTitleColor: $r('app.color.text_secondary')
-              },
-              menuStyle: {
-                iconColor: $r('app.color.accent')
-              },
-              backIconStyle: {
-                iconColor: $r('app.color.text_primary')
+            },
+            menuStyle: {
+              backgroundColor: this.navigationControlBackground(),
+              iconColor: $r('app.color.accent')
+            },
+            backIconStyle: {
+              backgroundColor: this.navigationControlBackground(),
+              iconColor: $r('app.color.text_primary')
               }
             }
+        },
+        scrollEffectStyle: {
+          backgroundStyle: {
+            backgroundColor: this.navigationTitleBackground(true)
           },
-          scrollEffectStyle: {
-            contentStyle: {
+          contentStyle: {
               titleStyle: {
                 mainTitleColor: $r('app.color.text_primary'),
                 subTitleColor: $r('app.color.text_secondary')
-              },
-              menuStyle: {
-                iconColor: $r('app.color.accent')
-              },
-              backIconStyle: {
-                iconColor: $r('app.color.text_primary')
+            },
+            menuStyle: {
+              backgroundColor: this.navigationControlBackground(),
+              iconColor: $r('app.color.accent')
+            },
+            backIconStyle: {
+              backgroundColor: this.navigationControlBackground(),
+              iconColor: $r('app.color.text_primary')
               }
             }
-          },
-          systemMaterialEffect: {
-            materialType: HDS_MATERIAL_TYPE_IMMERSIVE,
-            materialLevel: HDS_MATERIAL_LEVEL_EXQUISITE
-          }
+        },
+        systemMaterialEffect: SUPPORTS_HDS_FLOATING ? {
+          materialType: HDS_MATERIAL_TYPE_IMMERSIVE,
+          materialLevel: HDS_MATERIAL_LEVEL_EXQUISITE
+        } : undefined
         },
         content: {
           title: {
@@ -449,12 +490,15 @@ struct AppSettingsPage {
             maxCount: 1
           } as HdsNavigationMenuContentOptions,
           divider: { showType: DividerShowType.OFF }
-        },
-        avoidLayoutSafeArea: true,
-        enableComponentSafeArea: true
+      },
+        avoidLayoutSafeArea: true
       })
       .titleMode(HdsNavigationTitleMode.MINI)
       .hideToolBar(true)
+      .systemBarStyle(
+        { statusBarContentColor: this.navigationTitleColor() },
+        { statusBarContentColor: this.navigationTitleColor() }
+      )
       .bindToScrollable([this.appSettingsScroller])
       .width('100%').height('100%')
       .backgroundColor('#00FFFFFF')

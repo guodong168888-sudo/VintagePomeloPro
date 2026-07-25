@@ -110,8 +110,8 @@ static napi_value StartServer(napi_env env, napi_callback_info info) {
 }
 
 static napi_value LaunchClient(napi_env env, napi_callback_info info) {
-    size_t argc = 5;
-    napi_value args[5] = {};
+    size_t argc = 6;
+    napi_value args[6] = {};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
     auto* p = new LaunchParams();
@@ -131,9 +131,16 @@ static napi_value LaunchClient(napi_env env, napi_callback_info info) {
     if (p->homeDir.empty()) {
         p->homeDir = "/storage/Users/currentUser/Download/com.vintage.pomelopro";
     }
+    if (argc >= 6) {
+        bool forcePrefixRefresh = false;
+        if (napi_get_value_bool(env, args[5], &forcePrefixRefresh) == napi_ok)
+            p->forcePrefixRefresh = forcePrefixRefresh;
+    }
 
-    OH_LOG_INFO(LOG_APP, "[Launch] exe=%{public}s sock=%{public}s lib=%{public}s home=%{public}s (async)",
-                p->exePath.c_str(), p->sockPath.c_str(), p->libPath.c_str(), p->homeDir.c_str());
+    OH_LOG_INFO(LOG_APP, "[Launch] exe=%{public}s sock=%{public}s lib=%{public}s home=%{public}s "
+                "prefixRefresh=%{public}s (async)",
+                p->exePath.c_str(), p->sockPath.c_str(), p->libPath.c_str(), p->homeDir.c_str(),
+                p->forcePrefixRefresh ? "true" : "false");
 
     // 保证可执行
     if (access(p->exePath.c_str(), X_OK) != 0) chmod(p->exePath.c_str(), 0755);

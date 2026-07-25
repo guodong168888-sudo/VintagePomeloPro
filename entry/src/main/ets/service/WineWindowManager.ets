@@ -2,7 +2,7 @@ import { common, Want } from '@kit.AbilityKit';
 import { window, display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import testNapi from 'libentry.so';
-import { WinePresentationMode } from '../model/AppModels';
+import { ScreenOrientationSetting, WinePresentationMode } from '../model/AppModels';
 import { PopupWindowManager } from './PopupWindowManager';
 import { ArgbWindowManager } from './ArgbWindowManager';
 import { AppSettingsStore } from './AppSettingsStore';
@@ -190,6 +190,40 @@ export class WineWindowManager {
         widthPx, heightPx, outW, outH, effectiveScale.toFixed(2));
     } catch (error) {
       hilog.warn(DOMAIN, TAG, '[MW] syncOutputSize failed: %{public}s', JSON.stringify(error));
+    }
+  }
+
+  /**
+   * Set the compositor's first output rectangle before Wine/Wayland starts.
+   * The host display can still be in the previous sensor orientation when a
+   * new DesktopAbility is launched, so normalize the dimensions explicitly
+   * instead of waiting for the later window-size callback.
+   */
+  prepareOutputForOrientation(setting: ScreenOrientationSetting): void {
+    try {
+      const d = display.getDefaultDisplaySync();
+      let width = d.width;
+      let height = d.height;
+      const isLandscape = width >= height;
+      // SENSOR_LANDSCAPE still means the desktop must start in a landscape
+      // rectangle; the sensor only chooses between the two landscape sides.
+      // Treating it as neither landscape nor portrait created a 640x1416
+      // Wayland output while the Ability rotated to 2832x1280 afterwards.
+      const wantsLandscape = setting !== ScreenOrientationSetting.PORTRAIT;
+      if (wantsLandscape && !isLandscape) {
+        const swapped = width;
+        width = height;
+        height = swapped;
+      } else if (!wantsLandscape && isLandscape) {
+        const swapped = width;
+        width = height;
+        height = swapped;
+      }
+      this.syncOutputSize(width, height);
+      hilog.info(DOMAIN, TAG, '[MW] prepared output orientation=%{public}s size=%{public}dx%{public}d',
+        setting, width, height);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, '[MW] prepare output orientation failed: %{public}s', JSON.stringify(error));
     }
   }
 
@@ -802,7 +836,14 @@ export class WineWindowManager {
       const want: Want = {
         bundleName: 'com.vintage.pomelopro',
         abilityName: 'DesktopAbility',
-        parameters: { toplevelId: rootId }
+        parameters: {
+          toplevelId: rootId,
+          // Capture the setting at session creation. DesktopAbility applies it
+          // before loadContent so Wine never starts against a stale portrait
+          // output rectangle.
+          desktopOrientation: AppSettingsStore.getInstance().getGlobalSettings().desktopOrientation
+            ?? ScreenOrientationSetting.SENSOR_LANDSCAPE
+        }
       };
       this.uiAbilityContext!.startAbility(want).catch((err: Error) => {
         hilog.error(DOMAIN, TAG, '[MW] startAbility(DesktopAbility) failed: %{public}s',

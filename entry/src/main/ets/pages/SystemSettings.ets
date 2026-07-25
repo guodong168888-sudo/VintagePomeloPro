@@ -1,6 +1,6 @@
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
-import { common } from '@kit.AbilityKit';
+import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { picker } from '@kit.CoreFileKit';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import {
@@ -12,6 +12,8 @@ import {
   ThemeMode,
   ViewMode,
   VirtualMouseConfig,
+  VirtualKeyColorScheme,
+  ScreenOrientationSetting,
   cloneVirtualMouseConfig,
   createDefaultGlobalSettings
 } from '../model/AppModels';
@@ -24,7 +26,9 @@ import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoor
 import { AppCatalogService } from '../service/AppCatalogService';
 import { InputProfileService } from '../service/InputProfileService';
 import { AppSettingsStore } from '../service/AppSettingsStore';
-import { LengthMetrics } from '@kit.ArkUI';
+import { display, LengthMetrics, window } from '@kit.ArkUI';
+import deviceInfo from '@ohos.deviceInfo';
+import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
 import {
   DividerShowType,
   HdsNavigation,
@@ -34,6 +38,16 @@ import {
 } from '@kit.UIDesignKit';
 
 type SettingsSection = 'display' | 'appearance' | 'input' | 'engine' | 'about';
+
+const DEVICE_SDK_API_VERSION: number = (() => {
+  try {
+    return deviceInfo.sdkApiVersion as number;
+  } catch (_) {
+    return 0;
+  }
+})();
+const SUPPORTS_HDS_FLOATING: boolean =
+  canIUse('SystemCapability.UIDesign.HDSComponent.Core') && DEVICE_SDK_API_VERSION >= 23;
 const HDS_MATERIAL_TYPE_IMMERSIVE: number = 101;
 const HDS_MATERIAL_LEVEL_EXQUISITE: number = 0;
 
@@ -48,6 +62,7 @@ struct SystemSettingsPage {
   @State private engineBusy: boolean = false;
   @State private engineOperationMessage: string = '';
   @State private inputProfiles: InputProfile[] = [];
+  @State private statusBarHeightVp: number = 0;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private settingsScroller: Scroller = new Scroller();
   private callback: ((value: BreakpointType) => void) | null = null;
@@ -57,14 +72,50 @@ struct SystemSettingsPage {
     return this.breakpoint === 'xs';
   }
 
+  private usesDarkAppearance(): boolean {
+    if (this.settings.themeMode === ThemeMode.DARK) return true;
+    if (this.settings.themeMode === ThemeMode.LIGHT) return false;
+    try {
+      return this.context.config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  private navigationTitleBackground(scrolled: boolean): string {
+    if (this.usesDarkAppearance()) return scrolled ? '#80121821' : '#26121821';
+    return scrolled ? '#99FFFFFF' : '#18FFFFFF';
+  }
+
+  private navigationControlBackground(): string {
+    return this.usesDarkAppearance() ? '#30FFFFFF' : '#28FFFFFF';
+  }
+
+  private navigationTitleColor(): string {
+    return this.usesDarkAppearance() ? '#F4F7FB' : '#182431';
+  }
+
+  private groupSurfaceColor(): string | Resource {
+    if (!this.settings.useGlassEffect) return $r('app.color.card_background');
+    return this.usesDarkAppearance() ? '#3A202833' : '#DDF5F9FD';
+  }
+
+  private groupBorderColor(): string {
+    if (!this.settings.useGlassEffect) return '#14000000';
+    return this.usesDarkAppearance() ? '#52FFFFFF' : '#8CFFFFFF';
+  }
+
   private cardPadding(): number {
     return this.isNarrowPhone() ? 12 : 22;
   }
 
   private settingsTopInset(): number {
-    if (this.breakpoint === 'xs' || this.breakpoint === 'sm') return 8;
-    if (this.breakpoint === 'md') return 10;
-    return 12;
+    // Match VintagePomelo's safe-area contract: status bar + the 56vp HDS
+    // MINI title. Keep only a 4vp hit-test seam; the card's own padding
+    // supplies the visible title/content gap without exposing a white band.
+    const fallbackStatusBar = this.isManagedWindowsHost() ? 0 :
+      (DeviceCapabilityPolicy.isPhoneDevice() ? 40 : 24);
+    return 60 + Math.max(this.statusBarHeightVp, fallbackStatusBar);
   }
 
   private settingsSidePadding(): number {
@@ -105,6 +156,54 @@ struct SystemSettingsPage {
   onPageShow(): void {
     this.settings = ThemeSettingsService.getInstance().getSettings();
     this.loadInputProfiles();
+    this.restoreSettingsWindowChrome();
+  }
+
+  private async restoreSettingsWindowChrome(): Promise<void> {
+    try {
+      const pageWindow = await window.getLastWindow(this.context);
+      try {
+        await pageWindow.setWindowLayoutFullScreen(true);
+      } catch (_) {
+      }
+      try {
+        await pageWindow.setWindowSystemBarEnable(['status']);
+      } catch (_) {
+      }
+      try {
+        await pageWindow.setSpecificSystemBarEnabled('status', true);
+      } catch (_) {
+      }
+      try {
+        await pageWindow.setSpecificSystemBarEnabled('navigationIndicator', false);
+      } catch (_) {
+      }
+      try {
+        const useLightIcons = this.usesDarkAppearance();
+        await pageWindow.setWindowSystemBarProperties({
+          statusBarColor: '#00000000',
+          navigationBarColor: '#00000000',
+          isStatusBarLightIcon: useLightIcons,
+          isNavigationBarLightIcon: useLightIcons
+        });
+      } catch (_) {
+      }
+      this.refreshStatusBarInset(pageWindow);
+      setTimeout((): void => { this.refreshStatusBarInset(pageWindow); }, 160);
+    } catch (_) {
+    }
+  }
+
+  private refreshStatusBarInset(pageWindow: window.Window): void {
+    try {
+      const systemAvoid = pageWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
+      const cutoutAvoid = pageWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_CUTOUT);
+      const heightPx = Math.max(systemAvoid.topRect.height, cutoutAvoid.topRect.height);
+      const density = Math.max(1, display.getDefaultDisplaySync().densityPixels);
+      this.statusBarHeightVp = Math.ceil(heightPx / density);
+    } catch (_) {
+      this.statusBarHeightVp = 0;
+    }
   }
 
   private loadInputProfiles(): void {
@@ -174,13 +273,15 @@ struct SystemSettingsPage {
     scale: number = this.settings.outputScale,
     theme: ThemeMode = this.settings.themeMode,
     controlBarDirection: ControlBarDirection = this.settings.controlBarDirection,
-    virtualMouseConfig: VirtualMouseConfig = cloneVirtualMouseConfig(this.settings.virtualMouseConfig),
-    desktopInputProfileId: string = this.settings.desktopInputProfileId,
-    pageBackgroundUri: string = this.settings.pageBackgroundUri,
-    virtualInputEnabled: boolean = this.settings.virtualInputEnabled): void {
+     virtualMouseConfig: VirtualMouseConfig = cloneVirtualMouseConfig(this.settings.virtualMouseConfig),
+     desktopInputProfileId: string = this.settings.desktopInputProfileId,
+     pageBackgroundUri: string = this.settings.pageBackgroundUri,
+      virtualInputEnabled: boolean = this.settings.virtualInputEnabled,
+      desktopOrientation: ScreenOrientationSetting = this.settings.desktopOrientation): void {
     const virtualInputChanged = this.settings.virtualInputEnabled !== virtualInputEnabled;
     this.settings = {
       defaultDisplayMode: mode,
+       desktopOrientation: desktopOrientation,
       desktopInputProfileId: desktopInputProfileId || 'default',
       viewMode: view,
       themeMode: theme,
@@ -224,6 +325,17 @@ struct SystemSettingsPage {
       this.settings.outputScale, this.settings.themeMode,
       this.settings.controlBarDirection, this.settings.virtualMouseConfig,
       this.settings.desktopInputProfileId, this.settings.pageBackgroundUri, enabled);
+  }
+
+  private updateDesktopOrientation(orientation: ScreenOrientationSetting): void {
+    this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
+      this.settings.useGlassEffect, this.settings.usePageBackground,
+      this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
+      this.settings.controlOpacity, this.settings.gamepadDeadzone,
+      this.settings.outputScale, this.settings.themeMode,
+      this.settings.controlBarDirection, this.settings.virtualMouseConfig,
+      this.settings.desktopInputProfileId, this.settings.pageBackgroundUri,
+      this.settings.virtualInputEnabled, orientation);
   }
 
   private togglePageBackground(enabled: boolean): void {
@@ -319,8 +431,10 @@ struct SystemSettingsPage {
       Text(label).fontSize(14).fontColor($r('app.color.text_primary'))
         .fontWeight(this.section === section ? FontWeight.Medium : FontWeight.Regular)
     }
-      .width('100%').height(46).padding({ left: 14, right: 14 }).borderRadius(14)
-      .backgroundColor(this.section === section ? $r('app.color.selected_background') : $r('app.color.search_background'))
+      .width('100%').height(48).padding({ left: 14, right: 14 }).borderRadius(16)
+      .backgroundColor(this.section === section ? $r('app.color.selected_background') : '#00FFFFFF')
+      .border({ width: this.section === section ? 1 : 0, color: this.groupBorderColor() })
+      .id('settings-nav-' + section)
       .onClick(() => this.selectSection(section))
   }
 
@@ -334,9 +448,9 @@ struct SystemSettingsPage {
           .fontColor(this.section === section ? $r('app.color.accent') : $r('app.color.text_primary'))
       }
     }
-    .height(44)
+    .height(40)
     .padding({ left: 13, right: 13 })
-    .borderRadius(22)
+    .borderRadius(20)
     .backgroundColor(this.section === section ? $r('app.color.selected_background') : '#18FFFFFF')
     .border({ width: 1, color: this.section === section ? '#38FFFFFF' : '#22FFFFFF' })
     .onClick((): void => this.selectSection(section))
@@ -441,6 +555,34 @@ struct SystemSettingsPage {
     const selected = this.inputProfiles.find((profile: InputProfile): boolean =>
       profile.id === this.settings.desktopInputProfileId);
     return selected?.name ?? 'Vintage 默认手柄布局';
+  }
+
+  private selectedProfileColorScheme(): VirtualKeyColorScheme {
+    const selected = this.inputProfiles.find((profile: InputProfile): boolean =>
+      profile.id === this.settings.desktopInputProfileId);
+    return selected?.virtualKeyConfig.colorScheme ?? VirtualKeyColorScheme.DEFAULT;
+  }
+
+  private async updateProfileColorScheme(colorScheme: VirtualKeyColorScheme): Promise<void> {
+    const service = InputProfileService.getInstance();
+    const profile = service.getProfile(this.settings.desktopInputProfileId || 'default');
+    profile.virtualKeyConfig.colorScheme = colorScheme;
+    await service.saveProfile(profile);
+    this.inputProfiles = service.getDesktopProfiles();
+  }
+
+  @Builder
+  private InputColorSchemeChoice(label: string, colorScheme: VirtualKeyColorScheme) {
+    Button(label)
+      .layoutWeight(1)
+      .height(44)
+      .borderRadius(14)
+      .fontSize(13)
+      .fontColor(this.selectedProfileColorScheme() === colorScheme ? '#FFFFFFFF' : $r('app.color.text_primary'))
+      .backgroundColor(this.selectedProfileColorScheme() === colorScheme ?
+        $r('app.color.accent') : $r('app.color.search_background'))
+      .id('input-color-scheme-' + colorScheme)
+      .onClick((): void => { this.updateProfileColorScheme(colorScheme); })
   }
 
   @Builder
@@ -558,22 +700,57 @@ struct SystemSettingsPage {
               .fontColor(this.settings.defaultDisplayMode === DisplayMode.SINGLE_APP ? '#FFFFFFFF' : $r('app.color.text_primary'))
               .onClick(() => this.update(DisplayMode.SINGLE_APP))
           }.width('100%')
-          Text('应用可单独覆盖该设置；切换活动模式时会重建 Wayland 会话，但不会重置 Wine prefix。').fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
+           Text('应用可单独覆盖该设置；切换活动模式时会重建 Wayland 会话，但不会重置 Wine prefix。').fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
+           Text('桌面屏幕方向').fontSize(14).fontWeight(FontWeight.Medium)
+             .fontColor($r('app.color.text_primary')).width('100%')
+           Row({ space: 8 }) {
+             Button('自动横屏').layoutWeight(1).height(48).borderRadius(14)
+               .fontSize(this.isNarrowPhone() ? 11 : 13)
+               .padding({ left: this.isNarrowPhone() ? 4 : 12, right: this.isNarrowPhone() ? 4 : 12 })
+               .backgroundColor(this.settings.desktopOrientation === ScreenOrientationSetting.SENSOR_LANDSCAPE ? $r('app.color.accent') : $r('app.color.search_background'))
+               .fontColor(this.settings.desktopOrientation === ScreenOrientationSetting.SENSOR_LANDSCAPE ? '#FFFFFFFF' : $r('app.color.text_primary'))
+               .onClick(() => this.updateDesktopOrientation(ScreenOrientationSetting.SENSOR_LANDSCAPE))
+             Button('横屏').layoutWeight(1).height(48).borderRadius(14)
+               .fontSize(this.isNarrowPhone() ? 11 : 13)
+               .padding({ left: this.isNarrowPhone() ? 4 : 12, right: this.isNarrowPhone() ? 4 : 12 })
+               .backgroundColor(this.settings.desktopOrientation === ScreenOrientationSetting.LANDSCAPE ? $r('app.color.accent') : $r('app.color.search_background'))
+               .fontColor(this.settings.desktopOrientation === ScreenOrientationSetting.LANDSCAPE ? '#FFFFFFFF' : $r('app.color.text_primary'))
+               .onClick(() => this.updateDesktopOrientation(ScreenOrientationSetting.LANDSCAPE))
+             Button('竖屏').layoutWeight(1).height(48).borderRadius(14)
+               .fontSize(this.isNarrowPhone() ? 11 : 13)
+               .padding({ left: this.isNarrowPhone() ? 4 : 12, right: this.isNarrowPhone() ? 4 : 12 })
+               .backgroundColor(this.settings.desktopOrientation === ScreenOrientationSetting.PORTRAIT ? $r('app.color.accent') : $r('app.color.search_background'))
+               .fontColor(this.settings.desktopOrientation === ScreenOrientationSetting.PORTRAIT ? '#FFFFFFFF' : $r('app.color.text_primary'))
+               .onClick(() => this.updateDesktopOrientation(ScreenOrientationSetting.PORTRAIT))
+           }.width('100%')
           Text('输出缩放 ' + this.settings.outputScale + '%').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
-          Slider({ value: this.settings.outputScale, min: 75, max: 150, step: 5 }).onChange((value: number) => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, this.settings.autoHideVirtualControls, this.settings.controlOpacity, this.settings.gamepadDeadzone, value))
+           Slider({ value: this.settings.outputScale, min: 75, max: 150, step: 5 })
+             // Match VintagePomelo: a press on the track must not immediately
+             // commit a new value while the user is scrolling the page.
+             .sliderInteractionMode(2)
+             .onChange((value: number, mode: SliderChangeMode) => {
+               if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                 this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
+                   this.settings.useGlassEffect, this.settings.usePageBackground,
+                   this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
+                   this.settings.controlOpacity, this.settings.gamepadDeadzone, value);
+               }
+             })
         }
         .width('100%')
         .padding(this.cardPadding())
-        .backgroundColor($r('app.color.card_glass_background'))
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .backgroundColor(this.groupSurfaceColor())
+        .backgroundBlurStyle(this.settings.useGlassEffect ? BlurStyle.COMPONENT_ULTRA_THICK : BlurStyle.NONE)
+        .border({ width: 1, color: this.groupBorderColor() })
         .borderRadius(20)
       } else if (section === 'appearance') {
         Column({ space: 16 }) {
           Text('外观').fontSize(20).fontWeight(FontWeight.Bold).width('100%')
           Text('主题').fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
           Row({ space: 8 }) {
-            Button('跟随系统').layoutWeight(1).height(48).borderRadius(14)
+            Button(this.isNarrowPhone() ? '跟随' : '跟随系统').layoutWeight(1).height(48).borderRadius(14)
               .fontSize(this.isNarrowPhone() ? 10 : 14)
+              .padding({ left: this.isNarrowPhone() ? 4 : 12, right: this.isNarrowPhone() ? 4 : 12 })
               .backgroundColor(this.settings.themeMode === ThemeMode.SYSTEM ? $r('app.color.accent') : $r('app.color.search_background'))
               .fontColor(this.settings.themeMode === ThemeMode.SYSTEM ? '#FFFFFFFF' : $r('app.color.text_primary'))
               .onClick(() => this.updateTheme(ThemeMode.SYSTEM))
@@ -596,8 +773,9 @@ struct SystemSettingsPage {
         }
         .width('100%')
         .padding(this.cardPadding())
-        .backgroundColor($r('app.color.card_glass_background'))
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .backgroundColor(this.groupSurfaceColor())
+        .backgroundBlurStyle(this.settings.useGlassEffect ? BlurStyle.COMPONENT_ULTRA_THICK : BlurStyle.NONE)
+        .border({ width: 1, color: this.groupBorderColor() })
         .borderRadius(20)
       } else if (section === 'input') {
         Column({ space: 16 }) {
@@ -618,6 +796,17 @@ struct SystemSettingsPage {
           if (this.settings.virtualInputEnabled) {
             this.SwitchRow('显示虚拟按键', '只控制十字键、摇杆、ABXY 和肩键；全屏鼠标与右上角控制栏不受影响', this.settings.showVirtualControls, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, value))
             this.SwitchRow('外设接管时隐藏按键', '检测到实体键盘、鼠标或手柄操作后，仅隐藏虚拟按键', this.settings.autoHideVirtualControls, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, value))
+            Column({ space: 10 }) {
+              Text('虚拟按键配色').fontSize(14).fontWeight(FontWeight.Medium)
+                .fontColor($r('app.color.text_primary')).width('100%')
+              Text('应用到当前桌面输入方案，单应用专用方案可在对应应用设置中单独调整。')
+                .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+              Row({ space: 8 }) {
+                this.InputColorSchemeChoice('经典蓝色', VirtualKeyColorScheme.DEFAULT)
+                this.InputColorSchemeChoice('高对比白色', VirtualKeyColorScheme.WHITE)
+              }.width('100%')
+            }
+            .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
             Column({ space: 10 }) {
               Text('控制栏方向').fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
               Text('自动会根据横竖屏切换；自动隐藏会在控制栏收起 3 秒后完全隐藏，点击右上角热区即可唤出。')
@@ -640,24 +829,47 @@ struct SystemSettingsPage {
                 .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
               Text('滚动灵敏度 ' + this.settings.virtualMouseConfig.mouseSensitivity + '%')
                 .fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
-              Slider({ value: this.settings.virtualMouseConfig.mouseSensitivity, min: 50, max: 200, step: 10 })
-                .id('virtual-mouse-sensitivity')
-                .onChange((value: number): void => this.updateVirtualMouse(value))
+               Slider({ value: this.settings.virtualMouseConfig.mouseSensitivity, min: 50, max: 200, step: 10 })
+                 .id('virtual-mouse-sensitivity')
+                 .sliderInteractionMode(2)
+                 .onChange((value: number, mode: SliderChangeMode): void => {
+                   if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                     this.updateVirtualMouse(value);
+                   }
+                 })
             }
             .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
             Text('控制层透明度 ' + this.settings.controlOpacity + '%').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
-            Slider({ value: this.settings.controlOpacity, min: 25, max: 100, step: 1 }).onChange((value: number) => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, this.settings.autoHideVirtualControls, value))
+             Slider({ value: this.settings.controlOpacity, min: 25, max: 100, step: 1 })
+               .sliderInteractionMode(2)
+               .onChange((value: number, mode: SliderChangeMode) => {
+                 if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                   this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
+                     this.settings.useGlassEffect, this.settings.usePageBackground,
+                     this.settings.showVirtualControls, this.settings.autoHideVirtualControls, value);
+                 }
+               })
           }
           Text('手柄死区 ' + this.settings.gamepadDeadzone + '%').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
-          Slider({ value: this.settings.gamepadDeadzone, min: 0, max: 40, step: 1 }).onChange((value: number) => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, this.settings.autoHideVirtualControls, this.settings.controlOpacity, value))
+           Slider({ value: this.settings.gamepadDeadzone, min: 0, max: 40, step: 1 })
+             .sliderInteractionMode(2)
+             .onChange((value: number, mode: SliderChangeMode) => {
+               if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                 this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
+                   this.settings.useGlassEffect, this.settings.usePageBackground,
+                   this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
+                   this.settings.controlOpacity, value);
+               }
+             })
           this.DesktopInputProfiles()
           this.InputLayoutEntry()
           this.KeyMappingEntry()
         }
         .width('100%')
         .padding(this.cardPadding())
-        .backgroundColor($r('app.color.card_glass_background'))
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .backgroundColor(this.groupSurfaceColor())
+        .backgroundBlurStyle(this.settings.useGlassEffect ? BlurStyle.COMPONENT_ULTRA_THICK : BlurStyle.NONE)
+        .border({ width: 1, color: this.groupBorderColor() })
         .borderRadius(20)
       } else if (section === 'engine') {
         Column({ space: 14 }) {
@@ -723,8 +935,9 @@ struct SystemSettingsPage {
         }
         .width('100%')
         .padding(this.cardPadding())
-        .backgroundColor($r('app.color.card_glass_background'))
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .backgroundColor(this.groupSurfaceColor())
+        .backgroundBlurStyle(this.settings.useGlassEffect ? BlurStyle.COMPONENT_ULTRA_THICK : BlurStyle.NONE)
+        .border({ width: 1, color: this.groupBorderColor() })
         .borderRadius(20)
       } else {
         Column({ space: 14 }) {
@@ -755,17 +968,27 @@ struct SystemSettingsPage {
         }
         .width('100%')
         .padding(this.isNarrowPhone() ? 12 : 24)
-        .backgroundColor($r('app.color.card_glass_background'))
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .backgroundColor(this.groupSurfaceColor())
+        .backgroundBlurStyle(this.settings.useGlassEffect ? BlurStyle.COMPONENT_ULTRA_THICK : BlurStyle.NONE)
+        .border({ width: 1, color: this.groupBorderColor() })
         .borderRadius(20)
       }
     }.width('100%')
   }
 
   @Builder
-  private SettingsList(maxWidth: number) {
+  private SettingsList(maxWidth: number, scrollUnderTitle: boolean = false) {
     List({ space: 14, scroller: this.settingsScroller }) {
-      ListItem() { this.Content('display') }.width('100%').id('settings-section-display')
+      ListItem() {
+        Column() {
+          if (scrollUnderTitle) {
+            Blank().height(this.settingsTopInset())
+          }
+          this.Content('display')
+        }
+        .width('100%')
+      }
+      .width('100%').id('settings-section-display')
       ListItem() { this.Content('appearance') }.width('100%').id('settings-section-appearance')
       ListItem() { this.Content('input') }.width('100%').id('settings-section-input')
       ListItem() { this.Content('engine') }.width('100%').id('settings-section-engine')
@@ -774,10 +997,11 @@ struct SystemSettingsPage {
     .layoutWeight(1)
     .width('100%')
     .constraintSize({ maxWidth: maxWidth })
-    .padding({ right: this.isNarrowPhone() ? 0 : 10, bottom: this.isNarrowPhone() ? 28 : 16 })
-    .scrollBar(BarState.Auto)
-    .scrollBarWidth(6)
-    .scrollBarColor($r('app.color.accent'))
+    .padding({
+      right: this.isNarrowPhone() ? 0 : 10,
+      bottom: this.isNarrowPhone() ? 28 : 16
+    })
+    .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
     .onScrollIndex((start: number): void => {
       this.section = this.sectionAt(start);
@@ -799,12 +1023,14 @@ struct SystemSettingsPage {
               this.SectionButton('Wine 引擎', 'engine', $r('sys.symbol.arrow_clockwise'))
               this.SectionButton('关于', 'about', $r('sys.symbol.info_circle'))
             }
-            .width(this.breakpoint === 'xl' ? 220 : 196)
+            .width(this.breakpoint === 'xl' ? 224 : 204)
             .height('100%')
-            .padding({ left: 8, right: 8, top: 10, bottom: 10 })
-            .backgroundColor($r('app.color.card_glass_background'))
-            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-            .borderRadius(16)
+            .padding({ left: 8, right: 8, top: 12, bottom: 12 })
+            .backgroundColor(this.groupSurfaceColor())
+            .backgroundBlurStyle(this.settings.useGlassEffect ? BlurStyle.COMPONENT_ULTRA_THICK : BlurStyle.NONE)
+            .border({ width: 1, color: this.groupBorderColor() })
+            .borderRadius(20)
+            .hitTestBehavior(HitTestMode.Default)
             this.SettingsList(this.settingsContentMaxWidth())
           }
           .width('100%').height('100%')
@@ -814,23 +1040,14 @@ struct SystemSettingsPage {
             top: this.settingsTopInset(), bottom: 20
           })
         } else {
-          Column({ space: 14 }) {
-            Scroll() {
-              Row({ space: 8 }) {
-                this.SectionChip('显示', 'display', $r('sys.symbol.rectangle_grid_1x2'))
-                this.SectionChip('外观', 'appearance', $r('sys.symbol.square_grid_2x2'))
-                this.SectionChip('输入', 'input', $r('sys.symbol.gamecontroller'))
-                this.SectionChip('引擎', 'engine', $r('sys.symbol.arrow_clockwise'))
-                this.SectionChip('关于', 'about', $r('sys.symbol.info_circle'))
-              }
-            }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%')
-            this.SettingsList(840)
+          Column() {
+            this.SettingsList(840, true)
           }
           .width('100%').height('100%')
           .alignItems(HorizontalAlign.Start)
           .padding({
             left: this.settingsSidePadding(), right: this.settingsSidePadding(),
-            top: this.settingsTopInset(), bottom: this.isNarrowPhone() ? 8 : 16
+            top: 0, bottom: this.isNarrowPhone() ? 8 : 16
           })
         }
       }
@@ -840,48 +1057,57 @@ struct SystemSettingsPage {
         style: {
           scrollEffectOpts: {
             enableScrollEffect: true,
-            scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR,
+            scrollEffectType: SUPPORTS_HDS_FLOATING ? ScrollEffectType.IMMERSIVE_GRADIENT_BLUR : ScrollEffectType.GRADUAL_BLUR,
             blurEffectiveStartOffset: LengthMetrics.vp(0),
-            blurEffectiveEndOffset: LengthMetrics.vp(84)
+            blurEffectiveEndOffset: LengthMetrics.vp(SUPPORTS_HDS_FLOATING ? 96 : 68)
+        },
+        originalStyle: {
+          backgroundStyle: {
+            backgroundColor: this.navigationTitleBackground(false)
           },
-          originalStyle: {
-            contentStyle: {
+          contentStyle: {
               titleStyle: {
                 mainTitleColor: $r('app.color.text_primary'),
                 subTitleColor: $r('app.color.text_secondary')
-              },
-              menuStyle: {
-                iconColor: $r('app.color.text_primary')
-              },
-              backIconStyle: {
-                iconColor: $r('app.color.text_primary')
+            },
+            menuStyle: {
+              backgroundColor: this.navigationControlBackground(),
+              iconColor: $r('app.color.text_primary')
+            },
+            backIconStyle: {
+              backgroundColor: this.navigationControlBackground(),
+              iconColor: $r('app.color.text_primary')
               }
             }
+        },
+        scrollEffectStyle: {
+          backgroundStyle: {
+            backgroundColor: this.navigationTitleBackground(true)
           },
-          scrollEffectStyle: {
-            contentStyle: {
+          contentStyle: {
               titleStyle: {
                 mainTitleColor: $r('app.color.text_primary'),
                 subTitleColor: $r('app.color.text_secondary')
-              },
-              menuStyle: {
-                iconColor: $r('app.color.text_primary')
-              },
-              backIconStyle: {
-                iconColor: $r('app.color.text_primary')
+            },
+            menuStyle: {
+              backgroundColor: this.navigationControlBackground(),
+              iconColor: $r('app.color.text_primary')
+            },
+            backIconStyle: {
+              backgroundColor: this.navigationControlBackground(),
+              iconColor: $r('app.color.text_primary')
               }
             }
-          },
-          systemMaterialEffect: {
-            materialType: HDS_MATERIAL_TYPE_IMMERSIVE,
-            materialLevel: HDS_MATERIAL_LEVEL_EXQUISITE
-          }
+        },
+        systemMaterialEffect: SUPPORTS_HDS_FLOATING ? {
+          materialType: HDS_MATERIAL_TYPE_IMMERSIVE,
+          materialLevel: HDS_MATERIAL_LEVEL_EXQUISITE
+        } : undefined
         },
         content: {
           title: {
             mainTitle: '系统设置',
-            subTitle: (this.breakpoint === 'xs' || this.breakpoint === 'sm') ? undefined :
-              '全局显示、输入与 Wine 引擎偏好'
+            subTitle: undefined
           },
           menu: {
             value: [
@@ -895,12 +1121,15 @@ struct SystemSettingsPage {
             maxCount: 1
           } as HdsNavigationMenuContentOptions,
           divider: { showType: DividerShowType.OFF }
-        },
-        avoidLayoutSafeArea: true,
-        enableComponentSafeArea: true
+      },
+      avoidLayoutSafeArea: true
       })
-      .titleMode(HdsNavigationTitleMode.MINI)
-      .hideToolBar(true)
+    .titleMode(HdsNavigationTitleMode.MINI)
+    .hideToolBar(true)
+    .systemBarStyle(
+      { statusBarContentColor: this.navigationTitleColor() },
+      { statusBarContentColor: this.navigationTitleColor() }
+    )
       .bindToScrollable([this.settingsScroller])
       .width('100%').height('100%')
       .backgroundColor('#00FFFFFF')
