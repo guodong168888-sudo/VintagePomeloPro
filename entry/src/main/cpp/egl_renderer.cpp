@@ -336,6 +336,17 @@ bool EglRenderer::TryAttachZeroCopySurface(uint32_t rendererToplevelId)
         for (const auto& surface : surfaces)
         {
             if (surface.surfaceKey != zeroCopySurfaceKey_) continue;
+            if (surface.vulkan != broker.IsVulkanPresentMode())
+            {
+                OH_LOG_WARN(LOG_APP,
+                            "[VIRGL-ZC][MAIN] bound surface type changed; releasing "
+                            "key=%{public}llu surface_vulkan=%{public}s mode_vulkan=%{public}s",
+                            static_cast<unsigned long long>(zeroCopySurfaceKey_),
+                            surface.vulkan ? "yes" : "no",
+                            broker.IsVulkanPresentMode() ? "yes" : "no");
+                ReleaseZeroCopyBinding();
+                break;
+            }
             zeroCopySourceW_ = static_cast<int>(surface.width);
             zeroCopySourceH_ = static_cast<int>(surface.height);
             return true;
@@ -343,9 +354,14 @@ bool EglRenderer::TryAttachZeroCopySurface(uint32_t rendererToplevelId)
         return true;
     }
 
+    const bool wantVulkanSurface = broker.IsVulkanPresentMode();
     for (const auto& surface : surfaces)
     {
         if (!surface.surfaceKey || surface.attached) continue;
+        // A stale GL surface and a live Venus surface can coexist while an
+        // Explorer/Wine client is restarted. Never attach across the backend
+        // boundary; doing so presents another client's history as this game.
+        if (surface.vulkan != wantVulkanSurface) continue;
         WaylandServer::ZeroCopyLayerInfo layer;
         if (!server->GetZeroCopyLayerInfo(
                 surface.surfaceKey, rendererToplevelId,
