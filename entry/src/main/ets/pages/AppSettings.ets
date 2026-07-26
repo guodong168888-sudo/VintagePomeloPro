@@ -12,8 +12,10 @@ import {
 import { AppCatalogService } from '../service/AppCatalogService';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
-import { LengthMetrics } from '@kit.ArkUI';
+import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
+import { LengthMetrics, window } from '@kit.ArkUI';
 import deviceInfo from '@ohos.deviceInfo';
+import { applyStatusOnlyImmersiveShell, getMiniTitleContentTopInset } from '../common/StatusOnlyImmersiveShell';
 import {
   DividerShowType,
   HdsNavigation,
@@ -41,6 +43,7 @@ struct AppSettingsPage {
   @State private app: AppDescriptor | null = null;
   @State private value: StoredAppSettings = createDefaultAppSettings('');
   @State private breakpoint: BreakpointType = 'lg';
+  @State private titleContentTopInsetVp: number = 72;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private breakpointCallback: ((value: BreakpointType) => void) | null = null;
   private appSettingsScroller: Scroller = new Scroller();
@@ -79,9 +82,9 @@ struct AppSettingsPage {
   }
 
   private contentTopInset(): number {
-    // Keep the immersive title clearance inside the Scroll content so it can
-    // move away together with the first settings card.
-    return this.breakpoint === 'xs' ? 72 : 88;
+    // Keep the HDS title clearance inside Scroll content so it moves away
+    // together with the first settings card.
+    return this.titleContentTopInsetVp;
   }
 
   private contentSidePadding(): number {
@@ -142,6 +145,24 @@ struct AppSettingsPage {
 
   aboutToDisappear(): void {
     if (this.breakpointCallback) BreakpointSystem.unsubscribe(this.breakpointCallback);
+  }
+
+  onPageShow(): void {
+    void this.applyPageWindowShell();
+  }
+
+  private async applyPageWindowShell(): Promise<void> {
+    try {
+      const pageWindow = await window.getLastWindow(this.context);
+      await applyStatusOnlyImmersiveShell(pageWindow);
+      this.refreshTitleContentInset(pageWindow);
+      setTimeout((): void => { this.refreshTitleContentInset(pageWindow); }, 160);
+    } catch (_) {
+    }
+  }
+
+  private refreshTitleContentInset(pageWindow: window.Window): void {
+    this.titleContentTopInsetVp = getMiniTitleContentTopInset(pageWindow);
   }
 
   private replace(title: string, cover: string, executable: string, workingDirectory: string,

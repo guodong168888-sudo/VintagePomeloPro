@@ -2,8 +2,9 @@ import router from '@ohos.router';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
-import { LengthMetrics } from '@kit.ArkUI';
+import { LengthMetrics, window } from '@kit.ArkUI';
 import deviceInfo from '@ohos.deviceInfo';
+import { applyStatusOnlyImmersiveShell, getMiniTitleContentTopInset } from '../common/StatusOnlyImmersiveShell';
 import {
   DividerShowType,
   HdsNavigation,
@@ -53,6 +54,7 @@ struct HelpCenter {
   @State private breakpoint: BreakpointType = 'lg';
   @State private viewportWidth: number = 0;
   @State private viewportHeight: number = 0;
+  @State private titleContentTopInsetVp: number = 72;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private breakpointCallback: ((value: BreakpointType) => void) | null = null;
   private helpScroller: Scroller = new Scroller();
@@ -120,6 +122,24 @@ struct HelpCenter {
     if (this.breakpointCallback) BreakpointSystem.unsubscribe(this.breakpointCallback);
   }
 
+  onPageShow(): void {
+    void this.applyPageWindowShell();
+  }
+
+  private async applyPageWindowShell(): Promise<void> {
+    try {
+      const pageWindow = await window.getLastWindow(this.context);
+      await applyStatusOnlyImmersiveShell(pageWindow);
+      this.refreshTitleContentInset(pageWindow);
+      setTimeout((): void => { this.refreshTitleContentInset(pageWindow); }, 160);
+    } catch (_) {
+    }
+  }
+
+  private refreshTitleContentInset(pageWindow: window.Window): void {
+    this.titleContentTopInsetVp = getMiniTitleContentTopInset(pageWindow);
+  }
+
   private isNarrowPhone(): boolean {
     return this.breakpoint === 'xs';
   }
@@ -176,12 +196,9 @@ struct HelpCenter {
   }
 
   private helpTopInset(): number {
-    // This padding belongs to the Scroll content, so the title clearance is
-    // consumed when the user scrolls instead of remaining as a fixed band.
-    // Help has a two-line title on portrait phones. Give the first section a
-    // little more room than the library cards while keeping the spacer in the
-    // scroll content.
-    return this.breakpoint === 'xs' ? 88 : 96;
+    // The spacer is inside Scroll content so it scrolls away with the first
+    // card instead of becoming a permanent blank band below the title.
+    return this.titleContentTopInsetVp;
   }
 
   private titleButtonMargin(): number {

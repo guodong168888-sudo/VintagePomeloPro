@@ -10,6 +10,11 @@ const DOMAIN = 0x0000;
 export default class EntryAbility extends UIAbility {
   private mainWindow: window.Window | null = null;
   private titleButtonRectCallback: ((rect: window.TitleButtonRect) => void) | null = null;
+  // A routed page can briefly change the window layout while it enters or
+  // leaves an editor. That transaction reports an empty title-button rect on
+  // some tablet/desktop shells even though the controls return afterwards.
+  // Retain the last real safe area for the lifetime of this main window.
+  private lastTitleButtonInsetVp: number = 0;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
@@ -122,6 +127,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   private observeTitleButtonInset(mainWindow: window.Window): void {
+    this.lastTitleButtonInsetVp = 0;
     AppStorage.setOrCreate('libraryTitleButtonInsetVp', 0);
     this.titleButtonRectCallback = (rect: window.TitleButtonRect): void => {
       this.updateTitleButtonInset(rect);
@@ -130,7 +136,7 @@ export default class EntryAbility extends UIAbility {
       this.updateTitleButtonInset(mainWindow.getTitleButtonRect());
       mainWindow.on('windowTitleButtonRectChange', this.titleButtonRectCallback);
     } catch (error) {
-      AppStorage.setOrCreate('libraryTitleButtonInsetVp', 0);
+      this.publishTitleButtonInset();
       hilog.warn(DOMAIN, 'EntryAbility', 'Title button safe area unavailable: %{public}s', JSON.stringify(error));
     }
   }
@@ -138,15 +144,23 @@ export default class EntryAbility extends UIAbility {
   private updateTitleButtonInset(rect: window.TitleButtonRect): void {
     try {
       if (rect.width <= 0) {
-        AppStorage.setOrCreate('libraryTitleButtonInsetVp', 0);
+        // Window layout and orientation changes can send a transient empty
+        // rect. Do not clear a previously measured desktop/tablet title area,
+        // otherwise returning from Settings or an input editor makes every
+        // routed library page lose its right-side avoidance.
+        this.publishTitleButtonInset();
         return;
       }
       const density = Math.max(1, display.getDefaultDisplaySync().densityPixels);
-      const insetVp = Math.ceil((Math.max(0, rect.right) + Math.max(0, rect.width)) / density) + 12;
-      AppStorage.setOrCreate('libraryTitleButtonInsetVp', insetVp);
+      this.lastTitleButtonInsetVp = Math.ceil((Math.max(0, rect.right) + Math.max(0, rect.width)) / density) + 12;
+      this.publishTitleButtonInset();
     } catch (_) {
-      AppStorage.setOrCreate('libraryTitleButtonInsetVp', 0);
+      this.publishTitleButtonInset();
     }
+  }
+
+  private publishTitleButtonInset(): void {
+    AppStorage.setOrCreate('libraryTitleButtonInsetVp', this.lastTitleButtonInsetVp);
   }
 
   onForeground(): void {

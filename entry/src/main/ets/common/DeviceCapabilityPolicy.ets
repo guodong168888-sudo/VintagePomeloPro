@@ -14,6 +14,10 @@ export class DeviceCapabilityPolicy {
     return DeviceCapabilityPolicy.deviceType() === 'phone';
   }
 
+  static isTabletDevice(): boolean {
+    return DeviceCapabilityPolicy.deviceType() === 'tablet';
+  }
+
   static usesForkNativeChildProcess(): boolean {
     const type = DeviceCapabilityPolicy.deviceType();
     return type === 'phone' || type === 'tv';

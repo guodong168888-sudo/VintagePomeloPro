@@ -26,8 +26,9 @@ import { GamepadManager } from '../service/GamepadManager';
 import { InputProfileService } from '../service/InputProfileService';
 import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
-import { LengthMetrics } from '@kit.ArkUI';
+import { LengthMetrics, window } from '@kit.ArkUI';
 import deviceInfo from '@ohos.deviceInfo';
+import { applyStatusOnlyImmersiveShell, getMiniTitleContentTopInset } from '../common/StatusOnlyImmersiveShell';
 import {
   DividerMode,
   DividerShowType,
@@ -76,6 +77,8 @@ struct Index {
   @State private phoneNavIndex: number = PHONE_NAV_BUILTIN;
   @State private viewportWidth: number = 0;
   @State private viewportHeight: number = 0;
+  @State private titleContentTopInsetVp: number = 72;
+  @State private statusBarHeightVp: number = 0;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private phoneNavController: HdsTabsController = new HdsTabsController();
   private builtinScroller: Scroller = new Scroller();
@@ -135,7 +138,7 @@ struct Index {
   // The HDS title is an overlay. Put its height into the scroll content so
   // the initial gap moves away with the first swipe instead of staying fixed.
   private phoneTitleBarScrollInset(): number {
-    return this.isPhoneLandscape() ? 72 : 88;
+    return this.titleContentTopInsetVp;
   }
 
   aboutToAppear(): void {
@@ -164,6 +167,22 @@ struct Index {
   onPageShow(): void {
     this.settings = AppSettingsStore.getInstance().getGlobalSettings();
     this.refreshRunningState();
+    void this.applyPageWindowShell();
+  }
+
+  private async applyPageWindowShell(): Promise<void> {
+    try {
+      const pageWindow = await window.getLastWindow(this.context);
+      await applyStatusOnlyImmersiveShell(pageWindow);
+      this.refreshPageInsets(pageWindow);
+      setTimeout((): void => { this.refreshPageInsets(pageWindow); }, 160);
+    } catch (_) {
+    }
+  }
+
+  private refreshPageInsets(pageWindow: window.Window): void {
+    this.titleContentTopInsetVp = getMiniTitleContentTopInset(pageWindow);
+    this.statusBarHeightVp = Math.max(0, this.titleContentTopInsetVp - 72);
   }
 
   private onOverlayEditorRequest(): void {
@@ -1021,7 +1040,10 @@ struct Index {
         } else {
           this.Library()
         }
-      }.width('100%').height('100%')
+      }
+      .width('100%')
+      .height('100%')
+      .padding({ top: this.isPhone() ? 0 : this.statusBarHeightVp + 16 })
       if (this.isPhone()) {
         this.PhoneNavigation()
       }

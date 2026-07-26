@@ -1,6 +1,6 @@
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
-import { common, ConfigurationConstant } from '@kit.AbilityKit';
+import { bundleManager, common, ConfigurationConstant } from '@kit.AbilityKit';
 import { picker } from '@kit.CoreFileKit';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import {
@@ -29,6 +29,7 @@ import { AppSettingsStore } from '../service/AppSettingsStore';
 import { display, LengthMetrics, window } from '@kit.ArkUI';
 import deviceInfo from '@ohos.deviceInfo';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
+import { applyStatusOnlyImmersiveShell, getMiniTitleContentTopInset } from '../common/StatusOnlyImmersiveShell';
 import {
   DividerShowType,
   HdsNavigation,
@@ -63,10 +64,13 @@ struct SystemSettingsPage {
   @State private engineOperationMessage: string = '';
   @State private inputProfiles: InputProfile[] = [];
   @State private statusBarHeightVp: number = 0;
+  @State private titleContentTopInsetVp: number = 72;
+  @State private appVersion: string = '版本信息读取中…';
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private settingsScroller: Scroller = new Scroller();
   private callback: ((value: BreakpointType) => void) | null = null;
   private engineCallback: EngineStateListener | null = null;
+  private sidebarTarget: SettingsSection | null = null;
 
   private isNarrowPhone(): boolean {
     return this.breakpoint === 'xs';
@@ -110,12 +114,7 @@ struct SystemSettingsPage {
   }
 
   private settingsTopInset(): number {
-    // Match VintagePomelo's safe-area contract: status bar + the 56vp HDS
-    // MINI title. Keep only a 4vp hit-test seam; the card's own padding
-    // supplies the visible title/content gap without exposing a white band.
-    const fallbackStatusBar = this.isManagedWindowsHost() ? 0 :
-      (DeviceCapabilityPolicy.isPhoneDevice() ? 40 : 24);
-    return 60 + Math.max(this.statusBarHeightVp, fallbackStatusBar);
+    return this.titleContentTopInsetVp;
   }
 
   private settingsSidePadding(): number {
@@ -151,33 +150,30 @@ struct SystemSettingsPage {
     };
     WineEngineService.getInstance().subscribe(this.engineCallback);
     this.loadInputProfiles();
+    this.loadApplicationVersion();
   }
 
   onPageShow(): void {
     this.settings = ThemeSettingsService.getInstance().getSettings();
     this.loadInputProfiles();
+    this.loadApplicationVersion();
     this.restoreSettingsWindowChrome();
+  }
+
+  private loadApplicationVersion(): void {
+    try {
+      const info = bundleManager.getBundleInfoForSelfSync(
+        bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
+      this.appVersion = '版本 ' + info.versionName + '（' + info.versionCode.toString() + '）';
+    } catch (_) {
+      this.appVersion = '版本信息不可用';
+    }
   }
 
   private async restoreSettingsWindowChrome(): Promise<void> {
     try {
       const pageWindow = await window.getLastWindow(this.context);
-      try {
-        await pageWindow.setWindowLayoutFullScreen(true);
-      } catch (_) {
-      }
-      try {
-        await pageWindow.setWindowSystemBarEnable(['status']);
-      } catch (_) {
-      }
-      try {
-        await pageWindow.setSpecificSystemBarEnabled('status', true);
-      } catch (_) {
-      }
-      try {
-        await pageWindow.setSpecificSystemBarEnabled('navigationIndicator', false);
-      } catch (_) {
-      }
+      await applyStatusOnlyImmersiveShell(pageWindow);
       try {
         const useLightIcons = this.usesDarkAppearance();
         await pageWindow.setWindowSystemBarProperties({
@@ -201,8 +197,10 @@ struct SystemSettingsPage {
       const heightPx = Math.max(systemAvoid.topRect.height, cutoutAvoid.topRect.height);
       const density = Math.max(1, display.getDefaultDisplaySync().densityPixels);
       this.statusBarHeightVp = Math.ceil(heightPx / density);
+      this.titleContentTopInsetVp = getMiniTitleContentTopInset(pageWindow);
     } catch (_) {
       this.statusBarHeightVp = 0;
+      this.titleContentTopInsetVp = 72;
     }
   }
 
@@ -480,9 +478,14 @@ struct SystemSettingsPage {
 
   private selectSection(section: SettingsSection): void {
     this.section = section;
+    // The List reports every intermediate first-visible item while a smooth
+    // sidebar jump is in progress. Keep the clicked item highlighted until
+    // that programmatic scroll stops instead of flashing through each section.
+    this.sidebarTarget = section;
     try {
       this.settingsScroller.scrollToIndex(this.sectionIndex(section), true, ScrollAlign.START);
     } catch (_) {
+      this.sidebarTarget = null;
     }
   }
 
@@ -958,6 +961,8 @@ struct SystemSettingsPage {
                 .fontColor($r('app.color.text_primary')).width('100%')
               Text('Wine 应用库与 Windows 兼容引擎').fontSize(12)
                 .fontColor($r('app.color.text_secondary')).width('100%')
+              Text(this.appVersion).fontSize(12)
+                .fontColor($r('app.color.text_secondary')).width('100%').id('app-version')
             }.layoutWeight(1).alignItems(HorizontalAlign.Start)
           }.width('100%')
           Column({ space: 8 }) {
@@ -1010,7 +1015,10 @@ struct SystemSettingsPage {
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
     .onScrollIndex((start: number): void => {
-      this.section = this.sectionAt(start);
+      if (this.sidebarTarget === null) this.section = this.sectionAt(start);
+    })
+    .onScrollStop((): void => {
+      this.sidebarTarget = null;
     })
     .id('system-settings-list')
   }

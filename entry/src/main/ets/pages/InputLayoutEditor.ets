@@ -68,6 +68,8 @@ struct InputLayoutEditor {
   @State private panelY: number = -1;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private originalOrientation: window.Orientation = window.Orientation.UNSPECIFIED;
+  private originalLayoutFullScreen: boolean = false;
+  private hasOriginalWindowLayout: boolean = false;
   private orientationRestored: boolean = false;
   private returnScheduled: boolean = false;
   private dragStartX: number = 0;
@@ -113,6 +115,8 @@ struct InputLayoutEditor {
     try {
       const editorWindow = await window.getLastWindow(this.context);
       this.originalOrientation = editorWindow.getPreferredOrientation();
+      this.originalLayoutFullScreen = editorWindow.getWindowProperties().isLayoutFullScreen;
+      this.hasOriginalWindowLayout = true;
       await editorWindow.setPreferredOrientation(window.Orientation.AUTO_ROTATION_LANDSCAPE_RESTRICTED);
       await editorWindow.setWindowLayoutFullScreen(true);
       try {
@@ -160,7 +164,12 @@ struct InputLayoutEditor {
       const editorWindow = await window.getLastWindow(this.context);
       await editorWindow.setPreferredOrientation(this.originalOrientation);
       try {
-        await editorWindow.setWindowLayoutFullScreen(true);
+        // Restore the exact pre-editor layout. Tablets and desktop hosts keep
+        // a non-immersive library window so the title-button avoidance remains
+        // valid; phones return to their immersive EntryAbility layout.
+        if (this.hasOriginalWindowLayout) {
+          await editorWindow.setWindowLayoutFullScreen(this.originalLayoutFullScreen);
+        }
       } catch (_) {
       }
       try {

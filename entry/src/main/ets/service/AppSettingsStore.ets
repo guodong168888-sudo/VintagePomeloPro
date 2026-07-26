@@ -18,10 +18,9 @@ const GLOBAL_KEY = 'global_settings_v1';
 const APP_SETTINGS_KEY = 'app_settings_v1';
 const LIBRARY_PATH_KEY = 'library_path_v1';
 const CATALOG_CACHE_KEY = 'catalog_cache_v1';
-// Bump this whenever the product default changes. Older installations may
-// still carry the short-lived PC single-app default, so those installs must
-// be migrated once to the desktop default before the catalog is resolved.
-const PLATFORM_DEFAULTS_KEY = 'platform_defaults_v5';
+// v6 briefly selected single-app on tablets.  Keep the product's desktop
+// workflow as the default and migrate only those tablet installations back.
+const PLATFORM_DEFAULTS_KEY = 'platform_defaults_v7';
 
 export class AppSettingsStore {
   private static instance: AppSettingsStore | null = null;
@@ -46,15 +45,16 @@ export class AppSettingsStore {
     this.libraryPath = this.store.getSync(LIBRARY_PATH_KEY, '') as string;
   }
 
-  /**
-   * Migrate the short-lived PC single-app default back to the product default.
-   * “桌面模式” is the user default on every device; PC/2-in-1 hosts implement
-   * it as one Harmony window per Wine toplevel instead of a singleton app.
-   */
+  /** Restore the v6 tablet default without overwriting other device preferences. */
   private async applyPlatformDefaults(): Promise<void> {
     if (!this.store) return;
     const applied = this.store.getSync(PLATFORM_DEFAULTS_KEY, '') as string;
     if (applied === '1') return;
+    if (!DeviceCapabilityPolicy.isTabletDevice()) {
+      await this.store.put(PLATFORM_DEFAULTS_KEY, '1');
+      await this.store.flush();
+      return;
+    }
     const current = this.globalSettings;
     this.globalSettings = {
       defaultDisplayMode: DisplayMode.DESKTOP,
@@ -65,10 +65,8 @@ export class AppSettingsStore {
       useGlassEffect: current.useGlassEffect,
       usePageBackground: current.usePageBackground,
       pageBackgroundUri: current.pageBackgroundUri,
-      // PC/2-in-1 desktop windows use physical keyboard and mouse by default.
-      // Single-app full-screen may still be enabled explicitly from settings.
-      virtualInputEnabled: this.managedWineWindowsHost ? false : current.virtualInputEnabled,
-      showVirtualControls: this.managedWineWindowsHost ? false : current.showVirtualControls,
+      virtualInputEnabled: current.virtualInputEnabled,
+      showVirtualControls: current.showVirtualControls,
       autoHideVirtualControls: current.autoHideVirtualControls,
       controlBarDirection: current.controlBarDirection,
       virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),
