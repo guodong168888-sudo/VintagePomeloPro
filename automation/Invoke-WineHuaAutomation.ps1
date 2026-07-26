@@ -1,15 +1,19 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('core', 'audio', 'opengl', 'host-vulkan', 'venus', 'venus-sampled', 'venus-sampled-idle', 'capabilities', 'wine-vulkan', 'wine-vulkan-present', 'dxvk', 'dxvk-replay', 'dxvk-layout-general', 'dxvk-combined', 'dxvk-dynamic', 'all', 'long')]
+    [ValidateSet('core', 'audio', 'opengl', 'host-vulkan', 'host-heaven', 'host-heaven-material-depth', 'host-heaven-inputs', 'venus', 'venus-sampled', 'venus-sampled-idle', 'venus-depth-cube', 'venus-depth-cube-array-2d-golden', 'venus-depth-cube-graphics', 'venus-heaven-material', 'venus-heaven-material-depth', 'venus-heaven-captured', 'venus-heaven-inputs', 'venus-heaven-captured-ab', 'venus-heaven-discard-ab', 'venus-heaven-material-layout', 'venus-heaven-draw0', 'venus-heaven-draw170', 'venus-heaven-f647', 'capabilities', 'wine-vulkan', 'wine-vulkan-present', 'dxvk', 'dxvk-long', 'dxvk-replay', 'dxvk-layout-general', 'dxvk-combined', 'dxvk-dynamic', 'all', 'long')]
     [string]$Suite = 'core',
     [ValidateSet('reuse', 'clean')]
     [string]$Prefix = 'reuse',
-    [ValidateSet('baseline', 'direct-fence-wait', 'no-remote-sync', 'no-dynamic-flush', 'fence-feedback', 'shadow-none', 'shadow-trace', 'shadow-to-host-explicit', 'shadow-precise', 'shadow-precise-single-ring', 'shadow-precise-sync-submit', 'shadow-precise-strong-ring', 'shadow-precise-direct-fence', 'shadow-precise-retain-shmem')]
-    [string]$PerfProfile = 'baseline',
+    [ValidateSet('baseline', 'direct-fence-wait', 'no-remote-sync', 'no-dynamic-flush', 'fence-feedback', 'shadow-none', 'shadow-trace', 'shadow-to-host-explicit', 'shadow-precise', 'shadow-precise-single-ring', 'shadow-precise-sync-submit', 'shadow-precise-strong-ring', 'shadow-precise-strong-ring-trace', 'shadow-precise-strong-ring-perf', 'shadow-precise-dirty-ring', 'shadow-precise-dirty-ring-perf', 'shadow-precise-dirty-ring-no-merge', 'shadow-precise-dirty-ring-no-upload', 'shadow-precise-dirty-ring-no-upload-fast', 'shadow-precise-strong-ring-async-present', 'shadow-precise-strong-ring-fence-poll', 'shadow-precise-strong-ring-mailbox', 'shadow-precise-direct-fence', 'shadow-precise-retain-shmem', 'shadow-precise-cpu-upload')]
+    [string]$PerfProfile = 'shadow-precise-strong-ring',
     [int]$Runs = 1,
+    [ValidateRange(60, 3600)]
+    [int]$LongSeconds = 3600,
     [switch]$Gate,
     [switch]$SkipBuild,
     [string]$DeviceId = '',
+    [string]$ReplayFragmentSpv = '',
+    [string]$ReplayVertexSpv = '',
     [string]$ArchiveRoot = 'D:\MyProject\winehua-logs\automation',
     [int]$TimeoutMinutes = 15
 )
@@ -248,6 +252,18 @@ function Get-D3D11Coverage {
             subresourceExplicitLod = [bool]$m.subresourceMatrix.explicitLod
             subresourceBarrierUpdate = [bool]$m.subresourceMatrix.barrierUpdate
             subresourceMatrix = [bool]$m.subresourceMatrix.pass
+            texture3dCreated = [bool]$m.texture3dMatrix.created
+            texture3dUpload = [bool]$m.texture3dMatrix.upload
+            texture3dSingleDispatch = [bool]$m.texture3dMatrix.singleDispatch
+            texture3dUavToSrvBarrier = [bool]$m.texture3dMatrix.uavToSrvBarrier
+            texture3dPingPong = [bool]$m.texture3dMatrix.pingPong
+            heavenCubeMatrix = [bool]$m.heavenResourceMatrix.cube.pass
+            heavenTexture3dR8 = [bool]$m.heavenResourceMatrix.texture3d.r8.pass
+            heavenTexture3dRg8 = [bool]$m.heavenResourceMatrix.texture3d.rg8.pass
+            heavenD32DepthComparison = [bool]$m.heavenResourceMatrix.depthComparisonSampler.pass
+            heavenD24S8DepthComparison = [bool]$m.heavenResourceMatrix.d24s8DepthComparisonSampler.pass
+            heavenD24S8ExtendedMatrix = [bool]$m.heavenResourceMatrix.d24s8ExtendedMatrix.pass
+            heavenResourceMatrix = [bool]$m.heavenResourceMatrix.pass
             bcTextureCreated = ($m.bcTextureTest -eq 'created_sampled')
             bcSamplingSubmitted = [bool]$m.bcSamplingSubmitted
             bcSamplingFunctional = [bool]$m.bcSamplingFunctional
@@ -261,6 +277,8 @@ function Get-D3D11Coverage {
             computeUavSubmitted = [bool]$m.computeUavSubmitted
             computeUavFunctional = [bool]$m.computeUavFunctional
             computeSampledImageFunctional = [bool]$m.computeSampledImageFunctional
+            longWallClock = ($RunSuite -ne 'dxvk-long' -or
+                [int64]$m.durationMs -ge ([int64]$LongSeconds * 1000 - 2000))
             present60Frames = ([int]$m.presentFrames -ge 60)
             presentResultSuccess = ([int]$m.presentResult -eq 0)
             cpuFullFrameReadbackZero = ([int]$m.cpuReadBytes -eq 0)
@@ -283,9 +301,11 @@ function Get-D3D11Coverage {
                 queueSubmitCount = [int]$m.queueSubmitCount
                 featureProbeReadBytes = [int]$m.featureProbeReadBytes
                 featureProbeGpuCopies = [int]$m.featureProbeGpuCopies
+                durationMs = [int64]$m.durationMs
                 rgba8SampleMatrix = $m.rgba8SampleMatrix
                 descriptorMatrix = $m.descriptorMatrix
                 subresourceMatrix = $m.subresourceMatrix
+                heavenResourceMatrix = $m.heavenResourceMatrix
                 cpuReadBytes = [int]$m.cpuReadBytes
                 cpuUploadBytes = [int]$m.cpuUploadBytes
             }
@@ -298,7 +318,7 @@ function Get-D3D11Coverage {
         suite = $RunSuite
         status = if ($requiredPass) { 'PASS' } else { 'FAIL' }
         tests = $entries
-        policy = 'required API/object/RGBA8 Load-POINT-LINEAR PS-CS/descriptor/subresource array-mip-explicit-LOD-update/texture sampling/present/readback coverage; optional MSAA resolve and stencil query are reported separately'
+        policy = 'required API/object/RGBA8 Load-POINT-LINEAR PS-CS/descriptor/subresource array-mip-explicit-LOD-update/texture sampling/D24S8 2D-array-per-view-cube-cube-array-linear-border/present/readback coverage; ordinary R32_FLOAT comparison, optional MSAA resolve, and stencil query are reported separately'
     }
 }
 
@@ -362,9 +382,9 @@ function Get-ArtifactMetadata {
         'smoke/x86/winehua_graphics_smoke.exe', 'smoke/x64/winehua_vulkan_smoke.exe',
         'smoke/x86/winehua_vulkan_smoke.exe',
         'smoke/x64/winehua_d3d11_smoke.exe', 'smoke/x86/winehua_d3d11_smoke.exe',
-        'smoke/dxvk/manifest.json',
-        'smoke/dxvk/legacy/x64/d3d11.dll', 'smoke/dxvk/legacy/x64/dxgi.dll',
-        'smoke/dxvk/legacy/x86/d3d11.dll', 'smoke/dxvk/legacy/x86/dxgi.dll',
+        'dxvk/manifest.json',
+        'dxvk/legacy/x64/d3d11.dll', 'dxvk/legacy/x64/dxgi.dll',
+        'dxvk/legacy/x86/d3d11.dll', 'dxvk/legacy/x86/dxgi.dll',
         'bin/guest_vulkan/lib/libvulkan.so.1',
         'bin/guest_vulkan/lib/libvulkan_virtio.so',
         'bin/guest_vulkan/share/vulkan/icd.d/venus_icd.x86_64.json')) {
@@ -418,6 +438,9 @@ function Get-CanonicalCapabilities {
         maintenance6 = [bool]$Capabilities.maintenance6
         presentWait = [bool]$Capabilities.presentWait
         swapchainMaintenance = [bool]$Capabilities.swapchainMaintenance
+        customBorderColorExtension = [bool]$Capabilities.customBorderColorExtension
+        customBorderColors = [bool]$Capabilities.customBorderColors
+        customBorderColorWithoutFormat = [bool]$Capabilities.customBorderColorWithoutFormat
         bc1 = [bool]$Capabilities.bc1
         bc2 = [bool]$Capabilities.bc2
         bc3 = [bool]$Capabilities.bc3
@@ -510,7 +533,7 @@ function Invoke-OneRun {
     # starting Wayland, wineserver or Wine.
     Invoke-Hdc shell 'power-shell wakeup' | Out-Null
     Invoke-Hdc shell 'hilog -x' | Out-Null
-    $startCommand = "aa start -a $Ability -b $Bundle --ps winehua.mode smoke --ps winehua.run_id $RunId --ps winehua.suite $RunSuite --ps winehua.prefix $RunPrefix --ps winehua.perf_profile $PerfProfile"
+    $startCommand = "aa start -a $Ability -b $Bundle --ps winehua.mode smoke --ps winehua.run_id $RunId --ps winehua.suite $RunSuite --ps winehua.prefix $RunPrefix --ps winehua.perf_profile $PerfProfile --ps winehua.long_seconds $LongSeconds"
     $startOutput = Invoke-Hdc shell $startCommand
     if (($startOutput -join "`n") -match '10106102') {
         # Devices without a credential can be dismissed with one deterministic
@@ -523,7 +546,10 @@ function Invoke-OneRun {
         throw "Want start failed: $($startOutput -join ' ')"
     }
 
-    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    $runTimeoutMinutes = if ($RunSuite -eq 'dxvk-long') {
+        [Math]::Max($TimeoutMinutes, [Math]::Ceiling($LongSeconds / 60.0) + 5)
+    } else { $TimeoutMinutes }
+    $deadline = (Get-Date).AddMinutes($runTimeoutMinutes)
     $captured = @{}
     $summaryText = ''
     while ((Get-Date) -lt $deadline) {
@@ -543,9 +569,11 @@ function Invoke-OneRun {
                 }
             }
         }
-        if ($RunSuite -in @('dxvk', 'dxvk-dynamic', 'all', 'long')) {
+        if ($RunSuite -in @('dxvk', 'dxvk-long', 'dxvk-dynamic', 'all')) {
             $dxvkTests = if ($RunSuite -eq 'dxvk-dynamic') {
                 @('dxvk-dynamic-cb-x86', 'dxvk-dynamic-cb-x64')
+            } elseif ($RunSuite -eq 'dxvk-long') {
+                @('dxvk-long-x64')
             } else {
                 @('dxvk-legacy-x64', 'dxvk-legacy-x86')
             }
@@ -591,9 +619,11 @@ function Invoke-OneRun {
             if (-not $captured.ContainsKey($testId)) { $captured[$testId] = $false }
         }
     }
-    if ($RunSuite -in @('dxvk', 'dxvk-dynamic', 'all', 'long')) {
+    if ($RunSuite -in @('dxvk', 'dxvk-long', 'dxvk-dynamic', 'all')) {
         $dxvkTests = if ($RunSuite -eq 'dxvk-dynamic') {
             @('dxvk-dynamic-cb-x86', 'dxvk-dynamic-cb-x64')
+        } elseif ($RunSuite -eq 'dxvk-long') {
+            @('dxvk-long-x64')
         } else {
             @('dxvk-legacy-x64', 'dxvk-legacy-x86')
         }
@@ -615,8 +645,21 @@ function Invoke-OneRun {
         Save-DeviceFile $remoteResults (Join-Path $runDirectory 'device-results')
     }
 
+    $customBorderSelections = @()
+    $wineStderrPath = Join-Path $runDirectory 'wine-stderr.log'
+    if (Test-Path -LiteralPath $wineStderrPath) {
+        foreach ($match in Select-String -LiteralPath $wineStderrPath -Pattern 'custom-border path=([a-z-]+) reason=([a-zA-Z0-9_-]+)') {
+            $path = $match.Matches[0].Groups[1].Value
+            $reason = $match.Matches[0].Groups[2].Value
+            $key = "$path|$reason"
+            if (-not ($customBorderSelections | Where-Object { $_.key -eq $key })) {
+                $customBorderSelections += [ordered]@{ key = $key; path = $path; reason = $reason }
+            }
+        }
+    }
+
     $visualPass = -not ($captured.Values -contains $false)
-    $coverage = if ($RunSuite -in @('dxvk', 'dxvk-dynamic', 'all', 'long')) {
+    $coverage = if ($RunSuite -in @('dxvk', 'dxvk-long', 'dxvk-dynamic', 'all')) {
         Get-D3D11Coverage -Summary $summary -RunSuite $RunSuite
     } else { $null }
     $coveragePass = $null -eq $coverage -or $coverage.status -eq 'PASS'
@@ -625,11 +668,15 @@ function Invoke-OneRun {
         runId = $RunId
         suite = $RunSuite
         prefix = $RunPrefix
+        perfProfile = $PerfProfile
         appStatus = $summary.status
         visualStatus = if ($visualPass) { 'PASS' } else { 'FAIL' }
         coverageStatus = if ($null -eq $coverage) { 'NOT_APPLICABLE' } else { $coverage.status }
         visuals = $captured
         coverage = $coverage
+        customBorderSelections = @($customBorderSelections | ForEach-Object {
+            [ordered]@{ path = $_.path; reason = $_.reason }
+        })
         status = if ($summary.status -eq 'PASS' -and $visualPass -and $coveragePass) { 'PASS' } else { 'FAIL' }
     }
     $hostSummary | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $runDirectory 'host-summary.json') -Encoding UTF8
@@ -641,8 +688,20 @@ if (-not (Test-Path -LiteralPath $HapWindows) -and $SkipBuild) { throw 'Signed H
 if ($Runs -lt 1) { throw '-Runs must be at least 1' }
 
 if (-not $DeviceId) {
-    $targets = & $Hdc list targets
-    $DeviceId = @($targets | Where-Object { $_ -and $_ -notmatch '^\[' })[0]
+    $targets = @(& $Hdc list targets | ForEach-Object { "$($_)".Trim() } |
+        Where-Object { $_ -and $_ -notmatch '^\[' })
+    # Prefer a physical target when HDC also exposes the local forwarding/emulator
+    # target. An ARM64 HAP is intentionally rejected by the x86 localhost target.
+    $physicalTargets = @($targets | Where-Object {
+        $_ -notmatch '^(127\.0\.0\.1|localhost)(:|$)'
+    })
+    $DeviceId = if ($physicalTargets.Count -gt 0) {
+        $physicalTargets[0]
+    } elseif ($targets.Count -gt 0) {
+        $targets[0]
+    } else {
+        ''
+    }
 }
 if (-not $DeviceId) { throw 'No HDC device is connected' }
 $script:DeviceId = $DeviceId
@@ -657,6 +716,42 @@ $installOutput = & $Hdc -t $DeviceId install -r $HapWindows 2>&1
 $installOutput | Set-Content -LiteralPath (Join-Path $sessionDirectory 'install.log') -Encoding UTF8
 if ($LASTEXITCODE -ne 0 -or ($installOutput -join "`n") -notmatch 'install bundle successfully') {
     throw 'HAP overwrite install did not report install bundle successfully'
+}
+
+if ($Suite -in @('venus-heaven-material', 'venus-heaven-material-layout')) {
+    if (-not $ReplayFragmentSpv -or -not (Test-Path -LiteralPath $ReplayFragmentSpv)) {
+        throw 'venus-heaven-material requires -ReplayFragmentSpv pointing to the captured final SPIR-V'
+    }
+    if (-not $ReplayVertexSpv -or -not (Test-Path -LiteralPath $ReplayVertexSpv)) {
+        throw 'venus-heaven-material requires -ReplayVertexSpv pointing to the captured/remapped VS SPIR-V'
+    }
+    # /data/local/tmp is visible to the HDC shell but not to the App's
+    # sandboxed native child. Stage the captured shaders in the app-owned temp
+    # directory and let SmokeRunner use its logical storage alias.
+    $remoteReplaySpv = "$DeviceSandbox/temp/winehua_heaven_final_fs.spv"
+    $remoteReplayVertexSpv = "$DeviceSandbox/temp/winehua_heaven_final_vs.spv"
+    $sendOutput = & $Hdc -t $DeviceId file send $ReplayFragmentSpv $remoteReplaySpv 2>&1
+    $sendOutput | Set-Content -LiteralPath (Join-Path $sessionDirectory 'replay-shader-send.log') -Encoding UTF8
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to stage the external replay SPIR-V on the device' }
+    $localReplayHash = (Get-FileHash -LiteralPath $ReplayFragmentSpv -Algorithm SHA256).Hash.ToLowerInvariant()
+    $deviceReplayHashLine = (& $Hdc -t $DeviceId shell sha256sum $remoteReplaySpv 2>$null | Select-Object -First 1)
+    $deviceReplayHash = if ($deviceReplayHashLine) { ("$deviceReplayHashLine" -split '\s+')[0].ToLowerInvariant() } else { '' }
+    if ($deviceReplayHash -and $deviceReplayHash -match '^[0-9a-f]{64}$' -and
+        $deviceReplayHash -ne $localReplayHash) {
+        throw "External replay SPIR-V hash mismatch: local=$localReplayHash device=$deviceReplayHash"
+    }
+    $sendVertexOutput = & $Hdc -t $DeviceId file send $ReplayVertexSpv $remoteReplayVertexSpv 2>&1
+    $sendVertexOutput | Set-Content -LiteralPath (Join-Path $sessionDirectory 'replay-vertex-send.log') -Encoding UTF8
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to stage the external replay vertex SPIR-V on the device' }
+    $localVertexHash = (Get-FileHash -LiteralPath $ReplayVertexSpv -Algorithm SHA256).Hash.ToLowerInvariant()
+    $deviceVertexHashLine = (& $Hdc -t $DeviceId shell sha256sum $remoteReplayVertexSpv 2>$null | Select-Object -First 1)
+    $deviceVertexHash = if ($deviceVertexHashLine) { ("$deviceVertexHashLine" -split '\s+')[0].ToLowerInvariant() } else { '' }
+    if ($deviceVertexHash -and $deviceVertexHash -match '^[0-9a-f]{64}$' -and
+        $deviceVertexHash -ne $localVertexHash) {
+        throw "External replay vertex SPIR-V hash mismatch: local=$localVertexHash device=$deviceVertexHash"
+    }
+    Copy-Item -LiteralPath $ReplayFragmentSpv -Destination (Join-Path $sessionDirectory 'heaven-final-fragment.spv')
+    Copy-Item -LiteralPath $ReplayVertexSpv -Destination (Join-Path $sessionDirectory 'heaven-final-vertex.spv')
 }
 
 $matrix = @()
@@ -712,6 +807,7 @@ if ($Suite -eq 'capabilities') {
     deviceId = $DeviceId
     hapSha256 = $artifact.hapSha256
     gate = [bool]$Gate
+    perfProfile = $PerfProfile
     status = if ($allPassed) { 'PASS' } else { 'FAIL' }
     runs = $runRecords
     capabilityHashes = if ($capabilityMatrix) {
