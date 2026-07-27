@@ -9,14 +9,15 @@
 
 ## 0. Visual correctness ledger and non-regression rule
 
-As of 2026-07-27, **no archived Heaven artifact is a known-good rollback-free
-baseline**. The user continuously observes backward camera-angle jumps on the
-currently installed frame-identity trace build and on every archived candidate
-listed in sections 19-24. A package seen around 12:40 was once reported as not
-jumping, but it was replaced before its HAP hash, source state, runtime hashes,
-profile, and continuous visual verdict were archived. It is therefore
-`UNKNOWN-NOT-RECOVERABLE`, not a valid baseline and not evidence that a later
-candidate fixed the issue.
+As of 2026-07-27, the command-list-owned mapped-flush build recorded in section
+36 is the first fully archived, user-confirmed `KNOWN_GOOD` Heaven baseline. Its
+HAP SHA-256 is
+`4cb5722fff73e2b16112a05cbc6b9d440deb818f7e6dd35a96f5ac311dd0d457`.
+The user continuously confirmed correct grass, terrain, stone, and building
+materials with no backward camera-angle frames. The earlier statement that no
+recoverable baseline existed applied to the historical incident in sections
+19-24; those candidates remain `UNKNOWN` or `REJECTED` and must not replace
+this baseline.
 
 This exposed a process failure: performance improvements, sparse screenshot
 checks, and temporary visual observations were allowed to advance without
@@ -2897,3 +2898,372 @@ from the committed DXVK milestone.
 The next measured costs are Host upload-command recording and the presenter's
 release wait. Optimize those independently. Do not alter final-present ordering,
 merge across unknown mapped generations, or trade resource semantics for FPS.
+
+## 36. 2026-07-27 final command-list flush `KNOWN_GOOD` baseline
+
+The final committed command-list-owned mapped-flush package passed the complete
+automated DXVK suite and the user's continuous real-Heaven visual gate. This is
+the first recoverable rollback-free and material-correct Heaven baseline. Future
+performance work starts as an explicit A/B profile from this source state and
+must preserve it unchanged.
+
+Source identity:
+
+    branch:          feature/render-element-completeness
+    main:            86838e2f9bf0b4886bdef3c6fc3d960db4d165ba
+    DXVK:            3618d7ead648a8d9352dde41888a77b3302529cf
+    Mesa:            ee411de9bb370b6d306e112f93af25e3d6281ee8
+    virglrenderer:   3997c9d281b545d7d16fff45297f25bc9964e5cd
+    Wine:            20559c87efb8fe08ed8f72bfea42fa5c742261c6
+    DXVK feature:    afc9c2a perf(winehua): batch mapped flushes per command list
+    DXVK diagnostic: 3618d7e diagnostic(winehua): count mapped flush batching
+
+Immutable artifact identity:
+
+    archive:
+      D:\MyProject\winehua-logs\manual\cmdlist-batch-heaven-20260727
+    signed HAP:
+      entry-default-signed-4cb5722f.hap
+    HAP SHA-256:
+      4cb5722fff73e2b16112a05cbc6b9d440deb818f7e6dd35a96f5ac311dd0d457
+    wine-data.zip SHA-256:
+      750fe135f2fb0c834238318c56aac417974fed98768edf84cf19c90af7dd78d8
+
+Do not confuse this HAP with `entry-default-signed.hap` in the same directory.
+That file is the older candidate with SHA-256
+`1f4e1b2bb5780017c83faada302f46b15c5a5b430e7d26bdab3320f85a864902`
+and is not the final `KNOWN_GOOD` package. Restore the accepted package with:
+
+    & 'C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe' `
+      -t 5KPBB25818203996 install -r `
+      'D:\MyProject\winehua-logs\manual\cmdlist-batch-heaven-20260727\entry-default-signed-4cb5722f.hap'
+
+The command must exit successfully and report `install bundle successfully`.
+
+Automation evidence:
+
+    archive:
+      D:\MyProject\winehua-logs\automation\phase2-20260727-193134
+    status:           PASS
+    suite/prefix:     dxvk / reuse
+    perf profile:     shadow-precise-dirty-ring-inline-upload-coverage-sort
+    batch flush:      true
+    HAP SHA-256:      4cb5722fff73e2b16112a05cbc6b9d440deb818f7e6dd35a96f5ac311dd0d457
+
+The x86 and x64 comprehensive DXVK D3D11 tests passed, as did the x64 visible
+Cube. The result covers descriptor identity and lifetime, mip/array/3D texture,
+BC, MSAA, compute/UAV, D24S8, MRT, and the Heaven mini-pipeline matrices. Key
+invariants were:
+
+    fallbackDetected=false
+    cpuReadBytes=0
+    cpuUploadBytes=0
+    perFrameDeviceWaitIdle=0
+    Cube frames=512
+    Cube angleRegressions=0
+
+Continuous Heaven evidence:
+
+    screenshot:
+      heaven-4cb5722f-user-confirmed.jpeg
+    screenshot SHA-256:
+      38f3c596c4589eebffb35989f66c300323dfa9f9c58e87285da1394be174ef7b
+    DXGI log:
+      heaven-4cb5722f-dxgi.log
+    DXGI log SHA-256:
+      7fe461480df3a0350732d4332d293a0583aa9a9263cc6c2f7db610361ab25256
+    D3D11 log:
+      heaven-4cb5722f-d3d11.log
+    D3D11 log SHA-256:
+      909faa9156ff62594788951a75b654efdcd25199c7132d3e76e1ab8153dfcff1
+    loaded DXVK:
+      v1.10.3-25-g3618d7e
+    user verdict:
+      PASS - materials correct and no backward frame/angle jump
+
+The final long-run mapped-flush counters were:
+
+    lists=59280
+    queued_ranges=25584931
+    emitted_ranges=19193370
+    calls=112276
+    queued_bytes=41196851200
+    emitted_bytes=13413811968
+    whole_ranges=0
+    failures=0
+
+This is about 25% fewer range records and 67% fewer flushed bytes, with no
+failed flushes. The gain comes from precise merging within the consuming
+`DxvkCommandList`; it does not skip required synchronization. The accepted
+architecture is:
+
+    mapped write
+      -> attach exact range and strong resource reference to consuming CS command
+      -> command list owns and merges ranges per VkDeviceMemory
+      -> vkFlushMappedMemoryRanges immediately before that list's QueueSubmit
+
+Unassociated writes retain the original synchronous flush. The rejected
+device-global pending-flush experiment crossed resource ownership/generation
+boundaries and changed grass/terrain colours; it must never be restored.
+
+The qualification run explicitly used:
+
+    DXVK_WINEHUA_BATCH_MAPPED_FLUSH=1
+    DXVK_WINEHUA_BATCH_MAPPED_FLUSH_STATS=1
+    automation/Invoke-WineHuaAutomation.ps1 -BatchMappedFlush
+
+Commit `86838e2` intentionally leaves batching off by default for ordinary
+product launch. This visual PASS qualifies the opt-in implementation; promoting
+it to the product default remains a separate release decision. The 60-minute
+gate remains paused by user direction.
+
+Finally, no optimization may remove or weaken the root ordering fix:
+
+    DXVK final presenter-copy QueueSubmit
+      -> Venus primary ring
+      -> vn_ring_roundtrip(primary_ring)
+      -> vn_ring_wait_all(primary_ring)
+      -> private vtest present
+
+This invariant prevents an older rendered source from being published after a
+newer frame. Any next optimization must first ask whether the synchronization
+or copy is necessary, test a semantics-preserving alternative as an explicit
+A/B profile, and re-pass automation plus continuous Heaven before promotion.
+
+## 37. 2026-07-27 qualified mapped flush promoted to the product path
+
+The command-list-owned mapped-flush implementation from section 36 is now the
+default for the DXVK Legacy product mode. This promotion changes launch policy
+only. It does not change DXVK, Mesa, virglrenderer, Wine, final-present ordering,
+resource ownership, or synchronization behavior.
+
+Committed source identity:
+
+    branch:          feature/render-element-completeness
+    main:            dccbc12226cee1ff3c7d35bc371e64e8921eb164
+    DXVK:            3618d7ead648a8d9352dde41888a77b3302529cf
+    Mesa:            ee411de9bb370b6d306e112f93af25e3d6281ee8
+    virglrenderer:   3997c9d281b545d7d16fff45297f25bc9964e5cd
+    Wine:            20559c87efb8fe08ed8f72bfea42fa5c742261c6
+    commit:          dccbc12 perf(dxvk): promote qualified mapped flush product path
+
+Final committed product artifact:
+
+    archive:
+      D:\MyProject\winehua-logs\manual\product-batch-default-20260727
+    signed HAP:
+      entry-default-signed-43654ab7.hap
+    HAP SHA-256:
+      43654ab7b363057f07ae9cd41b932b7ae5b0aed79126e3dc44563f8dfc558ed4
+    wine-data.zip SHA-256:
+      750fe135f2fb0c834238318c56aac417974fed98768edf84cf19c90af7dd78d8
+    build time:
+      2026-07-27 21:04:45 +0800
+
+Artifact checks passed: the HAP-embedded `wine-data.zip` exactly matches the
+assembled payload, Guest EGL is x86-64, Host `libentry.so` is AArch64, and HDC
+overwrite installation reported `install bundle successfully`.
+
+Committed-product automation evidence:
+
+    archive:
+      D:\MyProject\winehua-logs\automation\phase2-20260727-210903
+    status:           PASS
+    suite/prefix:     dxvk / reuse
+    perf profile:     shadow-precise-dirty-ring-inline-upload-coverage-sort
+    batch flush:      true
+    HAP SHA-256:      43654ab7b363057f07ae9cd41b932b7ae5b0aed79126e3dc44563f8dfc558ed4
+
+The x86 and x64 comprehensive DXVK D3D11 tests passed, and the x64 visible Cube
+passed. Both comprehensive tests loaded DXVK 1.10.3 and reported
+`fallbackDetected=false`. This re-qualifies the descriptor, texture/subresource,
+BC, MSAA, compute/UAV, depth/stencil, MRT, and Heaven mini-pipeline coverage
+after the product-default change.
+
+The product launch policy is deliberately asymmetric:
+
+    ordinary DXVK Legacy launch:
+      DXVK_WINEHUA_BATCH_MAPPED_FLUSH=1
+      DXVK_WINEHUA_BATCH_MAPPED_FLUSH_STATS is not enabled
+
+    SmokeRunner request with batchMappedFlush=false:
+      DXVK_WINEHUA_BATCH_MAPPED_FLUSH=0
+
+    Start-WineHuaGameTest.ps1 without -BatchMappedFlush:
+      DXVK_WINEHUA_BATCH_MAPPED_FLUSH=0
+
+This preserves real off-side A/B measurements after enabling the qualified
+product default. Statistics remain opt-in because their bookkeeping and log I/O
+can materially reduce Heaven performance.
+
+The equivalent pre-commit product candidate is archived in the same manual
+directory with HAP SHA-256
+`357d2cb066df9e01f249f93e2c49afbd347b417b4aaa8898d53de23eeee99c95`.
+Its ordinary Heaven run used no D3D environment override; logs confirmed the
+coverage-sort profile, batching enabled, DXVK log level `warn`, and no Guest
+performance summary. The user inspected that run and reported that it had no
+visible problem. Its screenshot is `heaven-product-default.jpeg`. The final
+committed HAP then re-passed automation and was launched with the same ordinary
+product environment. Keep section 36's `4cb5722f` package as the immutable
+restore baseline until the final committed HAP also receives a separately
+archived continuous visual verdict.
+
+Launch contract discovered during final verification: a game Want must specify
+`winehua.d3d_backend=dxvk_legacy` to select the DXVK product mode. Omitting the
+backend intentionally selects the WineD3D fallback; Heaven is DX11-only and
+will show its fatal-error window on that fallback. This is a launch-request
+mistake, not a Vulkan or DXVK regression.
+
+The 60-minute gate remains paused by user direction. Future performance work
+must retain the section 36 present-order invariant and must not restore the
+rejected device-global flush, async present, or unknown-generation dirty-gap
+merging.
+
+## 38. 2026-07-27 Host performance-summary removal is rejected
+
+An A/B candidate disabled `VKR_WINEHUA_PERF_SUMMARY` only for the qualified
+coverage-sort product selector. The source review showed that this switch
+controls Host submit-path clocks and atomic counters, periodic renderer log
+formatting, and the NCP `ForwardPerfSummary` file-to-hilog thread. It does not
+directly select dirty ranges, GPU upload commands, fences, resource ownership,
+or final-present ordering. Nevertheless, removing the timing work changed real
+device behavior and therefore cannot be treated as a safe logging cleanup.
+
+Rejected candidate identity:
+
+    source:
+      main 1428cab plus an uncommitted two-file A/B change
+    signed HAP archive:
+      D:\MyProject\winehua-logs\performance\host-perf-summary-off-20260727-2130\entry-default-signed-616bf882.hap
+    HAP SHA-256:
+      616bf88291f3ba6adbfb47c8726a7f781bc9cf9b64c3de6e7d66dbdd566c1d75
+    wine-data.zip SHA-256:
+      750fe135f2fb0c834238318c56aac417974fed98768edf84cf19c90af7dd78d8
+    exact changed behavior:
+      coverage-sort VKR_WINEHUA_PERF_SUMMARY=1 -> 0
+
+The runtime log confirmed that all other selected product state was unchanged:
+
+    backend=dxvk_legacy
+    DXVK version=1.10.3
+    profile=shadow-precise-dirty-ring-inline-upload-coverage-sort
+    batchMappedFlush=1
+    present_mode=fifo
+    fallback not selected
+
+Observed display-FPS samples were:
+
+    16.695, 14.986, 17.911, 23.491, 18.382, 20.308
+
+The higher intervals are not an accepted performance gain. During continuous
+inspection the user observed frames flashing incorrect miscellaneous colours
+(`跳杂色`) and marked the image wrong. The candidate is therefore
+`REJECTED-user-observed-colour-corruption` regardless of its FPS.
+
+The two source changes were fully reverted without a commit. The device was
+restored with the product HAP from section 37:
+
+    HAP SHA-256:
+      43654ab7b363057f07ae9cd41b932b7ae5b0aed79126e3dc44563f8dfc558ed4
+    install result:
+      install bundle successfully
+    restored runtime:
+      coverage-sort, perf_summary=1, batchMappedFlush=1
+
+After Heaven was relaunched from a fully stopped process tree, the user
+confirmed that this restored version had no visual problem. This is the active
+device baseline for the next isolation.
+
+This result proves timing dependence, not that diagnostic logging is a valid
+long-term synchronization primitive. The next isolation must retain renderer
+submit timing/counters and remove only the independent NCP log-forwarding
+thread. If that is correct, it can remove duplicate hilog I/O without changing
+submit timing. If it also corrupts the image, the forwarding thread is pacing a
+latent resource-generation race and no logging component may be removed before
+the missing synchronization is identified and implemented explicitly.
+
+Do not repeat the full-summary-off experiment, do not accept its higher FPS,
+and do not weaken the known-good present/resource ordering to reproduce it.
+
+## 39. 2026-07-27 duplicate Host performance forwarding removed safely
+
+The follow-up isolation retained the complete renderer performance-summary
+path and disabled only the independent NCP file-to-hilog forwarding thread for
+the qualified coverage-sort product selector. The renderer still records Host
+submit timing and atomic counters in `winehua_virgl_host.log`; dirty tracking,
+mapped upload, fences, resource lifetime, queue submission, and final-present
+ordering are unchanged. Diagnostic profiles continue to forward summaries to
+hilog for live investigation.
+
+Candidate source identity before commit:
+
+    main:            15e8518e0cb4b234c933e448dd7691712b9dbc59
+    DXVK:            3618d7ead648a8d9352dde41888a77b3302529cf
+    Mesa:            ee411de9bb370b6d306e112f93af25e3d6281ee8
+    virglrenderer:   3997c9d281b545d7d16fff45297f25bc9964e5cd
+    Wine:            20559c87efb8fe08ed8f72bfea42fa5c742261c6
+    changed source:  entry/src/main/cpp/virgl_child.cpp
+
+Qualified artifact:
+
+    archive:
+      D:\MyProject\winehua-logs\performance\host-perf-forward-off-20260727-2149
+    signed HAP:
+      entry-default-signed-07013f8c.hap
+    HAP SHA-256:
+      07013f8c8e0c02e824bd35a0db55b962e95ce5ad29bf660ec2db2c01b2e066c1
+    wine-data.zip SHA-256:
+      750fe135f2fb0c834238318c56aac417974fed98768edf84cf19c90af7dd78d8
+    build time:
+      2026-07-27 21:48:19 +0800
+
+Runtime isolation confirmed:
+
+    VKR_WINEHUA_PERF_SUMMARY=1
+    renderer WineHuaPerf records continue
+    forwarded WineHuaPerf hilog lines=0
+    profile=shadow-precise-dirty-ring-inline-upload-coverage-sort
+    DXVK_WINEHUA_BATCH_MAPPED_FLUSH=1
+
+Six continuous display-FPS windows after scene initialization were:
+
+    23.545, 27.200, 18.540, 31.654, 30.933, 20.521
+
+Their range is 18.540 to 31.654 FPS and median is 25.373 FPS. Archived day and
+night frames retain the expected Heaven geometry, material textures, lighting,
+and colour. No fallback, device lost, ring fatal, timestamp regression, or
+frame-angle regression was found. The user continuously inspected this exact
+candidate and reported `PASS - this version has no problem`.
+
+Post-visual automation evidence:
+
+    archive:
+      D:\MyProject\winehua-logs\automation\phase2-20260727-220057
+    status:           PASS
+    suite/prefix:     dxvk / reuse
+    perf profile:     shadow-precise-dirty-ring-inline-upload-coverage-sort
+    batch flush:      true
+    HAP SHA-256:      07013f8c8e0c02e824bd35a0db55b962e95ce5ad29bf660ec2db2c01b2e066c1
+
+Both x86 and x64 comprehensive DXVK D3D11 tests passed, including descriptor
+identity/lifetime, sampled and storage resources, mip/array/3D textures, BC,
+MSAA, compute/UAV, D24S8, MRT, and Heaven mini-pipeline coverage. Both visual
+validators passed. The x64 visible Cube completed 467 frames with
+`angleRegressions=0`; the selected backend remained DXVK Legacy with no
+WineD3D fallback.
+
+This result qualifies removal of duplicate hilog I/O, not removal of renderer
+timing. The rejected full-summary-off candidate remains evidence of a latent
+timing sensitivity and must not be restored. Future performance work should
+profile Host `buffer_record` and queue submission while preserving:
+
+    DXVK final presenter-copy QueueSubmit
+      -> Venus primary ring
+      -> vn_ring_roundtrip(primary_ring)
+      -> vn_ring_wait_all(primary_ring)
+      -> private vtest present
+
+The next realistic target is to raise Heaven's low intervals above 20 FPS and
+stabilize its median around 25-30 FPS. Any optimization must be a separately
+selectable A/B, retain exact resource-generation ownership and release-fence
+semantics, and pass the same DXVK automation plus continuous Heaven review.
