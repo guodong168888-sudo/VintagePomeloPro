@@ -405,13 +405,11 @@ static napi_value SetOutputSize(napi_env env, napi_callback_info info) {
 }
 
 static napi_value SetDisplayScale(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    double scale;
-    napi_get_value_double(env, args[0], &scale);
-    EglRenderer::SetGlobalDisplayScale((float)scale);
-    OH_LOG_INFO(LOG_APP, "[MW-NAPI] setDisplayScale = %{public}.2f", scale);
+    // The compositor derives the viewport and input transform from its
+    // measured output geometry. Keep this export for the existing ArkTS
+    // callers, but do not revive the removed global renderer scale.
+    (void)env;
+    (void)info;
     return nullptr;
 }
 
