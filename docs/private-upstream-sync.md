@@ -45,3 +45,21 @@
 - 构建验证：使用 `winehua-dev` 和 Makefile Docker 链路分别完成 API 23 x86_64 与 ARM64 Debug HAP；两者均启用 `BUILD_GUEST_GFX=1`，guest ABI 均为 x86_64。
 - 包验证：两个 HAP 均为 `com.vintage.pomelopro` 1.0.8、单一目标 ABI，并包含 guest Mesa/VirGL 环境、`virtio_gpu_dri.so`、图形 smoke 和音频 smoke；官方签名工具验证通过。
 - 未覆盖：phone/TV 真机上的 fork Wine、旋转、VirGL 重绘和触摸输入仍需设备回归，不能用 x86 模拟器或 ARM 平板结果替代。
+
+### 2026-07-27 桌面全屏合成器与自动构建
+
+| 上游 SHA | 私有分支 SHA | 范围 | 选择原因 | 合并结果 |
+| --- | --- | --- | --- | --- |
+| `c00efd8` | `ca10e8c` | Docker 构建配置与签名挂载 | 让自动/容器构建可导入用户配置 | 无冲突同步 |
+| `954730e` | `2d5f754` | GitHub Actions 无签名 HAP 构建 | 提供上游自动构建 | 无冲突同步 |
+| `a287fe5` | `df8d913` | 合成器模块化与 Wine OHOS 适配 | 是后续全屏渲染与输入修复的基础 | 采用新的桌面合成器；保留私有 NCP shim、应用内 VirGL、手柄桥接与旧柚桌面输入页 |
+| `42eb250` | `ac75ed9` | app_id 语义与 ghost desktop-shell 过滤 | 防止 Explorer/桌面壳窗口参与错误命中 | 同步并更新 Wine gitlink |
+| `68555ed` | `e352950` | 桌面全屏零拷贝、warp 与 pointer constraints | 修复全屏比例、黑边点击和 dinput 贴边 | 无冲突同步 |
+| `ed8dcac` | `e747937` | 全屏前台优先级 | 修复旧窗口连带全屏抢输入 | 无冲突同步 |
+| `65cc779` | `9581efd` | Wine shell32 desktop.ini CLSID 回退 | 修复 Explorer 文件夹处理回退 | 子模块无共同线性祖先，已明确切至已审查提交 |
+
+- 跳过：`7d9c7ec` 的 wine32 构建改动已等价存在；`c8e94b3` 会将手机 VirGL 改为 fork/socket relay，违背私有分支保留的应用内直连 Surface 架构；`3331df7` 会把产品版本倒退到 1.0.3。
+- 冲突处理：保留旧柚 Pro 的 ArkTS 页面、设备分流和 `ncp_shim`；采用新的桌面合成器、全屏输入/渲染栈和 Wine 适配。
+- 验证：目录与模型单元测试 24 项通过；Docker/Makefile ARM64 Debug HAP 构建成功，目标/兼容 API 均为 23，guest ABI 为 x86_64。包内包含 ARM64 的 Box64、entry、wine child、VirGL/Wayland 运行库和 `wine-data.zip`；嵌套运行时包含 guest-gfx 环境、EGL、virtio GPU 驱动及图形/音频 smoke。官方签名工具验证通过。
+- 兼容修复：私有 ArkTS 仍调用 `setDisplayScale`，上游合成器已从 `EglRenderer` 移除全局缩放。该 NAPI 导出保留为兼容空操作，实际渲染和输入变换由新合成器测量输出几何统一计算。
+- 未覆盖：尚未在物理 ARM 设备上回归零拷贝全屏、pointer warp/constraints 与私有手机应用内 VirGL；不能由本次离线构建替代。
