@@ -2,8 +2,8 @@
 param(
     [ValidateSet('dxvk_legacy', 'wined3d')]
     [string]$D3DBackend = 'dxvk_legacy',
-    [ValidateSet('baseline', 'direct-fence-wait', 'no-remote-sync', 'no-dynamic-flush', 'fence-feedback', 'shadow-none', 'shadow-trace', 'shadow-to-host-explicit', 'shadow-precise', 'shadow-precise-single-ring', 'shadow-precise-sync-submit', 'shadow-precise-strong-ring', 'shadow-precise-strong-ring-trace', 'shadow-precise-strong-ring-perf', 'shadow-precise-strong-ring-async-present', 'shadow-precise-strong-ring-fence-poll', 'shadow-precise-strong-ring-mailbox', 'shadow-precise-direct-fence', 'shadow-precise-retain-shmem', 'shadow-precise-cpu-upload', 'shadow-precise-dirty-ring', 'shadow-precise-dirty-ring-perf', 'shadow-precise-dirty-ring-no-merge', 'shadow-precise-dirty-ring-no-upload', 'shadow-precise-dirty-ring-no-upload-fast')]
-    [string]$PerfProfile = 'shadow-precise-strong-ring',
+    [ValidateSet('baseline', 'direct-fence-wait', 'no-remote-sync', 'no-dynamic-flush', 'fence-feedback', 'shadow-none', 'shadow-trace', 'shadow-to-host-explicit', 'shadow-precise', 'shadow-precise-single-ring', 'shadow-precise-sync-submit', 'shadow-precise-strong-ring', 'shadow-precise-legacy-host-sync', 'shadow-precise-strong-ring-trace', 'shadow-precise-strong-ring-perf', 'shadow-precise-strong-ring-async-present', 'shadow-precise-strong-ring-fence-poll', 'shadow-precise-strong-ring-mailbox', 'shadow-precise-direct-fence', 'shadow-precise-retain-shmem', 'shadow-precise-cpu-upload', 'shadow-precise-dirty-ring', 'shadow-precise-dirty-ring-perf', 'shadow-precise-dirty-ring-no-merge', 'shadow-precise-dirty-ring-no-upload', 'shadow-precise-dirty-ring-no-upload-fast', 'shadow-precise-dirty-ring-inline-upload', 'shadow-precise-dirty-ring-inline-upload-serialized','shadow-precise-dirty-ring-inline-upload-descriptor-serialized', 'shadow-precise-dirty-ring-frame-assoc-trace', 'shadow-precise-dirty-ring-present-image-trace')]
+    [string]$PerfProfile = 'shadow-precise-dirty-ring-inline-upload',
     [ValidateSet('', 'heaven-dx11')]
     [string]$GamePreset = '',
     [string]$GamePath = '',
@@ -64,6 +64,23 @@ if ($GamePreset -eq 'heaven-dx11') {
     }
 }
 
+# Carry the DXVK half of the frame-association trace explicitly in the game
+# Want. The Host profile reaches the NCP through graphics-broker IPC, but it
+# does not itself guarantee that an arbitrary Wine child environment variable
+# survives Ability startup on every Harmony build.
+if ($PerfProfile -eq 'shadow-precise-dirty-ring-frame-assoc-trace' -and
+    -not $D3DEnvironment.ContainsKey('WINEHUA_DXVK_TRACE_CAMERA')) {
+    $D3DEnvironment['WINEHUA_DXVK_TRACE_CAMERA'] = '1'
+}
+if ($PerfProfile -eq 'shadow-precise-dirty-ring-present-image-trace') {
+    if (-not $D3DEnvironment.ContainsKey('WINEHUA_DXVK_TRACE_PRESENT_IMAGE')) {
+        $D3DEnvironment['WINEHUA_DXVK_TRACE_PRESENT_IMAGE'] = '1'
+    }
+    if (-not $D3DEnvironment.ContainsKey('DXVK_LOG_LEVEL')) {
+        $D3DEnvironment['DXVK_LOG_LEVEL'] = 'info'
+    }
+}
+
 $environmentPairs = @($D3DEnvironment.GetEnumerator() | Sort-Object { [string]$_.Key })
 if ($environmentPairs.Count -gt 32) {
     throw "At most 32 D3D environment overrides are supported"
@@ -91,6 +108,14 @@ foreach ($pair in $environmentPairs) {
         throw "D3D environment value is too long: $key"
     }
 }
+$environmentPayload = @($environmentPairs | ForEach-Object {
+    [ordered]@{
+        key = [string]$_.Key
+        value = [string]$_.Value
+    }
+})
+$environmentJson = ConvertTo-Json -InputObject $environmentPayload -Compress
+$encodedEnvironmentJson = [Uri]::EscapeDataString($environmentJson)
 
 & $hdc -t $DeviceId shell aa force-stop $bundle | Out-Null
 $stopped = $false
@@ -119,7 +144,7 @@ if ($GamePath) {
     # slashes in drive paths, and this preserves the Want parameter verbatim.
     $wantGamePath = $GamePath.Replace('\', '/')
     $gameArgumentsJson = if ($GameArguments.Count -gt 0) {
-        $GameArguments | ConvertTo-Json -Compress
+        ConvertTo-Json -InputObject @($GameArguments) -Compress
     } else {
         '[]'
     }
@@ -130,16 +155,9 @@ if ($GamePath) {
         '--ps', 'winehua.perf_profile', $PerfProfile,
         '--ps', 'winehua.game_path', $wantGamePath,
         '--pi', 'winehua.game_argc', [string]$GameArguments.Count,
-        '--pi', 'winehua.d3d_env_count', [string]$environmentPairs.Count)
-    # Keep explicit D3D overrides near the front of the Want.  aa start has a
-    # finite parameter budget and silently drops tail parameters; Heaven's
-    # long argv and click options otherwise caused trace variables to vanish.
-    for ($index = 0; $index -lt $environmentPairs.Count; ++$index) {
-        $key = [string]$environmentPairs[$index].Key
-        $escapedValue = ([string]$environmentPairs[$index].Value).Replace('\', '\\')
-        $startArguments += @('--ps', "winehua.d3d_env_key$index", $key,
-            '--ps', "winehua.d3d_env_value$index", $escapedValue)
-    }
+        # A single encoded JSON value avoids aa start's finite Want-parameter
+        # count silently dropping one or more environment key/value pairs.
+        '--ps', 'winehua.d3d_env_json', $encodedEnvironmentJson)
     $startArguments += @(
         '--ps', 'winehua.game_args_json',
         [Uri]::EscapeDataString($gameArgumentsJson),
@@ -154,7 +172,24 @@ if ($GamePath) {
         --ps winehua.d3d_backend $D3DBackend `
         --ps winehua.perf_profile $PerfProfile
 }
-if ($LASTEXITCODE -ne 0) { throw "WineHua start failed: $($output -join ' ')" }
+$startExitCode = $LASTEXITCODE
+$outputText = ($output -join "`n").Trim()
+if ($startExitCode -ne 0 -or $outputText -notmatch 'start ability successfully') {
+    throw "WineHua start failed (exit=$startExitCode): $outputText"
+}
+
+$startedPid = ''
+for ($attempt = 0; $attempt -lt 25; ++$attempt) {
+    $pidOutput = @(& $hdc -t $DeviceId shell pidof $bundle 2>$null)
+    if ($LASTEXITCODE -eq 0) {
+        $startedPid = ($pidOutput -join ' ').Trim()
+        if ($startedPid) { break }
+    }
+    Start-Sleep -Milliseconds 200
+}
+if (-not $startedPid) {
+    throw "WineHua start reported success but no process appeared: $outputText"
+}
 
 Write-Host "WineHua desktop requested with D3D backend: $D3DBackend"
 Write-Host "Performance profile: $PerfProfile"
@@ -166,6 +201,7 @@ if ($GamePath) {
     Write-Host "Game argument count: $($GameArguments.Count)"
     if ($environmentPairs.Count -gt 0) {
         Write-Host "D3D environment overrides: $((@($environmentPairs | ForEach-Object Key)) -join ', ')"
+        Write-Host "D3D environment transport: encoded JSON ($($environmentPairs.Count) entries)"
     }
     if ($ClickTitlePrefix) {
         Write-Host "Automatic click: '$ClickButtonText' in '$ClickTitlePrefix*' after ${ClickDelayMs}ms"
@@ -176,3 +212,4 @@ if ($GamePath) {
 } else {
     Write-Host "Launch the DX11 game from the Wine desktop Explorer; its managed DXVK overlay is inherited by the game."
 }
+Write-Host "WineHua PID: $startedPid"
