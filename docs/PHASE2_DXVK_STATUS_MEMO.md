@@ -1,11 +1,352 @@
 # WineHua Phase 2 DXVK Status Memo
 
-> Last updated: 2026-07-25
+> Last updated: 2026-07-27
 >
 > Purpose: this is the durable handoff for resuming the DXVK investigation.
 > Read this file before changing DXVK, Venus present, SmokeRunner, or game launch
 > code. Update it whenever a conclusion, gate result, commit, HAP, or primary
 > blocker changes.
+
+## 0. Visual correctness ledger and non-regression rule
+
+As of 2026-07-27, **no archived Heaven artifact is a known-good rollback-free
+baseline**. The user continuously observes backward camera-angle jumps on the
+currently installed frame-identity trace build and on every archived candidate
+listed in sections 19-24. A package seen around 12:40 was once reported as not
+jumping, but it was replaced before its HAP hash, source state, runtime hashes,
+profile, and continuous visual verdict were archived. It is therefore
+`UNKNOWN-NOT-RECOVERABLE`, not a valid baseline and not evidence that a later
+candidate fixed the issue.
+
+This exposed a process failure: performance improvements, sparse screenshot
+checks, and temporary visual observations were allowed to advance without
+first creating an immutable correctness milestone. From now on:
+
+1. `KNOWN_GOOD` requires an archived signed HAP, HAP/wine-data/runtime DLL
+   hashes, main and all changed submodule commits, exact profile/environment,
+   machine-readable logs, Cube `angleRegressions=0`, and the user's continuous
+   Heaven verdict.
+2. A candidate without all of that is `UNKNOWN`, even if one observation looks
+   correct. User-observed rollback immediately marks it `REJECTED`.
+3. No newer package may replace a `KNOWN_GOOD` device install until its archive
+   and restore command have been verified.
+4. Correctness and performance are separate gates. FPS, monotonic present
+   serials, unique hashes, and low-rate screenshots cannot prove that camera
+   motion is rollback-free.
+5. Every root-cause boundary, rejected hypothesis, HAP identity, visual verdict,
+   and next experiment is added here and committed before the next behavior
+   change.
+
+### 2026-07-27 current incident state
+
+    installed diagnostic HAP:
+      15e501b8333e0e20eac5b346f35159bf89aeed50af3c85437d6ee9289ea85d74
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-frame-identity-trace-20260727-021445
+    source:
+      main e5392f9, DXVK 5232285, Mesa 353e6c5, virglrenderer 59228165
+    status:
+      REJECTED-user-observed-continuous-camera-rollback
+
+The first exact trace proved that DXVK draw-boundary Camera UBO hashes do not
+replay an older generation, while Host present serials are monotonic and source
+images 388/390 alternate in order. Those facts rule out simple old-camera byte
+replay and final SurfaceQueue re-publication, but they do not yet associate a
+DXVK frame with the Host command that rendered a particular source image.
+
+The missing identity path is now defined precisely:
+
+    DXVK client VkCommandBuffer
+      -> Wine client wrapper / unwrapped Guest VkCommandBuffer
+      -> Mesa Venus VkCommandBuffer / vn_object id
+      -> virglrenderer cmdId / Host command execution
+      -> source image id
+      -> present serial
+
+The next candidate adds diagnostic-only Wine and Mesa records under
+`WINEHUA_DXVK_TRACE_CAMERA=1`. It must not change queue, fence, descriptor,
+upload, image, or present behavior. The first non-monotonic generation in this
+joined trace determines the next code fix; broad synchronization experiments,
+frame dropping, and performance fast paths remain blocked until then.
+
+### 2026-07-27 generation-safe exact join result and next A/B
+
+The generation-safe trace candidate was built, archived, installed, and run on
+the physical device. Attempts 1 and 2 are invalid: the first was consumed by
+prefix upgrade timing, and the second used `DXVK_LOG_LEVEL=warn`, which filtered
+the `Logger::info` camera records. Attempt 3 explicitly used
+`WINEHUA_DXVK_TRACE_CAMERA=1`, `DXVK_LOG_LEVEL=info`,
+`shadow-precise-dirty-ring-frame-assoc-trace`, and a 5-second launcher click
+delay:
+
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-generation-safe-20260727-030635
+    HAP SHA-256:
+      45052dddec0f2ed208be0dc60a9cecf1aa08139b6f6a99572ff9a2904d687a20
+    wine-data SHA-256:
+      830ef1457c7e595d67fd858e79200f1d60300000f253986e55547a273f543b9e
+    source:
+      main eb04456, DXVK c665707, Mesa db8f4de,
+      virglrenderer 59a5cea, Wine 9978980
+    visual status:
+      REJECTED-user-observed-continuous-camera-rollback
+
+The strict joined scene interval contains 742 Heaven frames (`119..860`). All
+742 DXVK recording generations map to the exact Guest and Host queue-command
+occurrence. Guest and Host command sequences are identical during the scene;
+the only differences are a 52-command startup prefix and one startup-only Host
+`cmdId=355`. There are 844 DXVK submits and 844 source transitions, one per
+recording generation. Frames `119..858` map to strictly increasing present
+serials `105..844`; the final two frames were stopped before publication. The
+presenter recorded 1,147 matching `copy-submitted`, `source-release-ready`, and
+`published` stages with zero watchdog or serial regression. Camera UBO slot 163
+has 742 consecutive frame numbers, 742 unique hashes, and zero frame-number
+rollback.
+
+This rules out command-object reordering in DXVK/Guest/Host, Host present serial
+rollback, simple SurfaceQueue republication of an old source frame, and the
+simple case of releasing a source image before its present copy completes. The
+visual rollback is therefore inside the contents consumed by an otherwise
+monotonic frame generation; monotonic queue/present IDs alone cannot validate
+the contents.
+
+The next controlled hypothesis is an OHOS shadow upload prepare/retire race.
+The queue thread records a private upload while holding `object_mutex`, releases
+that mutex, then reacquires it in `sync_shadows_to_host` to clear dirty state. A
+primary-ring `vkFlushMappedMemoryRanges` can publish the next generation in that
+gap and have its new dirty ranges cleared by the previous submit. The required
+A/B serializes only remote flush against the `prepare -> dirty retirement`
+window and logs acquisition, contention, and wait time. It must remain
+environment-gated until a physical-device Heaven run proves both visual impact
+and acceptable FPS. If the A/B passes, replace the coarse diagnostic lock with
+generation-tagged retirement so an old submit can never retire a newer flush.
+If it fails, remove the A/B rather than carrying an unproven synchronization
+cost.
+
+The diagnostic A/B is implemented in virglrenderer commit `39344384`. It adds
+one context-level `shadow_generation_mutex`; the frame-association trace profile
+sets `VKR_WINEHUA_SHADOW_GENERATION_SERIALIZE=1`, while all ordinary profiles
+set it to `0`. Queue submit holds the mutex from shadow-upload prepare through
+dirty retirement, and remote flush holds it while publishing a new dirty
+generation. The Host log records `role=submit|flush`, acquisition count,
+contention count, per-acquire wait, and cumulative wait. The lock is released
+before Host `vkQueueSubmit` and present. ARM64 `make native` passes. This is an
+A/B diagnostic, not yet a correctness fix or `KNOWN_GOOD` baseline; physical
+Heaven and Cube results are still required.
+
+### 2026-07-27 shadow-generation A/B rejected and durable recovery rule
+
+The physical Heaven run still showed continuous backward angle jumps and is
+therefore rejected:
+
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-shadow-generation-serialize-20260727-034900
+    HAP SHA-256:
+      545f2ef188882daaf026de6c5d5ee943dedb23aa4292e052591f490244645baf
+    wine-data SHA-256:
+      701b1ac5af6d6f2f79458b74efa421ee07b4a6f5d8128aa925005fa97185278b
+    source:
+      main 167c373, DXVK c665707, Mesa db8f4de,
+      virglrenderer 39344384, Wine 9978980
+    visual status:
+      REJECTED-user-observed-continuous-camera-rollback
+
+The lock trace reached 5,618,040 flush acquisitions and 37,080 submit
+acquisitions with `contended_total=0`; total measured lock acquisition time was
+only 6,547 us. Remote flush therefore did not enter the submit
+`prepare -> dirty retirement` window. Do not formalize this coarse mutex as a
+product fix. It remains diagnostic-only and disabled in ordinary profiles.
+
+The same run captured Camera binding 3 for frames 119..2967. All 2,849 decoded
+3x4 view matrices had valid rotations, no reversal inside continuous camera
+segments, and no two-frame-old pose replay. Position-step median was 0.176403
+and p95 was 0.812264; large discontinuities matched normal Heaven camera cuts.
+This rules out the game or DXVK submitting a backward Camera matrix. The fault
+boundary is now the Host data actually consumed by the draw: either a private
+`vkCmdUpdateBuffer` upload targets the wrong buffer/offset/generation, or the
+draw binds an old physical uniform-buffer slice. Binding 4's 1,536-byte dynamic
+block must be joined with binding 3 and the Host command before any further
+behavioral change.
+
+Starting with the next candidate, every behavior-changing experiment must be
+committed and archived before deployment. Its artifact record must contain the
+exact HAP/runtime hashes, source commits, environment/profile, automated Cube
+verdict, and continuous Heaven verdict. A visually passing candidate may not be
+overwritten until its restore command is recorded and verified. This rule is a
+release-process requirement, not optional investigation bookkeeping.
+
+The full `WineHuaUbo` log is now machine-analyzed by
+`automation/analyze_heaven_ubo.py`; the report is archived as
+`wine-ubo-analysis.json`. For frames 119..2967, binding 4 has 2,079 unique
+full-range hashes across 2,849 records, 770 immediate repeats, and zero
+non-adjacent old-hash replays. Binding 3 has 2,825 unique hashes and no
+immediate repeats. The Guest-side UBO source therefore does not show the
+reported backward frame replay. Binding 4 rotates through only 32 physical
+slices and reuses one within one or two frames 936 times. That is not itself a
+Vulkan violation because the private upload command has conservative
+`ALL_COMMANDS -> TRANSFER -> ALL_COMMANDS` barriers and executes on the same
+queue, but it makes exact Host buffer/offset/generation proof the next P0.
+
+The next trace must join, without changing synchronization:
+
+    Host descriptor buffer + absolute offset + binding 3/4 hash
+      -> dirty snapshot selected for a concrete submit
+      -> private vkCmdUpdateBuffer target offset + hash
+      -> Guest command buffers in that same Host submit
+
+Do not infer correctness from descriptor-time `shadow == host`: inline upload
+intentionally defers the Host mapped copy, and the Host buffer is populated by
+the private transfer command immediately before the Guest submit.
+
+This identity trace is implemented in virglrenderer commit `a4bd4f26` and is
+enabled only by `WINEHUA_VKR_TRACE_UBO_IDENTITY=1`. The App sets it only for
+`shadow-precise-dirty-ring-frame-assoc-trace`. It records bounded
+`descriptor`, `flush`, `upload-range`, and actual `update` phases using the
+same FNV-1a64 convention as the DXVK `WineHuaUbo` record. It adds no wait,
+barrier, dirty-state mutation, descriptor mutation, or queue-order change.
+
+### 2026-07-27 Host UBO identity run: binding 4 closes, binding 3 remains
+
+The first Host UBO identity candidate is archived before installation:
+
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-host-ubo-identity-20260727-043000
+    HAP SHA-256:
+      9a17bb21e1f7101707c146e56c97ebad8b20364406375c9d9fcdf110366d6152
+    wine-data SHA-256:
+      315451a0c285726b844fe5738e358fef6c23755e4e30f4efd9bfdd29d1dc4fc1
+    source:
+      main a4a69e2, DXVK c665707, Mesa db8f4de,
+      virglrenderer a4bd4f26, Wine 9978980
+
+Attempt 1 is invalid because the new runtime triggered a Wine prefix update;
+the automatic launcher click expired before Heaven appeared. Attempt 2 reused
+the now-stable prefix, entered the real D3D11 scene, and captured 846 DXVK UBO
+frames. Static screenshots confirm the scene rendered; the continuous visual
+rollback verdict for this diagnostic-only package remains pending.
+
+`automation/analyze_heaven_host_ubo.py` joined the latest Wine process and Host
+context. All 9,243 Guest and Host command occurrences align exactly with zero
+sequence mismatch, and 829 DXVK submissions map to a concrete Host submit.
+For the fully traced early scene window:
+
+    binding 4:
+      144/144 descriptor candidates have flush, upload-range, and update proof
+      115/144 use an exact 1,536-byte range and exact DXVK-matching hash
+      29/144 are covered by a larger merged range
+      stale or mismatching exact update hashes: 0
+
+    binding 3:
+      141/141 descriptor candidates have upload-range and update coverage
+      exact 48-byte update hashes: unavailable
+      reason: Host merges/pads the 48-byte Camera range into 64/256-byte updates
+
+Frame 119 illustrates the legal one-submit lead: binding 4 hash
+`3b6f2bb102c34b83` is flushed and uploaded in Host submit 461, while the draw
+command executes in submit 462; no intervening overwrite exists. The correct
+invariant is therefore "the last covering update before draw has the expected
+hash", not "upload and draw share a submit".
+
+The first trace was too broad: descriptor, update, and upload-range phases each
+hit their 200,000-record limit, and the extracted identity log is about 208 MB.
+It closes binding 4 for the traced window but cannot prove binding 3 subrange
+contents or late frames. The next candidate must register only binding 3/4
+descriptor ranges and hash those exact watched subranges inside the actual
+private update. It must suppress generic descriptor/range/update spam and keep
+all rendering and synchronization behavior unchanged.
+
+### 2026-07-27 full command identity attempt and namespace correction
+
+The first Wine/Mesa bridge candidate is archived and was run on the physical
+device:
+
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-full-command-identity-20260727-0235
+    HAP SHA-256:
+      006c80f2dda71275dad3bde59d47846d58bb580cd73e6cc2ca8577aee53b308e
+    wine-data SHA-256:
+      b19b402b00147f6a181906851e743964c1eeb0261935b71fd89b5c871813d054
+    runtime Venus ICD SHA-256:
+      fab2daba0567c30acb5966c4fc6bdc7cdb38694577b5e93f9a806a285ce72ac1
+    runtime winevulkan.so SHA-256:
+      9748545784b1592acbcd73f6963a29408207893eab2d95cafeac2a6cc635388f
+
+Attempt 1 reached only the launcher and is invalid. Attempt 2 entered the
+benchmark and captured 399 DXVK camera frames, 4,137 Guest Mesa queue command
+entries, the same 4,137 Host queue command entries, 398 source transitions,
+and 398 advancing presents. Guest Mesa and Host queue command-ID sequences
+match exactly with zero missing, inserted, or reordered entries. This rules out
+Venus transport reordering of the decoded command-object sequence.
+
+The attempted frame join also exposed a trace-design defect: raw handles and
+`cmdId` values are namespace-local, command-buffer objects are reset and reused,
+and DXVK logging and Guest submit logging occur on different threads. A bare
+`frame -> handle -> cmdId` match can therefore associate a frame with the wrong
+recording generation and falsely report a submit/present regression. No root
+cause or behavioral fix may be inferred from that ambiguous join.
+
+The replacement trace must record:
+
+    DXVK Windows PID + recording generation + ordered frame list
+      -> Wine Unix PID + client/Guest handle mapping
+      -> Mesa Unix PID + Guest handle + object id
+      -> Host renderer ctx_id + cmdId + source image + present serial
+
+DXVK records the generation at the actual submission-thread `vkQueueSubmit`
+boundary, so command-list batching, object reuse, and cross-thread log ordering
+are explicit. Host queue and source-transition records include `ctx_id`, matching
+the existing present record. These are diagnostic-only fields; the candidate
+does not change rendering, synchronization, upload, queue, or present behavior.
+
+### 2026-07-26 Managed DXVK runtime contract and checkpoint
+
+The product default for every Wine launch entry is now `dxvk_legacy` (DXVK
+1.10.3). This applies to the desktop `LaunchClient` path, Explorer/file-manager
+launches, `runWineProgram`, and the legacy `runWineExe` N-API entry. An explicit
+`d3dBackend: "wined3d"` remains the compatibility fallback.
+
+DXVK is a managed runtime overlay and is deliberately not copied into
+`C:\\windows\\system32` or `C:\\windows\\syswow64`:
+
+    files/wine/dxvk/legacy/x64/{d3d11.dll,dxgi.dll}
+    files/wine/dxvk/legacy/x86/{d3d11.dll,dxgi.dll}
+
+Each Wine child receives the same inherited environment:
+
+    WINEDLLPATH=<managed x64>:<managed x86>:<Wine builtin paths>
+    WINEDLLDIR0=<managed x64>
+    WINEDLLDIR1=<managed x86>
+    WINEDLLOVERRIDES=d3d11=n;dxgi=n
+
+This means a game started from Explorer or the App file manager resolves the
+managed native D3D11/DXGI pair when it creates a D3D11 device, and descendants
+inherit the selection. A Wine program started outside the WineHua App (for
+example through `hdc shell`) is not a supported launch boundary because it has
+no Wine prefix, broker, Wayland, or managed environment.
+
+Every Wine child now logs the selected backend, DXVK version, override, search
+path, and presence of both x64/x86 DLL pairs. The 2026-07-26 physical-device
+regression confirmed:
+
+    x64 DXVK smoke: PASS, feature level 11.0
+    D3D11 cube: PASS, 555 frames, angle regressions 0, about 80 FPS
+    loaded modules: .../wine/dxvk/legacy/x64/d3d11.dll and dxgi.dll
+    CPU full-frame readback/upload: 0/0
+
+The complete `dxvk` suite is still reported FAIL only because the existing x86
+test exceeds its 180-second timeout; the x64 path and runtime relocation did
+not regress. Checkpoint commit:
+
+    3f6bf02 checkpoint: default DXVK runtime and diagnostics
+
+Performance work remains measurement-first. The current VirGL/SurfaceQueue
+trace shows one GPU copy, approximately 14 us fence wait, 0.60 ms acquire,
+0.88 ms submit, and 0.94 ms queue/present work at roughly 82 FPS. The next
+experiment must split DXVK/Heaven frame time into fence, IPC, Host Vulkan,
+shadow scan/memcpy, upload, submit, and present before changing synchronization.
+Only after that split should we A/B device-side fence wait, dirty-allocation
+tracking, and safe submit batching. Do not disable barriers, merge unknown
+shadow gaps, or loosen fence lifetime for an unmeasured FPS gain.
 
 ### 2026-07-23 Heaven pipeline-create replay isolation (current)
 
@@ -1311,3 +1652,885 @@ sync, or switch to CPU fallback until a trace records a real serial or
 timestamp regression. Next investigation is to split the long producer gap
 between guest command generation, shadow dirty-range synchronization, and
 present dispatch; optimize only the measured dominant segment.
+
+## 16. 2026-07-26 surface-selection regression investigation
+
+The user's latest manual run appeared to show the cube jumping between old
+positions. Comparing it with the frame-order fix in section 15 found no code
+rollback in the ring publication or precise shadow path: the live device log
+still reported monotonic cube `frame`/`angle`, `regress=0`, and monotonic Venus
+present serials. The more recent manual session had multiple Explorer/Wine
+children and therefore multiple live surface entries in the NCP presenter.
+
+The remaining lifecycle hazard was in the zero-copy consumer selection:
+
+* NCP `Query()` exposed `unordered_map` iteration order, so the first
+  unattached candidate was nondeterministic after a restart.
+* The main compositor did not require the candidate's Vulkan flag to match the
+  current product mode, allowing a stale GL surface to be selected for a DXVK
+  process (or vice versa).
+
+Commit `3340544` fixes only this boundary. NCP candidates are sorted by the
+most recent present time, serial, and surface key; the main consumer filters by
+the current Vulkan/non-Vulkan mode and releases a binding if its type changes.
+Fence, shadow synchronization, queue pacing, and frame dropping are unchanged.
+
+The rebuilt and installed HAP was verified with a clean process restart and
+`C:\smoke\x64\winehua_d3d_switch_cube.exe`: 80-87 FPS, increasing frame and
+angle values, `regress=0`, and no surface-type change warning. Existing
+uncommitted DXVK/Heaven investigation files remain separate from this fix.
+
+## 17. 2026-07-26 Heaven regression reset and artifact rule
+
+The previous frame-order conclusion was too broad. Monotonic NCP present
+serials and NativeImage timestamps prove that the compositor does not publish
+an older SurfaceQueue buffer again. They do **not** prove that the Guest
+rendered camera state is monotonic. The user continues to observe camera-angle
+rollback in Heaven, including the latest clean process run.
+
+The package described by the user as smooth at approximately 12:40 was not
+archived as a HAP. The nearest retained metadata is:
+
+    D:\MyProject\winehua-logs\automation\phase2-20260726-130728\artifact.json
+    HAP SHA-256:       50d4e0610e55678d4ac7b82422bfc34e279059cc236ab92ac0705cb5f8a93544
+    wine-data SHA-256: 6bd3c6ca3e0ffeda9ed63d652d8e1b92fd72cfaa097d5190074b4a2a510449ca
+    main commit:       ef6e1a6f87005d3d79bdc8addba01044913818ea
+
+The metadata is not a replaceable artifact and therefore cannot be treated as
+an available known-good package. The recorded 12:33
+`shadow-precise-dirty-ring-no-upload-fast` Cube run proves only Cube ordering;
+it is not evidence that the same HAP passed a continuous Heaven camera test.
+
+Fresh A/B results reset the investigation:
+
+* `shadow-precise-dirty-ring-no-upload-fast` still rolls back visibly after
+  GPU upload is disabled.
+* Disabling the batch `vkFlushMappedMemoryRanges` path added after 12:40 does
+  not remove the rollback.
+* The retained 09:32 Guest payload and the current payload contain identical
+  x64 DXVK `dxgi.dll`/`d3d11.dll` and Guest Mesa `libgallium-25.0.1.so`
+  binaries. A changed DXVK or Guest Mesa binary is not the current split.
+* Present serial and NativeImage timestamp traces remain useful, but only to
+  exclude Host compositor replay.
+
+The P0 diagnostic is now a continuous, low-overhead camera-buffer trace. The
+candidate is Heaven pass 0, descriptor binding 1, DXVK resource slot 161,
+144 bytes. Each frame must correlate:
+
+    DXVK frame + Guest buffer handle/offset + camera hash/words
+      -> Venus Host buffer/memory + dirty generation + copied hash
+      -> queue submit + present serial + NativeImage timestamp
+
+Interpretation is strict:
+
+1. If the DXVK camera words themselves move backward, investigate the game's
+   constant-buffer update sequence, DXVK dynamic-buffer slice reuse, and Guest
+   CPU publication ordering.
+2. If DXVK camera words are monotonic but the Host hash is older, fix Venus
+   shadow dirty-range lifetime, mapped-memory visibility, or submit ordering.
+3. If both hashes are monotonic, correlate the rendered attachment with the
+   same submit before revisiting presentation. Do not drop frames or mask the
+   visual rollback.
+
+Artifact discipline is now a release-blocking rule for every visual-ordering
+milestone:
+
+* Archive the signed HAP itself, its SHA-256, embedded `wine-data.zip`, Guest
+  DLL/ICD hashes, Host renderer hashes, main/submodule commits, and binary
+  dirty diffs.
+* Archive the exact launch profile and environment, continuous Heaven evidence,
+  Cube frame-order result, logs, and screenshots/video in the same run folder.
+* Create a local milestone commit after the evidence passes. A configuration
+  note or Cube-only result is not sufficient to mark Heaven fixed.
+* Never overwrite the only passing HAP; retain at least the current passing
+  artifact and the immediately previous comparison artifact.
+
+## 18. 2026-07-26 Heaven camera-buffer reuse evidence
+
+The first camera candidate was wrong: pass 0, binding 1, resource slot 161,
+144 bytes is a fixed projection matrix.  The continuously changing view/camera
+matrix is pass 0, vertex uniform binding 3, DXVK resource slot 163, 48 bytes.
+Binding 4 / resource slot 164 is a separate dynamic 1536-byte block.
+
+The Guest trace from frames 119 through 249 recorded a unique camera hash on
+every frame and no exact old-hash replay.  The physical VkBuffer/offset backing
+that binding can be reused after only two frames; approximately 30 physical
+slices served 131 frames.  Monotonic Guest hashes therefore do not exonerate
+the Host mapped-memory bridge: an already queued Host shader read may still see
+a later CPU overwrite of the same mapped range.
+
+The current correctness/performance A/B is:
+
+* `shadow-precise-dirty-ring` enables a private Host GPU upload before Guest
+  submissions.  Its ALL_COMMANDS -> TRANSFER -> ALL_COMMANDS dependency and
+  `vkCmdUpdateBuffer` snapshot removed the observed replay in the captured run,
+  but Heaven fell to approximately 11-12 FPS because it adds a Host queue
+  submission.
+* `shadow-precise-dirty-ring-no-upload-fast` retains approximately 20+ FPS but
+  the user continues to observe camera rollback.  Monotonic SurfaceQueue
+  serials and NativeImage timestamps only exclude compositor buffer replay.
+* `DXVK_WINEHUA_FIFO_BUFFER_SLICES=1` changes host-visible uniform slice reuse
+  from newest-free-first to oldest-free-first.  It is a diagnostic A/B, not a
+  product fix.  The user still observes rollback, so it must not be marked as
+  resolved.
+
+The working root-cause model is a mapped-shadow generation hazard rather than
+a present-order problem: CPU memcpy/flush updates Host mapped memory outside
+the Vulkan queue, while a short-lived DXVK dynamic slice may still be consumed
+by an older Host submission.  The separate GPU-upload path snapshots the bytes
+into queue order, which explains its stronger correctness evidence and its
+submit overhead.
+
+The next product candidate must preserve that queue-ordered snapshot without
+one extra `vkQueueSubmit` call per Guest submit.  Preferred design: prepend a
+private upload command buffer and append an internal timeline-semaphore retire
+signal to the same Host `vkQueueSubmit` call as the Guest work.  The timeline
+value owns upload command-pool reuse; the Guest fence remains untouched.  Do
+not remove Guest fences, drop frames, or rely on FIFO slice order as the fix.
+
+Checkpoint and evidence:
+
+    DXVK diagnostic commit: 2c94fd5
+    Run root: D:\MyProject\winehua-logs\manual\heaven-camera-20260726-2030
+    GPU upload frames: frames-gpu-upload
+    Fast mapped frames: frames-fast-no-upload-212817
+    FIFO frames: frames-fast-fifo-214441
+
+Every future passing milestone must archive the exact HAP, embedded/runtime DLL
+hashes, profile/environment, logs, Heaven evidence, and Cube angle result before
+any newer package is deployed.
+
+
+## 19. 2026-07-26 inline-upload candidate rejected
+
+The user repeatedly confirmed visible Heaven camera-angle rollback with the
+installed inline-upload candidate. It is now a failed baseline, not a passing
+milestone:
+
+    profile: shadow-precise-dirty-ring-inline-upload
+    HAP SHA-256:
+      9aa4428b403433975f50db72d47631686e03c6133b9ed5acdc8f070bc608dece
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-inline-upload-20260726-221238
+
+The archived `artifact.json` is marked
+`FAIL-user-observed-camera-rollback`. Screenshot sampling that did not catch a
+short rollback is not evidence of correctness. Guest camera hashes being
+unique is also insufficient: uniqueness excludes exact byte replay but does
+not prove that decoded camera motion is monotonic or that one rendered frame
+uses one coherent constant-buffer generation.
+
+A code audit found that queue-ordered `vkCmdUpdateBuffer` does not yet remove
+the original mapped-memory hazard. `vkr_device_memory_flush_shadow_range`
+currently copies every Guest flush directly into `mem->host_map` immediately.
+The later queue-submit path records a snapshot upload and has both pre- and
+post-transfer barriers, but the earlier CPU `memcpy` can already overwrite
+Host memory still consumed by an older GPU submission. The latest cumulative
+profile confirms that this path remains active:
+
+    shadow bytes copied through mapped Host memory: about 40.3 GB
+    queue-ordered upload bytes:               about 13.8 GB
+    safely skipped Host-copy bytes:           about 1.63 GB
+
+The working root cause is therefore refined to **immediate Host mapped-memory
+overwrite before queue ordering**, not missing SurfaceQueue ordering and not a
+missing post-upload Vulkan barrier.
+
+The next correctness A/B must:
+
+1. Snapshot Guest flush contents outside the live Host VkDeviceMemory.
+2. Defer writes to the real Host buffer until the private upload command is
+   ordered between prior GPU work and the matching Guest submissions.
+3. Prove every dirty byte is covered by transfer-destination buffers. Any
+   uncovered range must use an explicitly synchronized correctness fallback;
+   it must not silently restore the immediate unsafe memcpy.
+4. Decode the camera data or continuously analyze scene motion. Hash
+   uniqueness, present serials, timestamps, and sparse screenshots are only
+   supporting evidence.
+5. Archive the signed HAP, hashes, exact source state, profile, logs, continuous
+   Heaven evidence, and Cube angle result before calling the candidate fixed.
+
+The unbuilt bound-buffer dirty-list optimization is not eligible for deployment
+yet. Audit found two lifecycle bugs in the working tree: `bound_buffers` is not
+initialized at memory creation, and dirty-list removal incorrectly reinitializes
+that independent list. It must be fixed and separately gated so the first
+deferred-copy correctness A/B is not confounded by a performance-path change.
+
+
+## 20. 2026-07-26 deferred Host-copy correctness candidate
+
+A new candidate was built, archived before installation, and overwrite-installed:
+
+    profile: shadow-precise-dirty-ring-inline-upload
+    HAP SHA-256:
+      fa5b6d848a90a9c467b36112f747a0220777bef00afd4a0d14ede4027ddb04c7
+    wine-data SHA-256:
+      541e9fb6c3492d1cd1210d2edb00573e09b57a34700235817892efccbf2b68ef
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-deferred-shadow-20260726-225828
+
+This candidate snapshots Guest flush contents separately and does not copy them
+immediately into live Host VkDeviceMemory. Fully covered buffer ranges are
+published only through the queue-ordered upload command. An uncovered deferred
+range uses an internal same-queue idle wait before the CPU fallback.
+
+The physical-device run confirmed:
+
+    WineHua shadow GPU upload inline-submit enabled
+    shadow_copies=0
+    shadow_bytes=0
+    deferred Host-copy queue-wait fallback count=0
+    Heaven materials, geometry, and lighting complete
+    HUD approximately 20 FPS
+
+Fifty display frames captured at a 303 ms median interval covered about 15
+seconds and two Heaven scenes. The similarity-order check found zero frames
+that were materially closer to an older history frame than to the immediately
+preceding frame. Frames 30-32 are the normal scene fade. This is supporting
+evidence only: the artifact remains
+`TESTING-AUTO-50-PASS-USER-PENDING` until the user confirms that short
+full-rate camera rollback is absent.
+
+The current Heaven child diagnostic string still says
+`WINEHUA_PERF_PROFILE=shadow-precise-strong-ring` because
+`AppendStableDesktopDxvkEnv` overwrites only the label after the selected host
+profile has already reached the NCP. The live renderer nevertheless proves the
+inline path is active. Source has been adjusted to preserve the selected label;
+that diagnostic-only change is not present in the archived candidate HAP.
+
+Performance work remains separate. The bound-buffer fast iteration is still
+disabled, and the current dominant measured cost is upload command preparation
+and object-table buffer scanning. Do not enable it until Heaven correctness and
+Cube ordering are both accepted.
+
+
+## 21. 2026-07-26 deferred Host-copy candidate rejected
+
+The user confirmed that Heaven still continuously shows camera-angle rollback
+with the installed deferred-copy candidate. It is therefore rejected:
+
+    profile: shadow-precise-dirty-ring-inline-upload
+    HAP SHA-256:
+      fa5b6d848a90a9c467b36112f747a0220777bef00afd4a0d14ede4027ddb04c7
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-deferred-shadow-20260726-225828
+    status:
+      FAIL-user-observed-camera-rollback
+
+The 50-frame screenshot result in section 20 was a low-rate supporting check,
+not a correctness gate. It sampled the display at about 3.3 FPS and could miss
+a short rollback between samples. It must never be used to overrule continuous
+full-rate observation.
+
+The deferred Host-copy experiment still proves one useful negative result: the
+rollback survives after immediate CPU writes to live Host mapped memory are
+removed (`shadow_copies=0`, `shadow_bytes=0`, and no uncovered-range fallback).
+That mapped-memory overwrite was a real hazard, but it is not the complete root
+cause of the visible rollback.
+
+The next P0 is no longer another broad shadow-upload A/B. Build an exact
+per-present frame association across these boundaries:
+
+    DXVK frame and decoded view/projection state
+      -> Guest VkQueueSubmit sequence and command-buffer generation
+      -> renderer execution sequence and exact dynamic-buffer generations
+      -> source swapchain image generation
+      -> NCP copy-complete generation
+      -> displayed NativeImage timestamp
+
+For each presented frame, record all Heaven pass-0 dynamic uniform bindings,
+especially slots 163 and 164, rather than one hash. A valid record must prove
+that one draw consumed a coherent set of generations and that the source image
+was not reused before the NCP copy fence completed. The result must distinguish:
+
+1. Camera/view data itself moves backward.
+2. One draw combines constant blocks from different Guest generations.
+3. Renderer executes an older buffer generation for a newer Guest submit.
+4. The Vulkan source image is overwritten or reused before the present copy
+   completes.
+5. The final SurfaceQueue re-publishes an old image (already less likely from
+   monotonic serial/timestamp evidence).
+
+No performance fast path, frame dropping, or 60-minute gate may proceed until
+this trace identifies the boundary of the first generation regression and both
+Heaven continuous observation and Cube `angleRegressions=0` pass on the exact
+same archived HAP.
+
+## 22. 2026-07-27 descriptor-update serialization A/B
+
+The first descriptor-serialization artifact cannot be evaluated:
+
+    HAP SHA-256:
+      fad3600f19ba0054f74da3f2b44d30776ff67aebe54d815618d5ae49d4d
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-descriptor-serialized-20260727-0038
+    status:
+      INVALID-profile-selector-not-propagated
+
+The NAPI process received the requested profile, but NativeChildProcess does
+not reliably inherit arbitrary process environment. The renderer therefore
+started with `VKR_WINEHUA_DESCRIPTOR_UPDATE_SERIALIZE=0`, and no
+`WineHua descriptor update queue wait` record appeared. Installing an artifact
+is not proof that its controlled variable was active.
+
+The selector is now carried through the existing explicit graphics-broker IPC:
+
+    SetHostShadowProfile
+      -> VKR_WINEHUA_SHADOW_TRACE=inline-gpu-upload-descriptor-serialized
+      -> NativeChildProcess config.shadowTrace
+      -> VKR_WINEHUA_DESCRIPTOR_UPDATE_SERIALIZE=1
+
+The replacement artifact was built successfully and archived before install:
+
+    HAP SHA-256:
+      aa92506e7d0579fa29470dacb046703df949eb4d8f1d61bed90480273900b3e9
+    wine-data SHA-256:
+      9d791950b65302d4cdb2b67968bff4aecd16a151523e2279b2eb0f8493b67c4e
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-descriptor-serialized-valid-20260727-005103
+    status:
+      TESTING-runtime-proven-user-verdict-pending
+
+This is a diagnostic A/B only. It keeps the inline queue-ordered upload path
+and calls `QueueWaitIdle` on every Host queue immediately before each Host
+`vkUpdateDescriptorSets`. It must prove all three runtime facts before any
+visual verdict is accepted:
+
+    VKR_WINEHUA_DESCRIPTOR_UPDATE_SERIALIZE=1
+    WineHua descriptor update queue wait count=...
+    VKR_WINEHUA_GPU_UPLOAD_SERIALIZE=0
+
+If continuous Heaven rollback disappears, the product fix is descriptor-set
+generation/lifetime retirement, not permanent global queue-idle waits. If it
+remains, descriptor-update overlap is excluded and the next trace must join the
+executed dynamic-buffer generation to the source swapchain image and final
+present serial.
+
+From this point onward, every visual milestone is processed in this order:
+
+1. Archive the actual signed HAP, hashes, source/submodule state, and profile.
+2. Install only that archived hash and prove the controlled variable in logs.
+3. Record automatic evidence and the user's continuous visual verdict.
+4. Update this memo and make a local checkpoint commit before replacing it.
+
+Sparse screenshots, unique Guest hashes, and successful installation never
+override a missing runtime proof or a continuous user-observed rollback.
+
+The physical-device run has now proven the controlled variable. NAPI logged
+`selector=inline-gpu-upload-descriptor-serialized` and
+`descriptor_serialize=1`; NCP logged inline upload enabled, upload serialization
+disabled, and descriptor serialization enabled. The Host log contains repeated
+successful queue waits and still reports `shadow_copies=0` / `shadow_bytes=0`.
+The visual result remains pending the user's continuous full-rate observation.
+
+## 23. 2026-07-27 submit-generation descriptor A/B
+
+The fully serialized descriptor candidate proved that its selector and Host
+wait were active, but it is not a useful visual A/B. The physical-device
+presenter measured only approximately 2.2 FPS because Heaven issued tens of
+thousands of descriptor updates and the diagnostic waited the queue before
+every call. It is retained in the archive but marked:
+
+    SUPERSEDED-diagnostic-too-slow
+
+The replacement keeps the same product path and diagnostic selector, but waits
+at most once for each observed Host queue-submit generation. The first
+descriptor update after a submit waits every device queue; subsequent updates
+skip until the global submit generation changes. This preserves the intended
+overlap exclusion without single-stepping every descriptor write.
+
+    HAP SHA-256:
+      4c6b5ae6cf444e9766f3af116fbb2de3c16f9510908f5830e36f1f36e450a4ae
+    wine-data SHA-256:
+      6fa8c8c2751b7babe5ec71e06c237682f554ad4c16fc98c436a3afd89a96ead1
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-descriptor-submit-generation-20260727-012618
+    status:
+      ARCHIVED-READY-FOR-INSTALL
+
+Acceptance requires increasing `submit_generation` values in Host descriptor
+wait logs, far fewer waits than descriptor updates, recovered present FPS, and
+the user's continuous Heaven rollback verdict. A visual change without those
+runtime facts is invalid.
+
+The physical-device replacement run has passed its runtime proof. NCP enabled
+descriptor serialization without upload serialization. Host wait records show
+strictly increasing submit generations; a representative sample reached wait
+5640 at submit generation 8372 with result zero. Presenter cadence recovered
+from about 2.2 FPS to roughly 6-8 FPS. This remains slower than the 20+ FPS
+product path, but is sufficient to distinguish ordinary low cadence from an
+actual backward camera jump. The user repeatedly confirmed that this exact
+installed candidate still shows backward camera jumps. It is therefore closed
+as:
+
+    FAIL-user-observed-camera-rollback
+
+This negative result materially lowers the probability that concurrent Host
+`vkUpdateDescriptorSets` reuse is the complete cause. Do not repeat the global
+or submit-generation `QueueWaitIdle` experiments unless new evidence directly
+contradicts this run.
+
+## 24. 2026-07-27 exact frame-association trace checkpoint
+
+The next candidate traces the exact runtime association instead of guessing a
+previous package or changing another broad synchronization behavior:
+
+    DXVK WineHuaUbo frame/binding/hash
+      -> Host descriptor set and dynamic offset
+      -> Guest command-buffer ID / Host command-buffer handle
+      -> Host queue-submit generation
+      -> private-present source image ID / Host image handle
+      -> present serial
+
+The diagnostic source has been checkpointed before installation:
+
+    main commit:
+      b9d49921f828a157877f882e80c51b5374b3d75d
+    virglrenderer commit:
+      8e737e623c7931d76877456c02e3a7acaa7b5aeb
+    HAP SHA-256:
+      aac9765c031460265598966c8bae4dad7f42d1252e21a990978553b435fb507b
+    wine-data SHA-256:
+      7653c8f11af5789e07b02c522899d1167795203c12b39c6436f93ce8917b3f17
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-frame-assoc-trace-20260727-015003
+    status:
+      ARCHIVED-READY-FOR-INSTALL
+
+The HAP is newer than every exact-trace source change, embeds the same
+`wine-data.zip`, contains x86-64 Guest EGL and AArch64 Host libraries, and its
+native binaries contain the expected frame-association markers. A device run is
+invalid unless it proves all of the following before logs are analyzed:
+
+    selector=inline-gpu-upload-frame-assoc-trace
+    WINEHUA_VKR_TRACE_CAPTURE=1
+    WINEHUA_DXVK_TRACE_CAMERA=1
+    WineHuaUbo:
+    WineHuaFrameAssoc: dynamic-offset
+    WineHuaFrameAssoc: queue-submit
+    WineHuaFrameAssoc: present
+
+The purpose is to locate the first generation regression. It is not a product
+performance profile, and visual smoothness under trace overhead is not an
+acceptance criterion.
+
+## 25. 2026-07-27 rollback remains open and focused UBO checkpoint
+
+The user has confirmed that every candidate installed after the previously
+reported smooth run still shows a backward camera-angle jump in continuous
+Heaven observation. There is currently no accepted known-good package. A clock
+time such as "the 12:40 package" is not a recoverable version and must not be
+used as a rollback boundary unless its HAP hash, source commits, runtime payload
+hash and profile are all archived.
+
+This exposed a process failure: some important visual observations were not
+immediately closed with a memo update and source/artifact checkpoint. From this
+point onward, every correctness experiment must record before replacement:
+
+    signed HAP SHA-256 and archived HAP
+    embedded wine-data SHA-256
+    main and all changed submodule commits plus dirty summary
+    exact Host profile and effective runtime selector proof
+    automatic result plus continuous full-rate user verdict
+    restore command for the last accepted artifact
+
+No sparse screenshot, FPS number, install timestamp or source-only change may
+be called a fix. A visual PASS is valid only on the exact archived hash and is
+committed to this memo before another artifact is installed.
+
+The current evidence still rejects broad synchronization guesses. Camera UBO
+hashes do not replay on the DXVK side, 9,243 Guest/Host command occurrences
+align with zero mismatch, Host present serials remain monotonic, descriptor
+queue-idle A/B did not remove the rollback, and the shadow-generation mutex
+recorded zero contention. Do not repeat queue-wide waits, frame dropping,
+present reordering or broad shadow-copy changes without new contradictory data.
+
+The remaining UBO question is exact and bounded:
+
+    actual descriptor set bound by the frame command
+      -> binding 3/4 physical buffer and exact subrange
+      -> last Host vkCmdUpdateBuffer covering that subrange before draw
+      -> exact 48/1536-byte FNV-1a64 hash equals the DXVK frame hash
+
+The first broad Host trace could prove binding 4 only in an early window. It
+hit 200,000-record limits and merged the 48-byte Camera update into larger
+chunks. The first focused draft was also insufficient: the archived broad log
+contains 1,262 distinct `(binding, buffer, offset)` watches and as many as 128
+offsets on one buffer, so a fixed 16-watch array would silently lose evidence.
+
+virglrenderer commit `26277cc8` implements the corrected diagnostic without
+changing rendering or synchronization behavior:
+
+    WINEHUA_VKR_TRACE_UBO_IDENTITY=focused
+    per-buffer watches allocated only for focused binding 3/4 ranges
+    capacity 256, atomically published; overflow is explicit, never silent
+    watched-descriptor records only physical mapping transitions
+    watched-update hashes the exact 48/1536-byte subrange inside merged upload
+    unchanged update hashes are suppressed to avoid trace-induced slowdown
+    generic descriptor/range/update spam remains disabled in focused mode
+
+`automation/analyze_heaven_host_ubo.py` now also joins Host command-buffer
+descriptor-set binds to `watched-descriptor` and `watched-update`. It reports
+missing coverage as unknown, not PASS. A stale result requires a concrete
+frame whose draw-time physical slice has a last pre-draw upload hash different
+from the DXVK hash. If every covered binding 3/4 frame matches and there is no
+watch/trace overflow, UBO/shadow is closed and investigation moves to draw-time
+descriptor-set selection, other frame-global constant/storage buffers, or
+command-buffer recording generation. No further UBO synchronization behavior
+will be changed without that evidence.
+
+Checkpoint build and retest commands:
+
+    docker exec winehua-master-ext4 bash -lc \
+      'cd /data/src/winehua && make native NATIVE_ARCH=arm64-v8a'
+    docker exec winehua-master-ext4 bash -lc \
+      'cd /data/src/winehua && make hap NATIVE_ARCH=arm64-v8a'
+
+The native build passed and the AArch64 libvirglrenderer contains the
+`watched-descriptor` and `watched-update` markers. The signed HAP identity and
+physical-device result are intentionally pending and must be appended only
+after artifact validation and the actual run.
+
+## 26. 2026-07-27 first focused run invalid; bind-time trace replaces it
+
+The first focused artifact was built, validated and archived before install:
+
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-focused-ubo-20260727-052720
+    HAP SHA-256:
+      bdfa791be70adf7f964dfed26445b6931f8b39bed7e5eadae7231775eed5bb0b
+    wine-data SHA-256:
+      c06995a6d4f99f97cbe0617eb8ef5355d157c4a80c00f52e842fa8a2592153ce
+    source:
+      main b63083d, virglrenderer 26277cc8, DXVK c665707,
+      Mesa db8f4de, Wine 9978980
+    status:
+      INVALID-diagnostic-contract-incomplete
+
+The overwrite install succeeded, the existing prefix was explicitly checked
+ready before launch, and automation entered the real Heaven D3D11 scene. The
+NCP runtime proved the requested Host selector and
+`WINEHUA_VKR_TRACE_UBO_IDENTITY=focused`. The scene screenshot is archived, but
+this run has no valid visual or UBO verdict for two reasons:
+
+1. The actual Wine child entry parameters did not contain
+   `WINEHUA_DXVK_TRACE_CAMERA=1`. The persistent Wine log therefore had no
+   current DXVK frame-to-command records that could join the current Host run.
+   An analyzer selecting the historically busiest PID would silently choose an
+   old session, so explicit Unix/Windows process identity is mandatory.
+2. Descriptor-set allocation churn produced 327,045
+   `watched-descriptor` records and grew the Host log to 175 MB. Although the
+   data is real, this update-time log observes many sets that never contribute
+   to the target draw and adds unacceptable diagnostic overhead.
+
+The invalid run was stopped after the defect was measured. It must not be used
+to accept or reject the rollback hypothesis.
+
+virglrenderer commit `b815f4c9` replaces update-time descriptor logging with
+draw-relevant bind-time identity:
+
+    vkCmdBindDescriptorSets
+      -> record binding 3/4 physical mapping as bound-descriptor
+      -> register exact upload watch only for an actually bound range
+      -> remember mapping sequence
+
+    later descriptor remap after the bind
+      -> descriptor-remap-after-bind with old mapping sequence
+
+This removes the unbounded `watched-descriptor` phase. Bound-descriptor has an
+independent 50,000-record hard limit, watch overflow remains explicit, and no
+wait, barrier, copy, descriptor content or present behavior changes. The
+AArch64 Docker build passed and its library contains the new markers but not
+the removed marker.
+
+The analyzer now supports an explicit `--unix-pid`, keeps frame identities
+namespaced by Unix process, filters UBO frames by the joined Windows PID, and
+prefers `bound-descriptor` for exact physical-slice selection. The game launcher
+also injects `WINEHUA_DXVK_TRACE_CAMERA=1` through the encoded Want environment
+whenever the frame-association profile is selected, rather than relying on the
+Host NCP selector to imply a Wine child variable.
+
+The replacement run is valid only if all of these are observed together:
+
+    Wine child entry contains WINEHUA_DXVK_TRACE_CAMERA=1
+    current Wine Unix PID has WineHuaDxvkSubmit records
+    Host has bound-descriptor and watched-update records
+    watched-descriptor record count is zero
+    no watch-overflow or bound-descriptor trace limit
+    current Guest/Host command alignment has zero mismatch
+
+## 27. 2026-07-27 valid bind-time run and exact descriptor-set identity
+
+The replacement physical-device run is valid and archived:
+
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-bound-ubo-20260727-055932
+    HAP SHA-256:
+      15ffdf34d5327dd07e80041ef36a84a5385fccb76e326327983ae888f62d6658
+    wine-data SHA-256:
+      14a440b143de7a867199f9f5a56820b4734843f69493e27992b4b783591e7120
+    source:
+      main 3fb0f91, virglrenderer b815f4c9, DXVK c665707,
+      Mesa db8f4de, Wine 9978980
+    process identity:
+      Unix PID 55937, Windows PID 240
+
+The trace contract passed. Guest and Host both recorded 1,035 submitted command
+buffers with zero sequence mismatch, and 140 DXVK frames mapped to a Host
+submit. The focused Host trace recorded 50,000 `bound-descriptor` events,
+12,404 `watched-update` events, zero `watched-descriptor` events and no watch
+overflow. The bound-descriptor trace reached its explicit limit only after the
+target frame window had begun.
+
+The first heuristic analysis reported 27/36 matching updates for binding 3 and
+24/37 for binding 4. Those mismatches are not root-cause evidence. A single
+reused command buffer contained hundreds of descriptor-set binds, while the
+analyzer indexed candidates only by `(cmdId, binding)` and then selected the
+candidate whose hash looked best. It did not know which descriptor set the
+target draw actually bound. No synchronization or rendering behavior may be
+changed from that heuristic result.
+
+The next diagnostic closes this single missing identity without changing
+rendering:
+
+    DXVK target draw VkDescriptorSet handle
+      -> Guest Mesa raw descriptor handle and vn object id
+      -> Host bound-descriptor setId
+      -> binding 3/4 physical slice
+      -> last pre-submit watched-update hash
+
+DXVK now includes the actual graphics descriptor-set handle in every
+`WineHuaUbo` record. Guest Mesa logs each graphics
+`vkCmdBindDescriptorSets` raw handle, command-buffer object id and descriptor
+object id when `WINEHUA_DXVK_TRACE_CAMERA=1`. Analyzer schema 2 accepts only the
+exact Guest object id matching the DXVK handle and the frame command id. It no
+longer falls back to any descriptor candidate selected from the command buffer.
+
+Decision after the exact run:
+
+1. Exact set identity plus stale last-upload hash proves a descriptor
+   update/bind/lifetime defect and authorizes a narrowly scoped fix there.
+2. Exact set identity plus matching binding 3/4 hashes closes the camera UBO
+   and shadow-upload hypothesis. Investigation then moves to the next
+   frame-global buffer or command-generation input, without another broad wait,
+   frame drop, present reorder or global synchronization experiment.
+
+## 28. 2026-07-27 exact descriptor identity closes the UBO hypothesis
+
+The exact replacement run completed on the physical device and is archived:
+
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-exact-descriptor-20260727-064031
+    HAP SHA-256:
+      6b2b487551fe219af350a891eed9e37c6c39648e0c91e0e34ed9fc8b72fd5032
+    wine-data SHA-256:
+      253a5269f3d3f280ac2e3732b46ce4c073538072aa46f9b948a8f6ed46d555cf
+    source:
+      main 7bda263, DXVK 53b12ec, Mesa d190c6b,
+      virglrenderer b815f4c9, Wine 9978980
+    process identity:
+      Unix PID 61917, Windows PID 232, Host context 3, Host session 1
+
+The analyzer selected the correct session from a persistent Host log by exact
+Guest command-sequence alignment. There are 2,674 Guest submits and 2,674
+aligned Host submits, with one mismatch at the stopped tail, and 281 mapped
+DXVK frames. For both binding 3 and binding 4 the result is:
+
+    exact Guest descriptor-set identities: 91
+    exact Host descriptor candidates:      35
+    watched uploads with expected hash:    33
+    watched uploads with stale hash:       0
+
+The two uncovered Host candidates per binding are `UNKNOWN`, not failures: the
+bind-time watch was registered after their upload, so no earlier upload hash
+exists in the trace. There are zero suspicious joins. This proves that the
+target draw's camera UBO and binding 4 pass through the exact DXVK descriptor
+set, Guest Venus object, Host descriptor set, physical buffer slice and Host
+`vkCmdUpdateBuffer` with the expected bytes. Descriptor binding, these two UBO
+ranges and their shadow upload are closed as causes of the observed rollback.
+
+`automation/analyze_heaven_host_ubo.py` now splits persistent Host logs when a
+context's submit counter decreases, selects the session with the best Guest
+command-sequence match, and compares FNV hashes numerically so leading zeroes
+cannot create false mismatches.
+
+The next experiment traces the final private swapchain image identity, not the
+first scene render target:
+
+    DXVK Presenter acquire imageIndex + VkImage
+      -> DXVK Presenter present same imageIndex + VkImage
+      -> Wine private present imageIndex + VkImage + serial
+      -> Guest Venus raw VkImage + vn image object id
+      -> Host imageId + Host VkImage + serial
+
+DXVK may render through an internal backbuffer and copy into the acquired
+presenter image, so a scene attachment must never be compared directly with the
+Host-presented image. The trace must remain diagnostic-only and low volume. No
+queue wait, frame drop, present reorder or synchronization change is authorized
+until this identity chain shows a concrete mismatch.
+
+## 29. 2026-07-27 present-image identity chain closes present selection
+
+The diagnostic HAP was built, validated, overwrite-installed, and run through
+the real Heaven D3D11 scene on the physical device:
+
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-present-image-trace-20260727-075615
+    HAP SHA-256:
+      b72296485f227837db38c1d8c8a8df94ac87b00d28a0e12e5b0ea6813c707354
+    wine-data SHA-256:
+      07368128464c959393bce727e422a6ad0c1cc89b887f76fe72d3656a150ecfe8
+    source:
+      main c15f6aa, DXVK 2de8230, Wine 20559c87efb,
+      Mesa 7f8bace, virglrenderer 0319fb18
+    runtime:
+      Wine Unix PID 14230, Host context 5, surface 16
+    profile:
+      shadow-precise-dirty-ring-present-image-trace
+
+The device-managed x64/x86 DXVK DLL hashes exactly match the packaged staging
+runtime. The prefix `system32` and `syswow64` Wine DLL hashes are different by
+design: the active product contract selects the managed DXVK overlay through
+`WINEDLLPATH` and `WINEDLLOVERRIDES`, and the runtime log proves Heaven loaded
+`DXVK v1.10.3-22-g2de8230`.
+
+`automation/Analyze-HeavenPresentImageTrace.py` automatically splits reused
+swapchain handles at `image-map` resets, selects the matching persistent-log
+sessions, deduplicates startup retries, and joins the complete identity chain.
+Its archived report is `present-image-analysis.json` and returns:
+
+    verdict:                    EXACT-THROUGH-NCP-PUBLISH
+    DXVK present records:       4166
+    joined through Host:        2544, serial 1..2544
+    joined through NCP order:   600
+    identity mismatches:        0
+    serial regressions:         0 at every layer
+    Host retry attempts:        6, identity conflicts 0
+    sampled NCP retries:        5, identity conflicts 0
+    target/timestamp failures:  0
+
+The active mappings are exact:
+
+    DXVK/Wine image index 0, raw 0x629f0c1000
+      -> Guest imageId 388 -> Host VkImage 0x5a6901e798
+
+    DXVK/Wine image index 1, raw 0x629f0d5000
+      -> Guest imageId 390 -> Host VkImage 0x5a6901e9b0
+
+The first serial was retried while the target SurfaceQueue was unattached.
+All attempts retained the same source identity and only the successful publish
+entered the NCP order trace. Host swapchain target indices are driver-controlled
+`vkAcquireNextImageKHR` results; changing legal target acquisition order is not
+a frame-order failure and is deliberately not used as a modulo-cycle gate.
+
+This closes the following causes for this run:
+
+* DXVK acquire/present index mismatch.
+* Wine private-swapchain image mismatch.
+* Guest raw image to Venus object mismatch.
+* Guest image object to Host VkImage mismatch.
+* NCP selecting a different source VkImage.
+* Re-publishing an older serial or timestamp.
+
+It does **not** prove that the selected presenter image contains the newest
+completed render content. Correct identity can still present stale pixels if
+DXVK's internal backbuffer-to-presenter copy used an old source generation,
+was recorded against the wrong source content, or became visible before its
+expected producer work.
+
+The next P0 is therefore a diagnostic-only content-generation trace at the
+last DXVK internal copy into the acquired presenter image:
+
+    DXVK frame/recording generation
+      -> internal backbuffer VkImage + subresource
+      -> copy/blit/resolve destination presenter VkImage + index
+      -> command-buffer recording generation and queue-submit occurrence
+      -> existing Guest/Host present serial
+
+The first version must add no wait, frame drop, queue reorder, fence change,
+shadow-copy change, or present behavior change. Prefer a bounded identity and
+generation record over GPU readback. A small, sparse diagnostic checksum may
+be considered only if identity/generation remains exact and its synchronization
+contract cannot affect normal presentation. The continuous visual verdict for
+this exact HAP remains pending; the analyzer PASS must not be promoted to a
+rollback-free Heaven milestone.
+
+## 30. 2026-07-27 Heaven rollback root cause and passing ring-drain fix
+
+The rollback was real frame-content reordering, not a low-FPS visual illusion.
+The user confirmed the fixed Heaven D3D11 scene no longer moves backward.
+
+The root cause was the cross-transport ordering contract immediately before
+private Vulkan present:
+
+    DXVK final presenter copy QueueSubmit
+      -> asynchronous Venus primary ring
+
+    Wine private present
+      -> synchronous private vtest socket
+
+`vn_ring_roundtrip()` was incorrectly treated as a renderer flush. Its actual
+contract is to submit a virtqueue sequence marker and enqueue a matching wait
+command in the Venus ring; it returns without waiting for the ring worker to
+consume that command. The private present worker could therefore acquire the
+Host queue mutex and copy the old source image before the ring worker executed
+the final DXVK `vkQueueSubmit`. All Guest frame numbers, present serials,
+NativeImage timestamps and selected image handles remained monotonic, which is
+why the earlier identity traces were correct while the visible content still
+rolled back.
+
+Mesa commit `9a988b6` makes the private-present boundary do:
+
+    vn_ring_roundtrip(primary_ring)
+      -> vn_ring_wait_all(primary_ring)
+      -> private vtest present
+
+`vn_ring_wait_all()` waits only until the Host renderer has decoded the
+published ring commands and the Host Vulkan driver's `vkQueueSubmit` call has
+returned. It does not wait for GPU completion and does not call
+`vkQueueWaitIdle` or `vkDeviceWaitIdle`. Host queue order then guarantees that
+the NCP copy observes the final presenter copy before later Guest work.
+
+Passing artifact and source state:
+
+    archive:
+      D:\MyProject\winehua-logs\manual\heaven-ring-drain-pass-20260727-1045
+    HAP SHA-256:
+      890664cb3859effe20f765e4ac4a5f362621203f318a7043d6261c687b2d700d
+    wine-data SHA-256:
+      cf89d570d22ebc25a533ab86ead89905ccfd04c98626689e8bba9bfcb6f778a5
+    device libvulkan_virtio.so SHA-256:
+      92a64c36d635267dd6176c28b8446a8a93d55f7227fdfa8c046eb247e0b11b30
+    source:
+      main dc077f8 plus Mesa 9a988b6, DXVK df55b90,
+      virglrenderer 0319fb18, Wine 20559c87
+
+The trace run recorded 782 ordered presents. Ring-drain wait cost was:
+
+    min 123 us, p50 1184 us, p95 3964 us, p99 7338 us,
+    max 33041 us, average 1659.8 us, one bounded retry
+
+The same HAP passed x64 DXVK Legacy comprehensive D3D11 smoke and rendered the
+x64 D3D11 cube for 532 frames with `angleRegressions=0`. The suite-level FAIL
+was only the separately tracked x86 smoke timeout at 180 seconds. The normal
+Heaven profile remained around 10 FPS in the first post-fix sample, so
+correctness is closed but performance is not.
+
+The following ordering invariant is now mandatory and must survive every
+performance change:
+
+    producer final-copy QueueSubmit reaches the Host Vulkan queue
+      before private present submits its source-to-SurfaceQueue copy
+
+Do not improve FPS by deleting the ring drain, weakening it back to
+`vn_ring_roundtrip()` alone, dropping present serials, or reusing old source
+images. The next performance work must profile and optimize, in order:
+
+1. ring drain CPU wait and ring notification latency;
+2. precise-dirty shadow scan/copy and private GPU-upload submission;
+3. Host driver `vkQueueSubmit` time and submits per frame;
+4. NCP acquire/copy/present and release-fence wait.
+
+A lower-overhead replacement is allowed only if it provides an equivalent
+explicit completion token, such as a Host-visible ring sequence or timeline
+value that private present waits before acquiring/submitting on the queue.
