@@ -30,7 +30,11 @@ CONFIG    := $(NATIVE_ARCH)
 BUILD_DIR := $(ROOT)/build
 STAMPS    := $(BUILD_DIR)/.stamps
 SCRIPTS   := $(ROOT)/scripts
-DXVK_SENTINEL := $(BUILD_DIR)/dxvk/legacy/x64/bin/d3d11.dll
+DXVK_ARTIFACTS := \
+	$(BUILD_DIR)/dxvk/legacy/x64/bin/d3d11.dll \
+	$(BUILD_DIR)/dxvk/legacy/x64/bin/dxgi.dll \
+	$(BUILD_DIR)/dxvk/legacy/x86/bin/d3d11.dll \
+	$(BUILD_DIR)/dxvk/legacy/x86/bin/dxgi.dll
 DXVK_STAMP := $(STAMPS)/dxvk-legacy
 DXVK_SOURCE_INPUTS := $(shell find $(ROOT)/thirdparty/dxvk/src -type f 2>/dev/null; find $(ROOT)/thirdparty/dxvk -maxdepth 1 -type f 2>/dev/null)
 
@@ -46,6 +50,7 @@ DEPS_SENTINEL   := $(BUILD_DIR)/sysroot-ext/usr/lib/x86_64-linux-ohos/libfreetyp
 WINE_SENTINEL   := $(BUILD_DIR)/wine-native/tools/winegcc/winegcc
 GUEST_GFX_SENTINEL := $(BUILD_DIR)/guest_gfx/$(GUEST_ARCH)/winehua-guest-gfx.env
 GUEST_VULKAN_SENTINEL := $(BUILD_DIR)/guest_vulkan/$(GUEST_ARCH)/manifest.json
+HOST_VULKAN_SOURCE := $(ROOT)/smoke/venus_heaven_material_replay.c
 
 # Guest runtime build scripts can also be invoked directly while iterating on
 # Mesa/Venus. Track their manifests as assemble inputs so a subsequent
@@ -65,6 +70,14 @@ $(DXVK_STAMP): $(SCRIPTS)/build_dxvk.sh $(DXVK_SOURCE_INPUTS) | $(STAMPS)
 	@echo "=== dxvk legacy ==="
 	bash $(SCRIPTS)/build_dxvk.sh
 	touch $@
+
+# DXVK is produced as a four-file side effect of the stamp recipe.  Give each
+# packaged DLL an explicit rule so a clean checkout can resolve the assemble
+# dependency before the stamp exists (the previous bare sentinel made CI stop
+# with "No rule to make target .../d3d11.dll").  The size check also prevents
+# packaging a partial or truncated DXVK install.
+$(DXVK_ARTIFACTS): $(DXVK_STAMP)
+	@test -s "$@" || { echo "ERROR: DXVK artifact missing after build: $@" >&2; exit 1; }
 ifeq ($(BUILD_GUEST_VULKAN),1)
 ASSEMBLE_GUEST_INPUTS += $(wildcard $(GUEST_VULKAN_SENTINEL))
 endif
@@ -89,6 +102,30 @@ $(STAMPS)/arm64-v8a $(STAMPS)/x86_64:
 	mkdir -p $@
 
 # ============================================================
+# host-vulkan — native Host Vulkan exact replay diagnostic
+# ============================================================
+.PHONY: host-vulkan
+host-vulkan: $(foreach a,$(ARCHES),$(STAMPS)/$(a)/host-vulkan)
+
+define host_vulkan_rule
+.PHONY: host-vulkan-$(1)
+host-vulkan-$(1): $$(STAMPS)/$(1)/host-vulkan
+
+$$(STAMPS)/$(1)/host-vulkan: $(SCRIPTS)/build_ohos_host_vulkan.sh $(SCRIPTS)/env.sh \
+	$(HOST_VULKAN_SOURCE) FORCE | $$(STAMPS)/$(1)
+	@manifest="$(BUILD_DIR)/host_vulkan/$(1)/manifest.json"; \
+	module="$(BUILD_DIR)/host_vulkan/$(1)/lib/libwinehua_host_heaven_replay.so"; \
+	if [ -f $$@ ] && [ -f "$$$$manifest" ] && [ -f "$$$$module" ] && \
+	    ! [ "$(SCRIPTS)/build_ohos_host_vulkan.sh" -nt $$@ ] && \
+	    ! [ "$(HOST_VULKAN_SOURCE)" -nt $$@ ]; then \
+	    echo "  [host-vulkan/$(1)] up to date"; \
+	else \
+	    NATIVE_ARCH=$(1) bash $(SCRIPTS)/build_ohos_host_vulkan.sh && touch $$@; \
+	fi
+endef
+$(foreach a,arm64-v8a x86_64,$(eval $(call host_vulkan_rule,$(a))))
+
+# ============================================================
 # deps — 交叉编译依赖 → build/sysroot-ext/ (架构无关)
 # ============================================================
 .PHONY: deps
@@ -100,6 +137,8 @@ $(STAMPS)/deps: $(SCRIPTS)/build_deps.sh $(SCRIPTS)/build_ohos_guest_gfx.sh \
 	$(ROOT)/smoke/venus_depth_cube_probe.inc \
 	$(ROOT)/smoke/venus_depth_cube_graphics_replay.inc \
 	$(ROOT)/smoke/venus_fullscreen_triangle.vert \
+	$(ROOT)/smoke/venus_heaven_material.vert \
+	$(ROOT)/smoke/venus_heaven_material_replay.c \
 	$(ROOT)/smoke/venus_depth_cube_golden.frag \
 	$(ROOT)/smoke/venus_depth_cube_fail.spvasm \
 	$(ROOT)/smoke/venus_storage_write.comp \
@@ -139,6 +178,8 @@ $(STAMPS)/deps: $(SCRIPTS)/build_deps.sh $(SCRIPTS)/build_ohos_guest_gfx.sh \
 	    ! [ "$(ROOT)/smoke/venus_depth_cube_probe.inc" -nt $@ ] && \
 	    ! [ "$(ROOT)/smoke/venus_depth_cube_graphics_replay.inc" -nt $@ ] && \
 	    ! [ "$(ROOT)/smoke/venus_fullscreen_triangle.vert" -nt $@ ] && \
+	    ! [ "$(ROOT)/smoke/venus_heaven_material.vert" -nt $@ ] && \
+	    ! [ "$(ROOT)/smoke/venus_heaven_material_replay.c" -nt $@ ] && \
 	    ! [ "$(ROOT)/smoke/venus_depth_cube_golden.frag" -nt $@ ] && \
 	    ! [ "$(ROOT)/smoke/venus_depth_cube_fail.spvasm" -nt $@ ] && \
 	    ! [ "$(ROOT)/smoke/venus_storage_write.comp" -nt $@ ] && \
@@ -196,27 +237,6 @@ $(STAMPS)/wine-$(CONFIG): $(SCRIPTS)/build_wine.sh $(SCRIPTS)/env.sh $(STAMPS)/d
 	else \
 	    echo "=== wine ($(CONFIG)) ==="; \
 	    bash $(SCRIPTS)/build_wine.sh && touch $@; \
-	fi
-
-# ============================================================
-# wine32 — 32-bit PE DLL (i686-mingw32, WoW64 必需)
-# ============================================================
-WINE32_SENTINEL := $(BUILD_DIR)/wine-i386-pe/dlls/ntdll/i386-windows/ntdll.dll
-
-.PHONY: wine32
-wine32: $(STAMPS)/wine32
-
-$(STAMPS)/wine32: $(SCRIPTS)/build_wine32_pe.sh $(SCRIPTS)/env.sh $(STAMPS)/deps FORCE | $(STAMPS)
-	@if [ -f $@ ] && [ -f $(WINE32_SENTINEL) ] && \
-	    ! find $(ROOT)/thirdparty/wine \
-	           -newer $@ -type f \
-	           \( -name '*.c' -o -name '*.h' -o -name '*.cpp' -o -name '*.cc' \
-	              -o -name '*.rc' -o -name '*.spec' -o -name '*.idl' \) \
-	           2>/dev/null | grep -q .; then \
-	    echo "  [wine32] up to date"; \
-	else \
-	    echo "=== wine32 ==="; \
-	    bash $(SCRIPTS)/build_wine32_pe.sh && touch $@; \
 	fi
 
 # ============================================================
@@ -291,10 +311,12 @@ define assemble_rule
 
 assemble-$(1): $$(STAMPS)/$(1)/assemble
 
-$$(STAMPS)/$(1)/assemble: $(SCRIPTS)/assemble.sh $(SCRIPTS)/env.sh $(DXVK_SENTINEL) $(DXVK_STAMP) \
+$$(STAMPS)/$(1)/assemble: $(SCRIPTS)/assemble.sh $(SCRIPTS)/env.sh $(DXVK_ARTIFACTS) \
+	$(ROOT)/smoke/winehua_d3d8_smoke.c \
 	$(ROOT)/smoke/winehua_d3d_switch_cube.c \
 	$(ROOT)/smoke/winehua_win32_driver.c \
 	$$(STAMPS)/deps $$(STAMPS)/wine-$(1) $$(STAMPS)/$(1)/native \
+	$$(STAMPS)/$(1)/host-vulkan \
 	$$(ASSEMBLE_GUEST_INPUTS) | $$(STAMPS)/$(1)
 	@echo "=== assemble ($(1)) ==="
 	NATIVE_ARCH=$(1) GUEST_ARCH=$(GUEST_ARCH) BUILD_GUEST_GFX=$(BUILD_GUEST_GFX) bash $(SCRIPTS)/assemble.sh
@@ -302,8 +324,8 @@ $$(STAMPS)/$(1)/assemble: $(SCRIPTS)/assemble.sh $(SCRIPTS)/env.sh $(DXVK_SENTIN
 endef
 $(foreach a,arm64-v8a x86_64,$(eval $(call assemble_rule,$(a))))
 
-# arm64 assemble 额外依赖 box64 + wine32 (WoW64 32-bit PE DLL)
-$(STAMPS)/arm64-v8a/assemble: $(STAMPS)/box64-arm64-v8a $(STAMPS)/wine32
+# arm64 assemble 额外依赖 box64 (32-bit PE DLL 已由 wine 主构建 --enable-archs=i386 提供)
+$(STAMPS)/arm64-v8a/assemble: $(STAMPS)/box64-arm64-v8a
 
 # ============================================================
 # hap — HAP 构建 + 签名 (统一 rawfile zip)
@@ -315,6 +337,20 @@ hap: assemble
 	@echo ""
 	@echo "HAP: $(ROOT)/entry/build/default/outputs/default/entry-default-signed.hap"
 	@ls -lh $(ROOT)/entry/build/default/outputs/default/entry-default-signed.hap 2>/dev/null || true
+
+# ============================================================
+# test: 宿主机单元测试 (纯函数, 不依赖 OHOS SDK, 用宿主 g++ 编译)
+# ============================================================
+HOST_TEST_DIR := $(BUILD_DIR)/host_tests
+
+.PHONY: test
+test:
+	@mkdir -p $(HOST_TEST_DIR)
+	g++ -std=c++17 -Wall -Wextra -I $(ROOT)/entry/src/main/cpp \
+	    -o $(HOST_TEST_DIR)/geometry_test \
+	    $(ROOT)/host_tests/geometry_test.cpp \
+	    $(ROOT)/entry/src/main/cpp/compositor/geometry.cpp
+	$(HOST_TEST_DIR)/geometry_test
 
 # ============================================================
 # clean
@@ -351,6 +387,7 @@ help:
 	@echo "  make wine      # Wine + wineserver"
 	@echo "  make box64     # Box64 (仅 arm64)"
 	@echo "  make native    # Native compositor 依赖"
+	@echo "  make host-vulkan # Host Vulkan exact replay"
 	@echo "  make assemble  # 组装布局"
 	@echo "  make hap       # HAP 打包 + 签名"
 	@echo ""

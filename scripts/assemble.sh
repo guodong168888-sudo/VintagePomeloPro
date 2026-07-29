@@ -194,6 +194,27 @@ assemble_pad() {
     else
         warn "  x86_64-w64-mingw32-strip not found, skipping strip"
     fi
+    # i386-windows/ (32-bit PE DLL for WoW64)
+    # 主构建 --enable-archs=i386,x86_64 已产出全部 32-bit PE, 直接取自 wine-ohos,
+    # 无需独立的 i686-mingw32 构建.
+    # 注意: wineboot/rpcss/services/conhost 等服务程序只有 x86_64 版,
+    # WoW64 下它们由 Wine 以 64 位进程拉起, 属上游 WoW64 的正常行为.
+    mkdir -p "$wine_data/bin/i386-windows"
+    for ext in dll drv exe sys acm ax ocx tlb; do
+        for f in "$BUILD_DIR/wine-ohos/dlls/"*/i386-windows/*.$ext; do
+            [ -f "$f" ] && cp "$f" "$wine_data/bin/i386-windows/"
+        done
+    done
+    log "  i386-windows → $(ls "$wine_data/bin/i386-windows" | wc -l) files (ALL)"
+
+    # 32-bit exe stubs, 放在 bin/i386-windows/.
+    # Wine 通过 WINEARCH 或 exe header 判断 32/64, 自动加载对应 DLL.
+    for exe in "$BUILD_DIR/wine-ohos/programs/"*/i386-windows/*.exe; do
+        [ -f "$exe" ] && cp "$exe" "$wine_data/bin/i386-windows/"
+    done
+    log "  i386 exe stubs → $(ls "$wine_data/bin/i386-windows"/*.exe 2>/dev/null | wc -l) files"
+
+    # 32-bit PE strip (必须在 copy 之后)
     if command -v i686-w64-mingw32-strip &>/dev/null; then
         for f in "$wine_data/bin/i386-windows/"*.dll "$wine_data/bin/i386-windows/"*.drv "$wine_data/bin/i386-windows/"*.exe "$wine_data/bin/i386-windows/"*.sys; do
             [ -f "$f" ] && i686-w64-mingw32-strip "$f" 2>/dev/null
@@ -201,30 +222,6 @@ assemble_pad() {
         log "  32-bit PE stripped"
     else
         warn "  i686-w64-mingw32-strip not found, skipping strip"
-    fi
-
-    # i386-windows/ (32-bit PE DLL for WoW64)
-    # 只取核心 DLL (~20 个), 其余 600+ 个 (d3dx9/msi/media等) 暂不需要.
-    # 完整列表在 build/wine-i386-pe/dlls/*/i386-windows/*.dll.
-    # 日后需要某个缺失的 DLL 时, 在此处加名即可.
-    if [ -d "$BUILD_DIR/wine-i386-pe" ]; then
-        # 32-bit PE DLL for WoW64: 复制所有运行时 PE 文件
-        mkdir -p "$wine_data/bin/i386-windows"
-        for ext in dll drv exe sys acm ax ocx tlb; do
-            for f in "$BUILD_DIR/wine-i386-pe/dlls/"*/i386-windows/*.$ext; do
-                [ -f "$f" ] && cp "$f" "$wine_data/bin/i386-windows/"
-            done
-        done
-        log "  i386-windows → $(ls "$wine_data/bin/i386-windows" | wc -l) files (ALL)"
-
-        # 32-bit exe stubs, 放在 bin/i386-windows/.
-        # Wine 通过 WINEARCH 或 exe header 判断 32/64, 自动加载对应 DLL.
-        for exe in "$BUILD_DIR/wine-i386-pe/programs/"*/i386-windows/*.exe; do
-            [ -f "$exe" ] && cp "$exe" "$wine_data/bin/i386-windows/"
-        done
-        log "  i386 exe stubs → $(ls "$wine_data/bin/i386-windows"/*.exe 2>/dev/null | wc -l) files"
-    else
-        warn "  i386-windows: SKIP (build/wine-i386-pe not found)"
     fi
 
     # *.exe stubs → rawfile
@@ -249,6 +246,13 @@ assemble_pad() {
     i686-w64-mingw32-gcc -O2 -s -mwindows -o \
         "$smoke_dir/x86/winehua_d3d_switch_cube.exe" "$cube_source" \
         -ld3d9 -ld3d11 -ldxgi -ld3dcompiler -luuid -lshell32 -luser32 -lgdi32 -lm
+    local d3d8_source="$WINEHUA/smoke/winehua_d3d8_smoke.c"
+    x86_64-w64-mingw32-gcc -O2 -s -mwindows -o \
+        "$smoke_dir/x64/winehua_d3d8_smoke.exe" "$d3d8_source" \
+        -luser32 -lgdi32
+    i686-w64-mingw32-gcc -O2 -s -mwindows -o \
+        "$smoke_dir/x86/winehua_d3d8_smoke.exe" "$d3d8_source" \
+        -luser32 -lgdi32
     local win32_driver_source="$WINEHUA/smoke/winehua_win32_driver.c"
     x86_64-w64-mingw32-gcc -O2 -s -municode -mwindows -o \
         "$smoke_dir/x64/winehua_win32_driver.exe" "$win32_driver_source" \
@@ -267,11 +271,11 @@ assemble_pad() {
     [ -f "$dxvk_root/x64/bin/dxgi.dll" ] || err "DXVK Legacy x64 dxgi.dll missing: $dxvk_root/x64/bin/dxgi.dll"
     [ -f "$dxvk_root/x86/bin/d3d11.dll" ] || err "DXVK Legacy x86 d3d11.dll missing: $dxvk_root/x86/bin/d3d11.dll"
     [ -f "$dxvk_root/x86/bin/dxgi.dll" ] || err "DXVK Legacy x86 dxgi.dll missing: $dxvk_root/x86/bin/dxgi.dll"
-    mkdir -p "$smoke_dir/dxvk/legacy/x64" "$smoke_dir/dxvk/legacy/x86"
-    cp "$dxvk_root/x64/bin/d3d11.dll" "$smoke_dir/dxvk/legacy/x64/d3d11.dll"
-    cp "$dxvk_root/x64/bin/dxgi.dll" "$smoke_dir/dxvk/legacy/x64/dxgi.dll"
-    cp "$dxvk_root/x86/bin/d3d11.dll" "$smoke_dir/dxvk/legacy/x86/d3d11.dll"
-    cp "$dxvk_root/x86/bin/dxgi.dll" "$smoke_dir/dxvk/legacy/x86/dxgi.dll"
+    mkdir -p "$wine_data/dxvk/legacy/x64" "$wine_data/dxvk/legacy/x86"
+    cp "$dxvk_root/x64/bin/d3d11.dll" "$wine_data/dxvk/legacy/x64/d3d11.dll"
+    cp "$dxvk_root/x64/bin/dxgi.dll" "$wine_data/dxvk/legacy/x64/dxgi.dll"
+    cp "$dxvk_root/x86/bin/d3d11.dll" "$wine_data/dxvk/legacy/x86/d3d11.dll"
+    cp "$dxvk_root/x86/bin/dxgi.dll" "$wine_data/dxvk/legacy/x86/dxgi.dll"
     # The DXVK binaries are runtime-owned overlays.  Do not place them next
     # to the smoke executables: that would make the test layout look like a
     # game distribution and would force real games to carry WineHua-specific
@@ -289,19 +293,21 @@ assemble_pad() {
         cp "$smoke64" "$smoke_dir/x64/$smoke_program.exe"
         cp "$smoke32" "$smoke_dir/x86/$smoke_program.exe"
     done
-    local audio64_sha graphics64_sha vulkan64_sha d3d1164_sha cube64_sha driver64_sha
-    local audio32_sha graphics32_sha vulkan32_sha d3d1132_sha cube32_sha driver32_sha
+    local audio64_sha graphics64_sha vulkan64_sha d3d1164_sha d3d864_sha cube64_sha driver64_sha
+    local audio32_sha graphics32_sha vulkan32_sha d3d1132_sha d3d832_sha cube32_sha driver32_sha
     local storage_write_sha storage_read_sha image_fetch_sha combined_sample_sha separated_sample_sha
     audio64_sha="$(sha256sum "$smoke_dir/x64/winehua_audio_smoke.exe" | awk '{print $1}')"
     graphics64_sha="$(sha256sum "$smoke_dir/x64/winehua_graphics_smoke.exe" | awk '{print $1}')"
     vulkan64_sha="$(sha256sum "$smoke_dir/x64/winehua_vulkan_smoke.exe" | awk '{print $1}')"
     d3d1164_sha="$(sha256sum "$smoke_dir/x64/winehua_d3d11_smoke.exe" | awk '{print $1}')"
+    d3d864_sha="$(sha256sum "$smoke_dir/x64/winehua_d3d8_smoke.exe" | awk '{print $1}')"
     cube64_sha="$(sha256sum "$smoke_dir/x64/winehua_d3d_switch_cube.exe" | awk '{print $1}')"
     driver64_sha="$(sha256sum "$smoke_dir/x64/winehua_win32_driver.exe" | awk '{print $1}')"
     audio32_sha="$(sha256sum "$smoke_dir/x86/winehua_audio_smoke.exe" | awk '{print $1}')"
     graphics32_sha="$(sha256sum "$smoke_dir/x86/winehua_graphics_smoke.exe" | awk '{print $1}')"
     vulkan32_sha="$(sha256sum "$smoke_dir/x86/winehua_vulkan_smoke.exe" | awk '{print $1}')"
     d3d1132_sha="$(sha256sum "$smoke_dir/x86/winehua_d3d11_smoke.exe" | awk '{print $1}')"
+    d3d832_sha="$(sha256sum "$smoke_dir/x86/winehua_d3d8_smoke.exe" | awk '{print $1}')"
     cube32_sha="$(sha256sum "$smoke_dir/x86/winehua_d3d_switch_cube.exe" | awk '{print $1}')"
     driver32_sha="$(sha256sum "$smoke_dir/x86/winehua_win32_driver.exe" | awk '{print $1}')"
     storage_write_sha="$(sha256sum "$smoke_dir/assets/venus_storage_write.spv" | awk '{print $1}')"
@@ -312,15 +318,16 @@ assemble_pad() {
     local dxvk_commit
     dxvk_commit="$(git -c safe.directory="$DXVK_SRC" -C "$DXVK_SRC" rev-parse HEAD 2>/dev/null || echo unknown)"
     local dxvk64_d3d11_sha dxvk64_dxgi_sha dxvk32_d3d11_sha dxvk32_dxgi_sha
-    dxvk64_d3d11_sha="$(sha256sum "$smoke_dir/dxvk/legacy/x64/d3d11.dll" | awk '{print $1}')"
-    dxvk64_dxgi_sha="$(sha256sum "$smoke_dir/dxvk/legacy/x64/dxgi.dll" | awk '{print $1}')"
-    dxvk32_d3d11_sha="$(sha256sum "$smoke_dir/dxvk/legacy/x86/d3d11.dll" | awk '{print $1}')"
-    dxvk32_dxgi_sha="$(sha256sum "$smoke_dir/dxvk/legacy/x86/dxgi.dll" | awk '{print $1}')"
-    cat > "$smoke_dir/dxvk/manifest.json" <<EOF
+    dxvk64_d3d11_sha="$(sha256sum "$wine_data/dxvk/legacy/x64/d3d11.dll" | awk '{print $1}')"
+    dxvk64_dxgi_sha="$(sha256sum "$wine_data/dxvk/legacy/x64/dxgi.dll" | awk '{print $1}')"
+    dxvk32_d3d11_sha="$(sha256sum "$wine_data/dxvk/legacy/x86/d3d11.dll" | awk '{print $1}')"
+    dxvk32_dxgi_sha="$(sha256sum "$wine_data/dxvk/legacy/x86/dxgi.dll" | awk '{print $1}')"
+    cat > "$wine_data/dxvk/manifest.json" <<EOF
 {
   "schemaVersion": 1,
   "backend": "dxvk",
   "profile": "legacy",
+  "runtimeRoot": "dxvk",
   "version": "1.10.3",
   "commit": "$dxvk_commit",
   "requiredCapabilities": {
@@ -337,20 +344,22 @@ EOF
     cat > "$smoke_dir/manifest.json" <<EOF
 {
   "schemaVersion": 1,
-  "suiteVersion": "phase2-vulkan-dxvk-legacy-v3",
-  "enabledSuites": ["core", "audio", "opengl", "wine-vulkan", "dxvk"],
+  "suiteVersion": "phase2-vulkan-dxvk-legacy-v6-d3d8-d3d9",
+  "enabledSuites": ["core", "audio", "opengl", "wine-vulkan", "d3d8", "d3d9", "dxvk"],
   "managedRoot": "C:\\\\smoke",
   "files": {
     "x64/winehua_audio_smoke.exe": "$audio64_sha",
     "x64/winehua_graphics_smoke.exe": "$graphics64_sha",
     "x64/winehua_vulkan_smoke.exe": "$vulkan64_sha",
     "x64/winehua_d3d11_smoke.exe": "$d3d1164_sha",
+    "x64/winehua_d3d8_smoke.exe": "$d3d864_sha",
     "x64/winehua_d3d_switch_cube.exe": "$cube64_sha",
     "x64/winehua_win32_driver.exe": "$driver64_sha",
     "x86/winehua_audio_smoke.exe": "$audio32_sha",
     "x86/winehua_graphics_smoke.exe": "$graphics32_sha",
     "x86/winehua_vulkan_smoke.exe": "$vulkan32_sha",
     "x86/winehua_d3d11_smoke.exe": "$d3d1132_sha",
+    "x86/winehua_d3d8_smoke.exe": "$d3d832_sha",
     "x86/winehua_d3d_switch_cube.exe": "$cube32_sha",
     "x86/winehua_win32_driver.exe": "$driver32_sha",
     "assets/venus_storage_write.spv": "$storage_write_sha",
@@ -462,6 +471,20 @@ HKLM,%FontSubStr%,"Lucida Console",,"Noto Sans Mono"' "$wine_data/share/wine/win
     else
         log "  guest_vulkan: SKIP"
     fi
+
+    # Native offscreen replay runs in the App/NCP security domain and links the
+    # system Host Vulkan loader. Captured resources remain in guest_vulkan so
+    # there is one authoritative exact-replay input set for the Host/Venus A/B.
+    local host_vulkan_root="$BUILD_DIR/host_vulkan/$NATIVE_ARCH"
+    [ -f "$host_vulkan_root/manifest.json" ] || \
+        err "Host Vulkan replay manifest missing: $host_vulkan_root/manifest.json"
+    [ -f "$host_vulkan_root/bin/heaven_exact_host_replay" ] || \
+        err "Host Vulkan replay marker missing: $host_vulkan_root/bin/heaven_exact_host_replay"
+    [ -f "$host_vulkan_root/lib/libwinehua_host_heaven_replay.so" ] || \
+        err "Host Vulkan replay module missing: $host_vulkan_root/lib/libwinehua_host_heaven_replay.so"
+    mkdir -p "$wine_data/bin/host_vulkan"
+    cp -a "$host_vulkan_root/"* "$wine_data/bin/host_vulkan/"
+    log "  host_vulkan ($NATIVE_ARCH): native exact replay"
 
     # -- 3. 打包 zip → rawfile (不带 wine-data/ 前缀) --
     local rawfile_dir="$WINEHUA/entry/src/main/resources/rawfile"
