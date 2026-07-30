@@ -9,6 +9,8 @@
 #include <vector>
 #include <native_window/external_window.h>
 
+#include "virgl_host_config.h"
+
 struct OHIPCRemoteProxy;
 
 namespace winehua {
@@ -98,6 +100,8 @@ private:
                                uint64_t framePeriodNs, uint32_t flags);
     bool SendVirglFramePeriodLocked(uint64_t surfaceKey, uint64_t framePeriodNs);
     bool SendVirglDetachLocked(uint64_t surfaceKey);
+    bool StartVirglInProcessHostLocked(const VirglHostConfig& config);
+    void ResetVirglInProcessSurfacesLocked();
     void ShutdownVirglIpc();
 
     mutable std::mutex mutex_;
@@ -123,8 +127,15 @@ private:
     int virglServerPid_ = -1;
     bool virglServerUsesNcp_ = false;
     bool virglServerUsesIpc_ = false;
+    std::atomic<bool> virglServerUsesInProcess_{false};
     std::atomic<bool> virglServerRunning_{false};
     std::atomic<bool> vulkanPresentMode_{false};
+    void* virglInProcessHandle_ = nullptr;
+    void* virglInProcessAttach_ = nullptr;
+    void* virglInProcessDetach_ = nullptr;
+    void* virglInProcessSetFramePeriod_ = nullptr;
+    void* virglInProcessQuery_ = nullptr;
+    void* virglInProcessReset_ = nullptr;
 
     mutable std::mutex virglIpcMutex_;
     std::condition_variable virglIpcCondition_;
@@ -133,14 +144,8 @@ private:
     bool virglIpcCallbackComplete_ = false;
     bool virglIpcConfigured_ = false;
     int virglIpcError_ = 0;
-    std::string virglIpcHelperPath_;
-    std::string virglIpcSocketPath_;
-    std::string virglIpcLibraryPath_;
-    std::string virglIpcSyncMode_;
-    std::string virglIpcLogPath_;
-    std::string virglIpcShadowMode_;
-    std::string virglIpcShadowTrace_;
-    std::string virglIpcPresentMode_;
+    VirglHostConfig virglHostConfig_;
+    uint64_t virglHostConfigHash_ = 0;
     std::unordered_set<uint64_t> zeroCopyAttachedSurfaces_;
 };
 
