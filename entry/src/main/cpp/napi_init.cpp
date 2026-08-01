@@ -14,6 +14,7 @@
 #include "wine_exe.h"
 #include "wine_mmap_test.h"
 #include "host_vulkan_probe.h"
+#include "game_controller_bridge.h"
 #include "phone_adapter/phone_adapter.h"
 
 #include <unistd.h>
@@ -596,6 +597,21 @@ static napi_value ResizeRenderer(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
+// -- NAPI: refreshRenderer -- (页面返回后保留 NativeWindow 的安全重绘)
+static napi_value RefreshRenderer(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 1) {
+        OH_LOG_ERROR(LOG_APP, "[MW-NAPI] refreshRenderer: need toplevelId");
+        return nullptr;
+    }
+    uint32_t tid = 0;
+    napi_get_value_uint32(env, args[0], &tid);
+    PluginManager::GetInstance()->RefreshRenderer(tid);
+    return nullptr;
+}
+
 // -- NAPI: destroyRenderer -- (XComponentController.onSurfaceDestroyed 调用)
 static napi_value DestroyRenderer(napi_env env, napi_callback_info info) {
     size_t argc = 1;
@@ -833,18 +849,20 @@ static napi_value GetProcessList(napi_env env, napi_callback_info info) {
         napi_value obj;
         napi_create_object(env, &obj);
 
-        napi_value pidVal, nameVal, pathVal, stateVal;
+        napi_value pidVal, nameVal, pathVal, stateVal, sessionVal;
         napi_create_int32(env, entry.pid, &pidVal);
         napi_create_string_utf8(env, entry.exeBasename.c_str(), NAPI_AUTO_LENGTH, &nameVal);
         napi_create_string_utf8(env, entry.exeFullPath.c_str(), NAPI_AUTO_LENGTH, &pathVal);
         napi_create_string_utf8(env, entry.running ? "running" : "exited",
                                 NAPI_AUTO_LENGTH, &stateVal);
+        napi_create_string_utf8(env, entry.sessionId.c_str(), NAPI_AUTO_LENGTH, &sessionVal);
 
         napi_property_descriptor props[] = {
             {"pid",   nullptr, nullptr, nullptr, nullptr, pidVal,   napi_default, nullptr},
             {"name",  nullptr, nullptr, nullptr, nullptr, nameVal,  napi_default, nullptr},
             {"path",  nullptr, nullptr, nullptr, nullptr, pathVal,  napi_default, nullptr},
             {"state", nullptr, nullptr, nullptr, nullptr, stateVal, napi_default, nullptr},
+            {"sessionId", nullptr, nullptr, nullptr, nullptr, sessionVal, napi_default, nullptr},
         };
         napi_define_properties(env, obj, sizeof(props)/sizeof(props[0]), props);
         napi_set_element(env, arr, i, obj);
@@ -873,6 +891,66 @@ static napi_value KillProcess(napi_env env, napi_callback_info info) {
     return r;
 }
 
+static std::string GetStringArgument(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 1) return "";
+    size_t length = 0;
+    napi_get_value_string_utf8(env, args[0], nullptr, 0, &length);
+    std::string value(length + 1, '\0');
+    napi_get_value_string_utf8(env, args[0], value.data(), value.size(), &length);
+    value.resize(length);
+    return value;
+}
+
+static napi_value GetWineSession(napi_env env, napi_callback_info info) {
+    const std::string sessionId = GetStringArgument(env, info);
+    WineProcessEntry entry{};
+    if (!GetProcessBySessionId(sessionId, &entry)) {
+        napi_value result;
+        napi_get_null(env, &result);
+        return result;
+    }
+    napi_value result, pidValue, sessionValue, pathValue, stateValue, toplevelValue;
+    napi_create_object(env, &result);
+    napi_create_int32(env, entry.pid, &pidValue);
+    napi_create_string_utf8(env, entry.sessionId.c_str(), NAPI_AUTO_LENGTH, &sessionValue);
+    napi_create_string_utf8(env, entry.exeFullPath.c_str(), NAPI_AUTO_LENGTH, &pathValue);
+    napi_create_string_utf8(env, entry.running ? "running" : "exited", NAPI_AUTO_LENGTH,
+                            &stateValue);
+    napi_create_uint32(env, entry.toplevelId, &toplevelValue);
+    napi_set_named_property(env, result, "pid", pidValue);
+    napi_set_named_property(env, result, "sessionId", sessionValue);
+    napi_set_named_property(env, result, "path", pathValue);
+    napi_set_named_property(env, result, "state", stateValue);
+    napi_set_named_property(env, result, "toplevelId", toplevelValue);
+    return result;
+}
+
+static napi_value StopWineSession(napi_env env, napi_callback_info info) {
+    const std::string sessionId = GetStringArgument(env, info);
+    WineProcessEntry entry{};
+    const bool found = GetProcessBySessionId(sessionId, &entry);
+    if (found) {
+        kill(entry.pid, SIGKILL);
+        RemoveProcess(entry.pid, -1, "session-stop");
+    }
+    napi_value result;
+    napi_get_boolean(env, found, &result);
+    return result;
+}
+
+static napi_value ActivateWineSession(napi_env env, napi_callback_info info) {
+    const std::string sessionId = GetStringArgument(env, info);
+    WineProcessEntry entry{};
+    const bool found = GetProcessBySessionId(sessionId, &entry) && entry.toplevelId > 0;
+    if (found) WaylandServer::GetInstance()->RaiseToplevel(entry.toplevelId);
+    napi_value result;
+    napi_get_boolean(env, found, &result);
+    return result;
+}
+
 // -- 模块注册 --
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports) {
@@ -891,6 +969,10 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"destroyToplevel", nullptr, DestroyToplevel, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"sendToplevelClose", nullptr, SendToplevelClose, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runWineExe",     nullptr, RunWineExe,     nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"runWineExeLegacy", nullptr, RunWineExeLegacy, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getWineSession", nullptr, GetWineSession, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"stopWineSession", nullptr, StopWineSession, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"activateWineSession", nullptr, ActivateWineSession, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runWineProgram", nullptr, RunWineProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runGuestProgram", nullptr, RunGuestProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runHostProgram", nullptr, RunHostProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -905,6 +987,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         // surfaceId 驱动的渲染器管理 (XComponentController 回调)
         {"createRenderer",  nullptr, CreateRenderer,  nullptr, nullptr, nullptr, napi_default, nullptr},
         {"resizeRenderer",  nullptr, ResizeRenderer,  nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"refreshRenderer", nullptr, RefreshRenderer, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"destroyRenderer", nullptr, DestroyRenderer, nullptr, nullptr, nullptr, napi_default, nullptr},
 #ifdef DEBUG_MMAP_TEST
         {"runMmapTests",  nullptr, RunMmapTests,  nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -925,6 +1008,13 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setToplevelVisible", nullptr, SetToplevelVisible, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getProcessList",   nullptr, GetProcessList,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"killProcess",     nullptr, KillProcess,     nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"initGameController", nullptr, InitGameController, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"cleanupGameController", nullptr, CleanupGameController, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"isGamepadConnected", nullptr, IsGamepadConnected, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getGamepadCount", nullptr, GetGamepadCount, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setGamepadButtonCallback", nullptr, SetGamepadButtonCallback, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setGamepadAxisCallback", nullptr, SetGamepadAxisCallback, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setGamepadDeviceCallback", nullptr, SetGamepadDeviceCallback, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
 

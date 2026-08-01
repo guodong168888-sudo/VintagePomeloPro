@@ -16,6 +16,8 @@
 #include <thread>
 #include <vector>
 #include <chrono>
+#include <fstream>
+#include <cctype>
 
 #undef LOG_TAG
 #undef LOG_DOMAIN
@@ -26,6 +28,12 @@
 // -- 全局状态 --
 static std::mutex gProcMutex;
 static std::vector<WineProcessEntry> gProcRegistry;
+struct PendingToplevel {
+    pid_t clientPid;
+    uint32_t toplevelId;
+    std::string sessionId;
+};
+static std::vector<PendingToplevel> gPendingToplevels;
 
 static uint64_t TimestampMs() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -36,7 +44,42 @@ static uint64_t TimestampMs() {
 static void EnsureMonitorRunning();
 
 // -- 注册表辅助函数 --
-WineProcessEntry* AddProcess(pid_t pid, const std::string& exeFullPath, int stdoutFd) {
+static std::string NormalizePath(std::string value) {
+    std::replace(value.begin(), value.end(), '\\', '/');
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    while (value.size() > 1 && value.back() == '/') value.pop_back();
+    return value;
+}
+
+static pid_t ReadParentPid(pid_t pid) {
+    std::ifstream status("/proc/" + std::to_string(pid) + "/status");
+    std::string key;
+    while (status >> key) {
+        if (key == "PPid:") {
+            pid_t parent = 0;
+            status >> parent;
+            return parent;
+        }
+        std::string rest;
+        std::getline(status, rest);
+    }
+    return 0;
+}
+
+static bool IsProcessOrDescendant(pid_t clientPid, pid_t expectedParent) {
+    pid_t current = clientPid;
+    for (int depth = 0; current > 1 && depth < 16; depth++) {
+        if (current == expectedParent) return true;
+        const pid_t parent = ReadParentPid(current);
+        if (parent <= 1 || parent == current) break;
+        current = parent;
+    }
+    return false;
+}
+
+WineProcessEntry* AddProcess(pid_t pid, const std::string& exeFullPath, int stdoutFd,
+                             const std::string& requestedSessionId) {
     std::lock_guard<std::mutex> lock(gProcMutex);
     std::string basename = exeFullPath;
     auto slash = basename.find_last_of('/');
@@ -53,6 +96,9 @@ WineProcessEntry* AddProcess(pid_t pid, const std::string& exeFullPath, int stdo
         .pid = pid,
         .exeBasename = basename,
         .exeFullPath = exeFullPath,
+        .sessionId = requestedSessionId.empty()
+            ? "wine-" + std::to_string(pid) : requestedSessionId,
+        .toplevelId = 0,
         .running = true,
         .startTimestampMs = TimestampMs(),
         .endTimestampMs = 0,
@@ -61,10 +107,83 @@ WineProcessEntry* AddProcess(pid_t pid, const std::string& exeFullPath, int stdo
         .stdoutFd = stdoutFd,
         .readerActive = std::make_shared<std::atomic<bool>>(true)
     });
+    WineProcessEntry& added = gProcRegistry.back();
+    for (auto pending = gPendingToplevels.begin(); pending != gPendingToplevels.end();) {
+        const bool sameSession = !pending->sessionId.empty() &&
+            pending->sessionId == added.sessionId;
+        if (sameSession || IsProcessOrDescendant(pending->clientPid, pid)) {
+            if (added.toplevelId == 0) added.toplevelId = pending->toplevelId;
+            pending = gPendingToplevels.erase(pending);
+        } else {
+            ++pending;
+        }
+    }
     OH_LOG_INFO(LOG_APP, "[ProcReg] add pid=%{public}d name=%{public}s total=%{public}zu",
                 pid, basename.c_str(), gProcRegistry.size());
     EnsureMonitorRunning();
     return &gProcRegistry.back();
+}
+
+pid_t FindRunningProcessByPath(const std::string& exeFullPath) {
+    const std::string expected = NormalizePath(exeFullPath);
+    std::lock_guard<std::mutex> lock(gProcMutex);
+    for (const auto& entry : gProcRegistry) {
+        if (entry.running && NormalizePath(entry.exeFullPath) == expected) return entry.pid;
+    }
+    return -1;
+}
+
+std::string FindSessionIdForClientPid(pid_t clientPid) {
+    std::lock_guard<std::mutex> lock(gProcMutex);
+    pid_t current = clientPid;
+    for (int depth = 0; current > 1 && depth < 16; depth++) {
+        for (const auto& entry : gProcRegistry) {
+            if (entry.running && entry.pid == current) return entry.sessionId;
+        }
+        const pid_t parent = ReadParentPid(current);
+        if (parent <= 1 || parent == current) break;
+        current = parent;
+    }
+    return "";
+}
+
+bool GetProcessBySessionId(const std::string& sessionId, WineProcessEntry* result) {
+    if (sessionId.empty() || !result) return false;
+    std::lock_guard<std::mutex> lock(gProcMutex);
+    for (const auto& entry : gProcRegistry) {
+        if (entry.running && entry.sessionId == sessionId) {
+            *result = entry;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool AssociateToplevelWithSession(const std::string& sessionId, pid_t clientPid,
+                                  uint32_t toplevelId) {
+    if (toplevelId == 0) return false;
+    std::lock_guard<std::mutex> lock(gProcMutex);
+    for (auto& entry : gProcRegistry) {
+        const bool sameSession = !sessionId.empty() && entry.sessionId == sessionId;
+        if (sameSession || IsProcessOrDescendant(clientPid, entry.pid)) {
+            if (entry.toplevelId == 0) entry.toplevelId = toplevelId;
+            return true;
+        }
+    }
+    gPendingToplevels.push_back({clientPid, toplevelId, sessionId});
+    if (gPendingToplevels.size() > 32) gPendingToplevels.erase(gPendingToplevels.begin());
+    return false;
+}
+
+void RemoveToplevelAssociation(uint32_t toplevelId) {
+    std::lock_guard<std::mutex> lock(gProcMutex);
+    for (auto& entry : gProcRegistry) {
+        if (entry.toplevelId == toplevelId) entry.toplevelId = 0;
+    }
+    gPendingToplevels.erase(std::remove_if(gPendingToplevels.begin(), gPendingToplevels.end(),
+        [toplevelId](const PendingToplevel& pending) {
+            return pending.toplevelId == toplevelId;
+        }), gPendingToplevels.end());
 }
 
 void RemoveProcess(pid_t pid, int exitCode, const std::string& exitCodeSource) {
@@ -95,6 +214,7 @@ void KillAllProcesses() {
             if (entry.stdoutFd >= 0) { close(entry.stdoutFd); entry.stdoutFd = -1; }
         }
     }
+    gPendingToplevels.clear();
 }
 
 // -- 进程退出状态日志 --

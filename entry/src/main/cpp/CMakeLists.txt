@@ -24,6 +24,7 @@ add_library(entry SHARED
     audio_ipc_server.cpp
     audio_stream.cpp
     graphics_broker.cpp
+    game_controller_bridge.cpp
     virgl_host_config.cpp
     napi_init.cpp
     wine_process.cpp

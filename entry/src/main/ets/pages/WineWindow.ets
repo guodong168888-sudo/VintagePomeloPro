@@ -65,6 +65,28 @@ struct WineWindow {
     hilog.info(DOMAIN, 'WineWindow', 'aboutToAppear tl=%{public}d', this.toplevelId);
   }
 
+  private handleMouseEvent(event: MouseEvent): void {
+    if (this.toplevelId <= 0) return;
+    // Wine 发起 xdg_toplevel.move → 下一个 MOVE 时调用 OHOS 原生 startMoving()
+    if (event.action === MouseAction.Move && WineWindowManager.getInstance().shouldStartMoving(this.toplevelId)) {
+      try {
+        const win = WineWindowManager.getInstance().getWindow(this.toplevelId);
+        if (win) {
+          win.startMoving();
+          return; // OHOS 接管拖拽, 不再转发给 Wine
+        }
+      } catch (e) { /* fall through to normal path */ }
+    }
+    const px = vp2px(event.x);
+    const py = vp2px(event.y);
+    const btn = mapMouseButton(event.button);
+    if (event.action !== MouseAction.Move) {
+      hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE tl=%{public}d action=%{public}d px=(%{public}d,%{public}d) btn=0x%{public}x',
+        this.toplevelId, event.action, Math.round(px), Math.round(py), btn);
+    }
+    testNapi.sendPointerEvent(this.toplevelId, event.action, px, py, btn);
+  }
+
   build() {
     Stack() {
       XComponent({
@@ -100,6 +122,12 @@ struct WineWindow {
             testNapi.sendScrollEvent(this.toplevelId, 1, horiz, step, px, py);
           }
         })
+        // Surface ready 后 XComponent 位于命中链顶端。直接绑定鼠标事件，
+        // 避免事件只在首帧前落到外层 Stack，随后出现“键盘可用但鼠标失效”。
+        .onMouse((event: MouseEvent) => {
+          event.stopPropagation();
+          this.handleMouseEvent(event);
+        })
     }
     .width('100%')
     .height('100%')
@@ -109,25 +137,7 @@ struct WineWindow {
 
     // -- 鼠标事件 --
     .onMouse((event: MouseEvent) => {
-      if (this.toplevelId <= 0) return;
-      // Wine 发起 xdg_toplevel.move → 下一个 MOVE 时调用 OHOS 原生 startMoving()
-      if (event.action === MouseAction.Move && WineWindowManager.getInstance().shouldStartMoving(this.toplevelId)) {
-        try {
-          const win = WineWindowManager.getInstance().getWindow(this.toplevelId);
-          if (win) {
-            win.startMoving();
-            return; // OHOS 接管拖拽, 不再转发给 Wine
-          }
-        } catch (e) { /* fall through to normal path */ }
-      }
-      const px = vp2px(event.x);
-      const py = vp2px(event.y);
-      const btn = mapMouseButton(event.button);
-      if (event.action !== MouseAction.Move) {
-        hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE tl=%{public}d action=%{public}d px=(%{public}d,%{public}d) btn=0x%{public}x',
-          this.toplevelId, event.action, Math.round(px), Math.round(py), btn);
-      }
-      testNapi.sendPointerEvent(this.toplevelId, event.action, px, py, btn);
+      this.handleMouseEvent(event);
     })
 
     // -- 键盘事件 --

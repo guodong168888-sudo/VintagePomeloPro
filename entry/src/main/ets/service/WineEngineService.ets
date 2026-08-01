@@ -13,6 +13,7 @@ import {
   canTransitionEngineState
 } from '../model/AppModels';
 import { AppSettingsStore } from './AppSettingsStore';
+import { syncManagedSmoke } from './SmokeRunner';
 import { WineWindowManager } from './WineWindowManager';
 
 const DOMAIN = 0x0000;
@@ -48,6 +49,27 @@ const REQUIRED_RUNTIME_PATHS: RuntimePathRequirement[] = [
   { path: WINE_BIN + '/guest_gfx/winehua-guest-gfx.env', label: 'bin/guest_gfx/winehua-guest-gfx.env' },
   { path: WINE_BIN + '/guest_gfx/lib/libEGL.so', label: 'bin/guest_gfx/lib/libEGL.so' },
   { path: WINE_BIN + '/guest_gfx/lib/dri/virtio_gpu_dri.so', label: 'bin/guest_gfx/lib/dri/virtio_gpu_dri.so' },
+  { path: WINE_BIN + '/guest_vulkan/lib/libvulkan.so.1', label: 'bin/guest_vulkan/lib/libvulkan.so.1' },
+  { path: WINE_BIN + '/guest_vulkan/share/vulkan/icd.d/venus_icd.x86_64.json',
+    label: 'bin/guest_vulkan/share/vulkan/icd.d/venus_icd.x86_64.json' },
+  { path: WINE_ROOT + '/dxvk/manifest.json', label: 'dxvk/manifest.json' },
+  { path: WINE_ROOT + '/dxvk/legacy/x64/d3d9.dll', label: 'dxvk/legacy/x64/d3d9.dll' },
+  { path: WINE_ROOT + '/dxvk/legacy/x64/d3d10core.dll', label: 'dxvk/legacy/x64/d3d10core.dll' },
+  { path: WINE_ROOT + '/dxvk/legacy/x64/d3d10.dll', label: 'dxvk/legacy/x64/d3d10.dll' },
+  { path: WINE_ROOT + '/dxvk/legacy/x64/d3d10_1.dll', label: 'dxvk/legacy/x64/d3d10_1.dll' },
+  { path: WINE_ROOT + '/dxvk/legacy/x64/d3d11.dll', label: 'dxvk/legacy/x64/d3d11.dll' },
+  { path: WINE_ROOT + '/dxvk/legacy/x64/dxgi.dll', label: 'dxvk/legacy/x64/dxgi.dll' },
+  { path: WINE_ROOT + '/dxvk/legacy/x86/d3d9.dll', label: 'dxvk/legacy/x86/d3d9.dll' },
+  { path: WINE_ROOT + '/dxvk/legacy/x86/d3d10core.dll', label: 'dxvk/legacy/x86/d3d10core.dll' },
+  { path: WINE_ROOT + '/dxvk/legacy/x86/d3d10.dll', label: 'dxvk/legacy/x86/d3d10.dll' },
+  { path: WINE_ROOT + '/dxvk/legacy/x86/d3d10_1.dll', label: 'dxvk/legacy/x86/d3d10_1.dll' },
+  { path: WINE_ROOT + '/dxvk/legacy/x86/d3d11.dll', label: 'dxvk/legacy/x86/d3d11.dll' },
+  { path: WINE_ROOT + '/dxvk/legacy/x86/dxgi.dll', label: 'dxvk/legacy/x86/dxgi.dll' },
+  { path: WINE_ROOT + '/smoke/manifest.json', label: 'smoke/manifest.json' },
+  { path: WINE_ROOT + '/smoke/x64/winehua_d3d_switch_cube.exe',
+    label: 'smoke/x64/winehua_d3d_switch_cube.exe' },
+  { path: WINE_ROOT + '/smoke/x86/winehua_d3d_switch_cube.exe',
+    label: 'smoke/x86/winehua_d3d_switch_cube.exe' },
   { path: WINE_BIN + '/x86_64-windows', label: 'bin/x86_64-windows', directory: true },
   { path: WINE_BIN + '/i386-windows', label: 'bin/i386-windows', directory: true }
 ];
@@ -70,6 +92,11 @@ function pathMatchesRequirement(item: RuntimePathRequirement): boolean {
   } catch (_) {
     return false;
   }
+}
+
+function isCommandScript(executable: string): boolean {
+  const lower = executable.trim().toLowerCase();
+  return lower.endsWith('.bat') || lower.endsWith('.cmd');
 }
 
 export class WineEngineService {
@@ -132,7 +159,10 @@ export class WineEngineService {
     homeDirectory: string): Promise<boolean> {
     if (!this.context) return false;
     if (this.state === EngineState.READY && this.mode === mode &&
-      this.presentationMode === presentationMode) return true;
+      this.presentationMode === presentationMode) {
+      this.syncManagedSmokePayload('ready-reuse');
+      return true;
+    }
     if (this.state === EngineState.PREPARING && this.mode === mode &&
       this.presentationMode === presentationMode) return this.waitForReady();
 
@@ -180,20 +210,33 @@ export class WineEngineService {
     }
   }
 
-  launchExecutable(executable: string, argumentsValue: string[] = []): NativeLaunchResult {
+  launchExecutable(executable: string, argumentsValue: string[] = [],
+    workingDirectory: string = ''): NativeLaunchResult {
     if (this.state !== EngineState.READY) {
+      return { pid: -1, sessionId: '', reused: false };
+    }
+    if (executable.trim().toLowerCase().startsWith('c:\\smoke\\') &&
+      !this.syncManagedSmokePayload('managed-smoke-launch')) {
       return { pid: -1, sessionId: '', reused: false };
     }
     const singleAppRoot = this.presentationMode === WinePresentationMode.SINGLE_APP;
     if (singleAppRoot) WineWindowManager.getInstance().prepareSingleAppComposition();
+    // Batch files need Wine's command interpreter. This still uses the exact
+    // same runWineExe -> process broker -> BuildWineEnv path as explorer.exe;
+    // only Wine's program argument changes, so GL/VirGL and runtime variables
+    // cannot diverge from a normal Explorer-launched Windows application.
+    const program = isCommandScript(executable) ? 'cmd.exe' : executable;
+    const launchArguments = isCommandScript(executable) ?
+      ['/c', executable].concat(argumentsValue) : argumentsValue;
     return testNapi.runWineExe(
       WINE_BIN,
       SOCK,
       WINE_BIN + ':' + WINE_LIB,
-      executable,
+      program,
       this.homeDirectory,
-      argumentsValue,
-      singleAppRoot
+      launchArguments,
+      singleAppRoot,
+      workingDirectory
     ) as NativeLaunchResult;
   }
 
@@ -308,6 +351,7 @@ export class WineEngineService {
     const processScoped = separator > 0;
     const value = separator >= 0 ? raw.substring(separator + 1) : raw;
     if (value === 'wine-ready' || value === 'wine-running') {
+      const becomingReady = this.state !== EngineState.READY;
       if (value === 'wine-ready' && this.prefixRefreshRequired) {
         // Do not claim a refreshed prefix until native wineboot completed and
         // the marker is durable. A failed write deliberately leaves the
@@ -320,6 +364,7 @@ export class WineEngineService {
         this.prefixRefreshRequired = false;
         this.pendingPrefixVersion = new Uint8Array(0);
       }
+      if (becomingReady) this.syncManagedSmokePayload('engine-ready');
       this.setState(EngineState.READY, value === 'wine-running' ? 'Windows 程序运行中' : 'Wine 引擎已就绪');
       this.finishWaiters(true);
     } else if (value === 'wineserver-starting' || value === 'wineboot-starting') {
@@ -343,6 +388,16 @@ export class WineEngineService {
         this.setState(EngineState.STOPPED, 'Wine 引擎已停止');
       }
     }
+  }
+
+  private syncManagedSmokePayload(trigger: string): boolean {
+    const ready = syncManagedSmoke('reuse');
+    if (ready) {
+      hilog.info(DOMAIN, TAG, 'managed C:\\smoke ready trigger=%{public}s', trigger);
+    } else {
+      hilog.error(DOMAIN, TAG, 'managed C:\\smoke sync failed trigger=%{public}s', trigger);
+    }
+    return ready;
   }
 
   private setState(state: EngineState, message: string): void {

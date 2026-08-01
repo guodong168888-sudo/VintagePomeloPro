@@ -4,7 +4,11 @@ import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
 import { LengthMetrics, window } from '@kit.ArkUI';
 import deviceInfo from '@ohos.deviceInfo';
-import { applyStatusOnlyImmersiveShell, getMiniTitleContentTopInset } from '../common/StatusOnlyImmersiveShell';
+import {
+  applyStatusOnlyImmersiveShell,
+  getMiniTitleContentTopInset,
+  observeStatusOnlyWindowInsets
+} from '../common/StatusOnlyImmersiveShell';
 import {
   DividerShowType,
   HdsNavigation,
@@ -54,10 +58,11 @@ struct HelpCenter {
   @State private breakpoint: BreakpointType = 'lg';
   @State private viewportWidth: number = 0;
   @State private viewportHeight: number = 0;
-  @State private titleContentTopInsetVp: number = 72;
+  @State private titleContentTopInsetVp: number = 40;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private breakpointCallback: ((value: BreakpointType) => void) | null = null;
   private helpScroller: Scroller = new Scroller();
+  private disposeWindowInsetObserver: (() => void) | null = null;
   private readonly topics: HelpTopic[] = [
     {
       id: 'getting-started', category: 'start', icon: $r('sys.symbol.info_circle'),
@@ -120,24 +125,42 @@ struct HelpCenter {
 
   aboutToDisappear(): void {
     if (this.breakpointCallback) BreakpointSystem.unsubscribe(this.breakpointCallback);
+    this.stopWindowInsetObserver();
   }
 
   onPageShow(): void {
     void this.applyPageWindowShell();
   }
 
+  onPageHide(): void {
+    this.stopWindowInsetObserver();
+  }
+
   private async applyPageWindowShell(): Promise<void> {
     try {
       const pageWindow = await window.getLastWindow(this.context);
       await applyStatusOnlyImmersiveShell(pageWindow);
-      this.refreshTitleContentInset(pageWindow);
-      setTimeout((): void => { this.refreshTitleContentInset(pageWindow); }, 160);
+      this.startWindowInsetObserver(pageWindow);
     } catch (_) {
     }
   }
 
   private refreshTitleContentInset(pageWindow: window.Window): void {
     this.titleContentTopInsetVp = getMiniTitleContentTopInset(pageWindow);
+  }
+
+  private startWindowInsetObserver(pageWindow: window.Window): void {
+    this.stopWindowInsetObserver();
+    this.disposeWindowInsetObserver = observeStatusOnlyWindowInsets(pageWindow, () => {
+      this.refreshTitleContentInset(pageWindow);
+    });
+  }
+
+  private stopWindowInsetObserver(): void {
+    if (this.disposeWindowInsetObserver) {
+      this.disposeWindowInsetObserver();
+      this.disposeWindowInsetObserver = null;
+    }
   }
 
   private isNarrowPhone(): boolean {

@@ -18,6 +18,12 @@
 #define LOG_TAG "WL_NAPI"
 #include <hilog/log.h>
 
+#ifndef __aarch64__
+namespace {
+constexpr const char* X86_BUNDLED_GUEST_GFX_DIR = "/data/storage/el1/bundle/libs/x86_64";
+}
+#endif
+
 int CreateAudioBootstrapFd(const std::string& runtimeDir) {
     if (!winehua::AudioBroker::GetInstance().EnsureStarted(runtimeDir)) {
         OH_LOG_ERROR(LOG_APP, "[AudioBroker] failed to start for runtimeDir=%{public}s", runtimeDir.c_str());
@@ -48,7 +54,17 @@ std::vector<std::string> BuildWineEnv(const std::string& sockDir,
     bool useGuestReceiverRuntime = graphicsState.active == winehua::GraphicsBackend::Virgl;
 
     if (useGuestReceiverRuntime && graphicsState.guestReceiverPresent && !graphicsState.guestReceiverRuntimeDir.empty()) {
+#ifdef __aarch64__
         guestReceiverLibDir = graphicsState.guestReceiverRuntimeDir + "/lib";
+#else
+        const std::string bundledGuestLibDir = X86_BUNDLED_GUEST_GFX_DIR;
+        if (access((bundledGuestLibDir + "/libwinehua_guest_EGL.so").c_str(), R_OK) == 0 &&
+            access((bundledGuestLibDir + "/libgallium-25.0.1.so").c_str(), R_OK) == 0) {
+            guestReceiverLibDir = bundledGuestLibDir;
+        } else {
+            guestReceiverLibDir = graphicsState.guestReceiverRuntimeDir + "/lib";
+        }
+#endif
         if (access(guestReceiverLibDir.c_str(), F_OK) == 0) {
             runtimeLibPath = guestReceiverLibDir + ":" + runtimeLibPath;
         }
@@ -166,7 +182,7 @@ void AppendD3dBackendEnv(std::vector<std::string>& env,
          * visible through WineHua's explicit Guest/Host shadow mapping.
          * Query the real Host objects instead of polling stale Guest words. */
         "VN_PERF=no_fence_feedback,no_query_feedback",
-        "WINEDLLOVERRIDES=d3d11=n;dxgi=n",
+        "WINEDLLOVERRIDES=d3d9=n;d3d10=n;d3d10_1=n;d3d10core=n;d3d11=n;dxgi=n",
         "DXVK_WINEHUA_COMMAND_QUERY_RESET=1",
         "DXVK_WINEHUA_FLUSH_DYNAMIC_MAPPED=1",
         /* Prefer the native RGBA8 SNORM render-target path. On devices such
@@ -184,6 +200,31 @@ void AppendD3dBackendEnv(std::vector<std::string>& env,
         "WINEDLLDIR1=" + overlay86,
     };
     for (const std::string& line : managed) UpsertEnvLine(env, line);
+}
+
+void AppendProductDxvkEnv(std::vector<std::string>& env,
+                          const std::string& d3dBackend,
+                          const std::string& perfProfile)
+{
+    if (d3dBackend.rfind("dxvk_", 0) != 0) return;
+
+    const std::string selectedProfile = perfProfile.empty()
+        ? "shadow-precise-dirty-ring-inline-upload-coverage-sort"
+        : perfProfile;
+    const std::vector<std::string> managed = {
+        // Retain actionable DXVK failures without filling a user's game
+        // directory with the informational startup stream.
+        "DXVK_LOG_LEVEL=warn",
+        "DXVK_LOG_PATH=C:\\windows\\temp",
+        "BOX64_DYNAREC_WEAKBARRIER=0",
+        "WINEHUA_PERF_PROFILE=" + selectedProfile,
+        "DXVK_WINEHUA_PRECISE_SHADOW=1",
+        "VN_WINEHUA_STRONG_RING_BARRIER=1",
+    };
+    for (const std::string& line : managed) UpsertEnvLine(env, line);
+    if (selectedProfile ==
+        "shadow-precise-dirty-ring-inline-upload-descriptor-serialized")
+        UpsertEnvLine(env, "VKR_WINEHUA_DESCRIPTOR_UPDATE_SERIALIZE=1");
 }
 
 static bool ShouldSerializeEntryParamEnv(const std::string& envLine) {

@@ -40,6 +40,7 @@ export default class DesktopAbility extends UIAbility {
           ?? ScreenOrientationSetting.SENSOR_LANDSCAPE;
       }
       AppStorage.setOrCreate('desktopToplevelId', this.toplevelId);
+      WineWindowManager.getInstance().registerDesktopAbility(this.context);
       hilog.info(DOMAIN, TAG, '[DWA] onCreate: tl=%{public}d orientation=%{public}s',
         this.toplevelId, this.desktopOrientation);
     } catch (e) {
@@ -182,6 +183,7 @@ export default class DesktopAbility extends UIAbility {
       InputDispatcher.getInstance().releaseAll('desktop-destroy');
       InputRouter.getInstance().releaseAllKeys();
       WineWindowManager.getInstance().markDesktopAbilityStopped(this.toplevelId);
+      WineWindowManager.getInstance().unregisterDesktopAbility();
       // 关闭 ArkTS 宿主并不等于关闭 Wine explorer。保留 desktop root 后，
       // 应用库中的“Wine 桌面”卡片可以重新拉起同一会话和渲染 surface。
       WineWindowManager.getInstance().unregisterAbility(this.toplevelId);

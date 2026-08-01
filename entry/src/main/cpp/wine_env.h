@@ -70,6 +70,14 @@ void AppendD3dBackendEnv(std::vector<std::string>& env,
                          const std::string& d3dBackend,
                          const std::string& binDir);
 
+// Add the stable production DXVK policy shared by Explorer descendants and
+// applications launched directly from an Old Pomelo app card. Diagnostics
+// may provide a specific performance profile; an empty profile selects the
+// qualified product default.
+void AppendProductDxvkEnv(std::vector<std::string>& env,
+                          const std::string& d3dBackend,
+                          const std::string& perfProfile = "");
+
 // -- Audio bootstrap --
 int CreateAudioBootstrapFd(const std::string& runtimeDir);
 

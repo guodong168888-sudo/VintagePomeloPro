@@ -1,6 +1,7 @@
 {
   "src": [
     "pages/Index",
+    "pages/HostVulkanSmoke",
     "pages/SystemSettings",
     "pages/AppSettings",
     "pages/AdvancedKeyMapping",

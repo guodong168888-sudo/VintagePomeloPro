@@ -54,6 +54,18 @@ struct WinePopup {
     hilog.info(DOMAIN, 'WinePopup', 'aboutToAppear popup=%{public}d', this.popupId);
   }
 
+  private handleMouseEvent(event: MouseEvent): void {
+    if (this.popupId <= 0) return;
+    const px = vp2px(event.x);
+    const py = vp2px(event.y);
+    const btn = mapMouseButton(event.button);
+    if (event.action !== MouseAction.Move) {
+      hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] POPUP-MOUSE popup=%{public}d action=%{public}d px=(%{public}d,%{public}d) btn=0x%{public}x',
+        this.popupId, event.action, Math.round(px), Math.round(py), btn);
+    }
+    testNapi.sendPointerEvent(this.popupId, event.action, px, py, btn);
+  }
+
   build() {
     Stack() {
       XComponent({
@@ -66,6 +78,10 @@ struct WinePopup {
         // 背景透明: ARGB popup (圆角菜单/异型 tooltip) 需要透过 per-pixel alpha
         .backgroundColor('#00000000')
         .focusable(false)
+        .onMouse((event: MouseEvent) => {
+          event.stopPropagation();
+          this.handleMouseEvent(event);
+        })
     }
     .width('100%')
     .height('100%')
@@ -74,15 +90,7 @@ struct WinePopup {
 
     // -- 鼠标事件 --
     .onMouse((event: MouseEvent) => {
-      if (this.popupId <= 0) return;
-      const px = vp2px(event.x);
-      const py = vp2px(event.y);
-      const btn = mapMouseButton(event.button);
-      if (event.action !== MouseAction.Move) {
-        hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] POPUP-MOUSE popup=%{public}d action=%{public}d px=(%{public}d,%{public}d) btn=0x%{public}x',
-          this.popupId, event.action, Math.round(px), Math.round(py), btn);
-      }
-      testNapi.sendPointerEvent(this.popupId, event.action, px, py, btn);
+      this.handleMouseEvent(event);
     })
 
     // -- 滚轮事件 (菜单滚动条等) --

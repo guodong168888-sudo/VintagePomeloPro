@@ -9,6 +9,11 @@ const HELPER_TOKENS: string[] = [
   'redist', 'dxsetup', 'dotnet', 'update', 'updater'
 ];
 
+// A game folder may use a command script or a DOS program as its public
+// launcher. Keep this list in one place so automatic discovery and the
+// in-app chooser always present exactly the same set of launch targets.
+const WINDOWS_LAUNCH_EXTENSIONS: string[] = ['.exe', '.com', '.bat', '.cmd'];
+
 export function catalogFileName(path: string): string {
   const normalized = path.replace(/\\/g, '/');
   const index = normalized.lastIndexOf('/');
@@ -20,17 +25,26 @@ export function catalogNameWithoutExtension(name: string): string {
   return index > 0 ? name.substring(0, index) : name;
 }
 
+export function isWindowsLaunchTarget(path: string): boolean {
+  const lower = catalogFileName(path).toLowerCase();
+  return WINDOWS_LAUNCH_EXTENSIONS.some((extension: string) => lower.endsWith(extension));
+}
+
 function comparableName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 export function chooseExecutablePath(directory: string, candidates: string[]): string {
-  if (candidates.length === 0) return '';
+  const orderedCandidates = candidates
+    .filter((path: string) => isWindowsLaunchTarget(path))
+    .slice()
+    .sort((left: string, right: string) => left.toLowerCase().localeCompare(right.toLowerCase()));
+  if (orderedCandidates.length === 0) return '';
   const directoryName = comparableName(catalogFileName(directory));
-  const sameName = candidates.find((path: string) =>
+  const sameName = orderedCandidates.find((path: string) =>
     comparableName(catalogNameWithoutExtension(catalogFileName(path))) === directoryName);
   if (sameName) return sameName;
-  const preferred = candidates.filter((path: string) => {
+  const preferred = orderedCandidates.filter((path: string) => {
     const lower = catalogFileName(path).toLowerCase();
     return !HELPER_TOKENS.some((token: string) => lower.includes(token));
   });

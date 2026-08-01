@@ -311,21 +311,10 @@ static void AppendStableDesktopDxvkEnv(std::vector<std::string>& env,
                                         : "shadow-precise-dirty-ring-inline-upload-coverage-sort";
     }
 
-    /* Explorer-launched programs inherit the desktop process environment and
-     * bypass Index.d3dLaunchEnvironment(). Keep the product-correct settings
-     * here without changing the explicit A/B profiles used by runWineProgram. */
-    /* Product sessions retain warnings and errors without formatting DXVK's
-     * informational startup stream. Smoke and explicit diagnostics override
-     * this through runWineProgram's per-process environment. */
-    env.push_back("DXVK_LOG_LEVEL=warn");
-    env.push_back("DXVK_LOG_PATH=C:\\windows\\temp");
-    env.push_back("BOX64_DYNAREC_WEAKBARRIER=0");
-    env.push_back("WINEHUA_PERF_PROFILE=" + selectedProfile);
-    env.push_back("DXVK_WINEHUA_PRECISE_SHADOW=1");
-    if (selectedProfile == "shadow-precise-dirty-ring-inline-upload-descriptor-serialized") {
-        env.push_back("VKR_WINEHUA_DESCRIPTOR_UPDATE_SERIALIZE=1");
-    }
-    env.push_back("VN_WINEHUA_STRONG_RING_BARRIER=1");
+    /* Explorer descendants and app-card launches must use one production
+     * policy. Keep the explicit A/B profile selected above while sharing the
+     * stable defaults with RunWineExe. */
+    AppendProductDxvkEnv(env, params.d3dBackend, selectedProfile);
     if (guestPerf) {
         env.push_back("VN_WINEHUA_PERF_SUMMARY=1");
         env.push_back("VN_WINEHUA_PERF_LOG=/storage/Users/currentUser/Download/app.hackeris.winehua/winehua_guest_ring_perf.log");

@@ -15,7 +15,11 @@ import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
 import { LengthMetrics, window } from '@kit.ArkUI';
 import deviceInfo from '@ohos.deviceInfo';
-import { applyStatusOnlyImmersiveShell, getMiniTitleContentTopInset } from '../common/StatusOnlyImmersiveShell';
+import {
+  applyStatusOnlyImmersiveShell,
+  getMiniTitleContentTopInset,
+  observeStatusOnlyWindowInsets
+} from '../common/StatusOnlyImmersiveShell';
 import {
   DividerShowType,
   HdsNavigation,
@@ -36,6 +40,73 @@ const SUPPORTS_HDS_FLOATING: boolean =
 const HDS_MATERIAL_TYPE_IMMERSIVE: number = 101;
 const HDS_MATERIAL_LEVEL_EXQUISITE: number = 0;
 
+class ExecutableChoice {
+  path: string;
+  relativePath: string;
+
+  constructor(path: string, relativePath: string) {
+    this.path = path;
+    this.relativePath = relativePath;
+  }
+}
+
+@CustomDialog
+struct WindowsExecutablePickerDialog {
+  controller?: CustomDialogController;
+  choices: ExecutableChoice[] = [];
+  selectedPath: string = '';
+  onSelect: (path: string) => void = (_path: string): void => {};
+
+  build() {
+    Column({ space: 14 }) {
+      Column({ space: 5 }) {
+        Text('选择 Windows 主程序').fontSize(20).fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary')).width('100%')
+        Text('仅显示当前游戏目录及其子目录中的 EXE、COM、BAT、CMD。')
+          .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
+      }.width('100%').alignItems(HorizontalAlign.Start)
+
+      Scroll() {
+        Column({ space: 8 }) {
+          ForEach(this.choices, (choice: ExecutableChoice) => {
+            Button() {
+              Column({ space: 3 }) {
+                Text(choice.relativePath).fontSize(14).fontWeight(FontWeight.Medium)
+                  .fontColor($r('app.color.text_primary')).width('100%').maxLines(2)
+                Text(choice.path === this.selectedPath ? '当前已关联' : '选择为此卡片的主程序')
+                  .fontSize(11)
+                  .fontColor(choice.path === this.selectedPath ? $r('app.color.accent') : $r('app.color.text_secondary'))
+                  .width('100%')
+              }.width('100%').alignItems(HorizontalAlign.Start)
+            }
+            .width('100%')
+            .padding(14)
+            .borderRadius(14)
+            .backgroundColor(choice.path === this.selectedPath ? '#1F246BFD' : $r('app.color.search_background'))
+            .onClick((): void => {
+              if (this.controller) this.controller.close();
+              this.onSelect(choice.path);
+            })
+          }, (choice: ExecutableChoice): string => choice.path)
+        }.width('100%')
+      }
+      .width('100%')
+      .constraintSize({ maxHeight: 380 })
+      .scrollBar(BarState.Auto)
+
+      Button('取消').width('100%').height(46).backgroundColor($r('app.color.search_background'))
+        .fontColor($r('app.color.text_primary')).onClick((): void => {
+          if (this.controller) this.controller.close();
+        })
+    }
+    .width('92%')
+    .constraintSize({ maxWidth: 620 })
+    .padding(20)
+    .backgroundColor($r('app.color.card_background'))
+    .borderRadius(20)
+  }
+}
+
 @Entry
 @Component
 struct AppSettingsPage {
@@ -43,10 +114,13 @@ struct AppSettingsPage {
   @State private app: AppDescriptor | null = null;
   @State private value: StoredAppSettings = createDefaultAppSettings('');
   @State private breakpoint: BreakpointType = 'lg';
-  @State private titleContentTopInsetVp: number = 72;
+  @State private titleContentTopInsetVp: number = 40;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private breakpointCallback: ((value: BreakpointType) => void) | null = null;
   private appSettingsScroller: Scroller = new Scroller();
+  private disposeWindowInsetObserver: (() => void) | null = null;
+  private executablePickerController: CustomDialogController | null = null;
+  private openExecutablePickerOnShow: boolean = false;
 
   private isCompact(): boolean {
     return this.breakpoint === 'xs' || this.breakpoint === 'sm';
@@ -125,6 +199,7 @@ struct AppSettingsPage {
     BreakpointSystem.subscribe(this.breakpointCallback);
     const params = (router.getParams() as Record<string, string> | undefined) ?? {};
     const appId = params.appId ?? '';
+    this.openExecutablePickerOnShow = params.selectExecutable === 'true';
     this.app = AppCatalogService.getInstance().getApps().find((item: AppDescriptor) => item.id === appId) ?? null;
     this.value = AppSettingsStore.getInstance().getAppSettings(appId);
     if (this.app) {
@@ -145,24 +220,48 @@ struct AppSettingsPage {
 
   aboutToDisappear(): void {
     if (this.breakpointCallback) BreakpointSystem.unsubscribe(this.breakpointCallback);
+    this.stopWindowInsetObserver();
+    if (this.executablePickerController) this.executablePickerController.close();
+    this.executablePickerController = null;
   }
 
   onPageShow(): void {
     void this.applyPageWindowShell();
+    if (this.openExecutablePickerOnShow) {
+      this.openExecutablePickerOnShow = false;
+      this.openExecutablePicker();
+    }
+  }
+
+  onPageHide(): void {
+    this.stopWindowInsetObserver();
   }
 
   private async applyPageWindowShell(): Promise<void> {
     try {
       const pageWindow = await window.getLastWindow(this.context);
       await applyStatusOnlyImmersiveShell(pageWindow);
-      this.refreshTitleContentInset(pageWindow);
-      setTimeout((): void => { this.refreshTitleContentInset(pageWindow); }, 160);
+      this.startWindowInsetObserver(pageWindow);
     } catch (_) {
     }
   }
 
   private refreshTitleContentInset(pageWindow: window.Window): void {
     this.titleContentTopInsetVp = getMiniTitleContentTopInset(pageWindow);
+  }
+
+  private startWindowInsetObserver(pageWindow: window.Window): void {
+    this.stopWindowInsetObserver();
+    this.disposeWindowInsetObserver = observeStatusOnlyWindowInsets(pageWindow, () => {
+      this.refreshTitleContentInset(pageWindow);
+    });
+  }
+
+  private stopWindowInsetObserver(): void {
+    if (this.disposeWindowInsetObserver) {
+      this.disposeWindowInsetObserver();
+      this.disposeWindowInsetObserver = null;
+    }
   }
 
   private replace(title: string, cover: string, executable: string, workingDirectory: string,
@@ -188,30 +287,51 @@ struct AppSettingsPage {
     router.back();
   }
 
-  private async selectExecutable(): Promise<void> {
+  private relativeExecutablePath(directory: string, executable: string): string {
+    const root = directory.replace(/\\/g, '/').replace(/\/+$/, '');
+    const target = executable.replace(/\\/g, '/');
+    if (root && target.startsWith(root + '/')) return target.substring(root.length + 1);
+    return target;
+  }
+
+  private selectExecutableCandidate(executable: string): void {
+    const separator = executable.lastIndexOf('/');
+    const workingDirectory = separator > 0 ? executable.substring(0, separator) : this.value.workingDirectory;
+    this.replace(this.value.customTitle, this.value.customCover, executable,
+      workingDirectory, this.value.displayModeOverride);
+    this.executablePickerController = null;
+    promptAction.showToast({ message: '已选择主程序，请点击右上角保存' });
+  }
+
+  private openExecutablePicker(): void {
     if (!this.app || this.app.source !== AppSource.DOWNLOAD) return;
+    const candidates = AppCatalogService.getInstance().getGameLaunchTargetCandidates(this.app.directory);
+    if (candidates.length === 0) {
+      AlertDialog.show({
+        title: '未找到可启动的主程序',
+        message: '已扫描当前游戏目录和所有子目录，未发现 EXE、COM、BAT 或 CMD。请确认游戏文件已完整放入此目录。',
+        primaryButton: { value: '知道了', action: (): void => {} }
+      });
+      return;
+    }
+    const choices: ExecutableChoice[] = candidates.map((path: string) =>
+      new ExecutableChoice(path, this.relativeExecutablePath(this.app?.directory ?? '', path)));
+    this.executablePickerController = new CustomDialogController({
+      builder: WindowsExecutablePickerDialog({
+        choices: choices,
+        selectedPath: this.value.executable,
+        onSelect: (path: string): void => this.selectExecutableCandidate(path)
+      }),
+      cancel: (): void => { this.executablePickerController = null; },
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      customStyle: true
+    });
     try {
-      const documentPicker = new picker.DocumentViewPicker(this.context);
-      const options = new picker.DocumentSelectOptions();
-      options.fileSuffixFilters = ['Windows 程序|.exe'];
-      options.maxSelectNumber = 1;
-      const result = await documentPicker.select(options);
-      if (!result || result.length === 0) return;
-      const executable = new fileUri.FileUri(result[0]).path;
-      const gameRoot = this.app.directory.replace(/\\/g, '/').replace(/\/$/, '');
-      const normalizedExecutable = executable.replace(/\\/g, '/');
-      // A Windows card is tied to one game folder.  Re-association must not
-      // silently turn it into a shortcut to an arbitrary Download program.
-      if (!gameRoot || (normalizedExecutable !== gameRoot && !normalizedExecutable.startsWith(gameRoot + '/'))) {
-        promptAction.showToast({ message: '只能选择当前游戏目录中的 EXE 文件' });
-        return;
-      }
-      const separator = executable.lastIndexOf('/');
-      const workingDirectory = separator > 0 ? executable.substring(0, separator) : this.value.workingDirectory;
-      this.replace(this.value.customTitle, this.value.customCover, executable,
-        workingDirectory, this.value.displayModeOverride);
+      this.executablePickerController.open();
     } catch (_) {
-      promptAction.showToast({ message: '未选择可执行文件' });
+      this.executablePickerController = null;
+      promptAction.showToast({ message: '无法打开主程序选择器' });
     }
   }
 
@@ -360,9 +480,15 @@ struct AppSettingsPage {
               Column({ space: 6 }) {
                 Text('当前游戏目录').fontSize(13).fontColor($r('app.color.text_secondary'))
                 Text(this.app.directory).fontSize(12).fontColor($r('app.color.text_primary')).maxLines(2)
-                Text('重新关联只能选择该目录及其子目录中的 EXE。').fontSize(11).fontColor($r('app.color.text_secondary'))
-                Button('选择此游戏目录中的 EXE').width('100%').height(48).backgroundColor($r('app.color.search_background'))
-                  .fontColor($r('app.color.text_primary')).id('app-settings-select-exe').onClick(() => this.selectExecutable())
+                Text('从此目录及所有子目录选择 EXE、COM、BAT 或 CMD；不会打开系统文件框。')
+                  .fontSize(11).fontColor($r('app.color.text_secondary'))
+                Text(this.value.executable ? '当前主程序：' + this.relativeExecutablePath(this.app.directory, this.value.executable) : '尚未选择主程序')
+                  .fontSize(11).fontColor($r('app.color.text_secondary')).maxLines(2)
+                if (!this.app.available && this.value.executable === this.app.launchTarget.executable) {
+                  Text('未找到当前主程序，请重新选择。').fontSize(12).fontColor('#D94848')
+                }
+                Button('选择此游戏目录中的主程序').width('100%').height(48).backgroundColor($r('app.color.search_background'))
+                  .fontColor($r('app.color.text_primary')).id('app-settings-select-exe').onClick(() => this.openExecutablePicker())
               }.width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14).alignItems(HorizontalAlign.Start)
             } else {
               Text('内建系统应用由 Wine 运行时提供，不能更换 EXE。').fontSize(12).fontColor($r('app.color.text_secondary'))

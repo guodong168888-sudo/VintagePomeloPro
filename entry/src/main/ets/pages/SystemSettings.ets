@@ -26,10 +26,14 @@ import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoor
 import { AppCatalogService } from '../service/AppCatalogService';
 import { InputProfileService } from '../service/InputProfileService';
 import { AppSettingsStore } from '../service/AppSettingsStore';
-import { display, LengthMetrics, window } from '@kit.ArkUI';
+import { LengthMetrics, window } from '@kit.ArkUI';
 import deviceInfo from '@ohos.deviceInfo';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
-import { applyStatusOnlyImmersiveShell, getMiniTitleContentTopInset } from '../common/StatusOnlyImmersiveShell';
+import {
+  applyStatusOnlyImmersiveShell,
+  getMiniTitleContentTopInset,
+  observeStatusOnlyWindowInsets
+} from '../common/StatusOnlyImmersiveShell';
 import {
   DividerShowType,
   HdsNavigation,
@@ -64,13 +68,14 @@ struct SystemSettingsPage {
   @State private engineOperationMessage: string = '';
   @State private inputProfiles: InputProfile[] = [];
   @State private statusBarHeightVp: number = 0;
-  @State private titleContentTopInsetVp: number = 72;
+  @State private titleContentTopInsetVp: number = 40;
   @State private appVersion: string = '版本信息读取中…';
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private settingsScroller: Scroller = new Scroller();
   private callback: ((value: BreakpointType) => void) | null = null;
   private engineCallback: EngineStateListener | null = null;
   private sidebarTarget: SettingsSection | null = null;
+  private disposeWindowInsetObserver: (() => void) | null = null;
 
   private isNarrowPhone(): boolean {
     return this.breakpoint === 'xs';
@@ -160,6 +165,10 @@ struct SystemSettingsPage {
     this.restoreSettingsWindowChrome();
   }
 
+  onPageHide(): void {
+    this.stopWindowInsetObserver();
+  }
+
   private loadApplicationVersion(): void {
     try {
       const info = bundleManager.getBundleInfoForSelfSync(
@@ -184,23 +193,27 @@ struct SystemSettingsPage {
         });
       } catch (_) {
       }
-      this.refreshStatusBarInset(pageWindow);
-      setTimeout((): void => { this.refreshStatusBarInset(pageWindow); }, 160);
+      this.startWindowInsetObserver(pageWindow);
     } catch (_) {
     }
   }
 
   private refreshStatusBarInset(pageWindow: window.Window): void {
-    try {
-      const systemAvoid = pageWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
-      const cutoutAvoid = pageWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_CUTOUT);
-      const heightPx = Math.max(systemAvoid.topRect.height, cutoutAvoid.topRect.height);
-      const density = Math.max(1, display.getDefaultDisplaySync().densityPixels);
-      this.statusBarHeightVp = Math.ceil(heightPx / density);
-      this.titleContentTopInsetVp = getMiniTitleContentTopInset(pageWindow);
-    } catch (_) {
-      this.statusBarHeightVp = 0;
-      this.titleContentTopInsetVp = 72;
+    this.titleContentTopInsetVp = getMiniTitleContentTopInset(pageWindow);
+    this.statusBarHeightVp = Math.max(0, this.titleContentTopInsetVp - 40);
+  }
+
+  private startWindowInsetObserver(pageWindow: window.Window): void {
+    this.stopWindowInsetObserver();
+    this.disposeWindowInsetObserver = observeStatusOnlyWindowInsets(pageWindow, () => {
+      this.refreshStatusBarInset(pageWindow);
+    });
+  }
+
+  private stopWindowInsetObserver(): void {
+    if (this.disposeWindowInsetObserver) {
+      this.disposeWindowInsetObserver();
+      this.disposeWindowInsetObserver = null;
     }
   }
 
@@ -216,6 +229,7 @@ struct SystemSettingsPage {
   aboutToDisappear(): void {
     if (this.callback) BreakpointSystem.unsubscribe(this.callback);
     if (this.engineCallback) WineEngineService.getInstance().unsubscribe(this.engineCallback);
+    this.stopWindowInsetObserver();
   }
 
   onBackPress(): boolean {

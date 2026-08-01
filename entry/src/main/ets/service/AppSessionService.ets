@@ -173,7 +173,8 @@ export class AppSessionService {
     }
 
     const result = WineEngineService.getInstance().launchExecutable(
-      app.launchTarget.executable, app.launchTarget.arguments) as NativeLaunchResult;
+      app.launchTarget.executable, app.launchTarget.arguments,
+      app.launchTarget.workingDirectory) as NativeLaunchResult;
     if (!result || result.pid <= 0) return null;
     const session: RuntimeSession = {
       sessionId: result.sessionId || 'wine-' + result.pid,

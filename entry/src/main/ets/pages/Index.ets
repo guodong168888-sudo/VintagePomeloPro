@@ -28,7 +28,11 @@ import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverl
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
 import { LengthMetrics, window } from '@kit.ArkUI';
 import deviceInfo from '@ohos.deviceInfo';
-import { applyStatusOnlyImmersiveShell, getMiniTitleContentTopInset } from '../common/StatusOnlyImmersiveShell';
+import {
+  applyStatusOnlyImmersiveShell,
+  getMiniTitleContentTopInset,
+  observeStatusOnlyWindowInsets
+} from '../common/StatusOnlyImmersiveShell';
 import {
   DividerMode,
   DividerShowType,
@@ -77,7 +81,7 @@ struct Index {
   @State private phoneNavIndex: number = PHONE_NAV_BUILTIN;
   @State private viewportWidth: number = 0;
   @State private viewportHeight: number = 0;
-  @State private titleContentTopInsetVp: number = 72;
+  @State private titleContentTopInsetVp: number = 40;
   @State private statusBarHeightVp: number = 0;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private phoneNavController: HdsTabsController = new HdsTabsController();
@@ -89,6 +93,7 @@ struct Index {
   private engineCallback: ((state: EngineState, message: string) => void) | null = null;
   private settingsCallback: ThemeSettingsListener | null = null;
   private refreshTimer: number = -1;
+  private disposeWindowInsetObserver: (() => void) | null = null;
 
   private isPhone(): boolean {
     return DeviceCapabilityPolicy.isPhoneDevice() || this.breakpoint === 'xs' || this.breakpoint === 'sm';
@@ -162,6 +167,7 @@ struct Index {
     if (this.engineCallback) WineEngineService.getInstance().unsubscribe(this.engineCallback);
     if (this.settingsCallback) ThemeSettingsService.getInstance().unsubscribe(this.settingsCallback);
     if (this.refreshTimer >= 0) clearInterval(this.refreshTimer);
+    this.stopWindowInsetObserver();
   }
 
   onPageShow(): void {
@@ -170,19 +176,36 @@ struct Index {
     void this.applyPageWindowShell();
   }
 
+  onPageHide(): void {
+    this.stopWindowInsetObserver();
+  }
+
   private async applyPageWindowShell(): Promise<void> {
     try {
       const pageWindow = await window.getLastWindow(this.context);
       await applyStatusOnlyImmersiveShell(pageWindow);
-      this.refreshPageInsets(pageWindow);
-      setTimeout((): void => { this.refreshPageInsets(pageWindow); }, 160);
+      this.startWindowInsetObserver(pageWindow);
     } catch (_) {
     }
   }
 
   private refreshPageInsets(pageWindow: window.Window): void {
     this.titleContentTopInsetVp = getMiniTitleContentTopInset(pageWindow);
-    this.statusBarHeightVp = Math.max(0, this.titleContentTopInsetVp - 72);
+    this.statusBarHeightVp = Math.max(0, this.titleContentTopInsetVp - 40);
+  }
+
+  private startWindowInsetObserver(pageWindow: window.Window): void {
+    this.stopWindowInsetObserver();
+    this.disposeWindowInsetObserver = observeStatusOnlyWindowInsets(pageWindow, () => {
+      this.refreshPageInsets(pageWindow);
+    });
+  }
+
+  private stopWindowInsetObserver(): void {
+    if (this.disposeWindowInsetObserver) {
+      this.disposeWindowInsetObserver();
+      this.disposeWindowInsetObserver = null;
+    }
   }
 
   private onOverlayEditorRequest(): void {
@@ -404,7 +427,8 @@ struct Index {
 
   private async launch(app: AppDescriptor): Promise<void> {
     if (!app.available) {
-      promptAction.showToast({ message: '程序不可用，请重新关联可执行文件' });
+      promptAction.showToast({ message: '未找到主程序，请在游戏目录中重新选择' });
+      this.openAppSettings(app, true);
       return;
     }
     const conflict = AppSessionService.getInstance().getLaunchConflict(app, this.settings);
@@ -459,8 +483,11 @@ struct Index {
     return this.engineState === EngineState.PREPARING || this.engineState === EngineState.SWITCHING;
   }
 
-  private openAppSettings(app: AppDescriptor): void {
-    router.pushUrl({ url: 'pages/AppSettings', params: { appId: app.id } });
+  private openAppSettings(app: AppDescriptor, selectExecutable: boolean = false): void {
+    router.pushUrl({
+      url: 'pages/AppSettings',
+      params: { appId: app.id, selectExecutable: selectExecutable ? 'true' : 'false' }
+    });
   }
 
   private showAppLongPressMenu(app: AppDescriptor): void {
@@ -479,7 +506,7 @@ struct Index {
           const session = AppSessionService.getInstance().findByAppId(app.id);
           if (session) AppSessionService.getInstance().stop(session);
           this.refreshRunningState();
-        } else if (app.available) this.launch(app); else this.openAppSettings(app);
+        } else if (app.available) this.launch(app); else this.openAppSettings(app, true);
       } else if (result.index === 1) {
         this.openAppSettings(app);
       }

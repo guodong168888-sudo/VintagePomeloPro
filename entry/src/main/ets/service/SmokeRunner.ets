@@ -230,9 +230,14 @@ export function syncManagedSmoke(prefixMode: string): boolean {
     'assets/venus_image_fetch.spv', 'assets/venus_combined_sample.spv',
     'assets/venus_separated_sample.spv',
   ];
-  /* DXVK is a WineHua runtime overlay, not part of C:\\smoke.  Remove the
-   * four files from older payloads, but only inside this managed directory. */
-  for (const file of ['x64/d3d11.dll', 'x64/dxgi.dll', 'x86/d3d11.dll', 'x86/dxgi.dll']) {
+  /* DXVK is a WineHua runtime overlay, not part of C:\\smoke. Remove files
+   * leaked there by older payloads, but only inside this managed directory. */
+  const dxvkDlls = ['d3d9.dll', 'd3d10core.dll', 'd3d10.dll', 'd3d10_1.dll', 'd3d11.dll', 'dxgi.dll'];
+  const staleManagedDxvk: string[] = [];
+  for (const arch of ['x64', 'x86']) {
+    for (const dll of dxvkDlls) staleManagedDxvk.push(`${arch}/${dll}`);
+  }
+  for (const file of staleManagedDxvk) {
     try {
       const stale = `${target}/${file}`;
       if (pathExists(stale)) fs.unlinkSync(stale);
@@ -278,10 +283,12 @@ function validateManagedDxvk(): boolean {
   const source = `${WINE_ROOT}/dxvk/legacy`;
   const manifest = WINE_ROOT + "/dxvk/manifest.json";
   if (!pathExists(manifest)) return false;
-  const required = [
-    `${source}/x64/d3d11.dll`, `${source}/x64/dxgi.dll`,
-    `${source}/x86/d3d11.dll`, `${source}/x86/dxgi.dll`
-  ];
+  const required: string[] = [];
+  for (const arch of ['x64', 'x86']) {
+    for (const dll of ['d3d9.dll', 'd3d10core.dll', 'd3d10.dll', 'd3d10_1.dll', 'd3d11.dll', 'dxgi.dll']) {
+      required.push(`${source}/${arch}/${dll}`);
+    }
+  }
   try {
     for (const file of required) if (!pathExists(file)) return false;
     return true;
@@ -1241,7 +1248,8 @@ export class SmokeRunner {
         smokeEnvironment['BOX64_DYNAREC_WEAKBARRIER'] = '0';
         smokeEnvironment['WINEHUA_DXVK_VERSION'] = '1.10.3';
         smokeEnvironment['WINEHUA_DXVK_RELAXED_FEATURES'] = '1';
-        smokeEnvironment['WINEDLLOVERRIDES'] = 'd3d11=n;dxgi=n';
+        smokeEnvironment['WINEDLLOVERRIDES'] =
+          'd3d9=n;d3d10=n;d3d10_1=n;d3d10core=n;d3d11=n;dxgi=n';
         smokeEnvironment['DXVK_LOG_LEVEL'] = 'info';
         smokeEnvironment['DXVK_LOG_PATH'] = `C:\\smoke\\results\\${this.request.runId}`;
         smokeEnvironment['DXVK_WINEHUA_TRACE_SAMPLED'] = '1';

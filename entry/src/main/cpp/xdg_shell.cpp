@@ -2,6 +2,7 @@
 #include "include/xdg-shell-server-protocol.h"
 #include "wayland_server.h"
 #include "xdg_shell.h"
+#include "wine_process.h"
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -315,6 +316,7 @@ static void xs_destroy(wl_client*, wl_resource* r) {
     if (d && d->wlSurface) {
         auto* sd = static_cast<SurfaceData*>(wl_resource_get_user_data(d->wlSurface));
         if (sd && sd->hasToplevel) {
+            RemoveToplevelAssociation(sd->toplevelId);
             OH_LOG_INFO(LOG_APP, "[MW-Life] xs_destroy → OnToplevelDestroyed tl=%{public}u", sd->toplevelId);
             WaylandServer::GetInstance()->OnToplevelDestroyed(sd->toplevelId);
             WaylandServer::GetInstance()->FireToplevelEvent(sd->toplevelId, "destroyed");
@@ -344,6 +346,8 @@ static void xs_get_toplevel(wl_client* client, wl_resource* xsRes, uint32_t id) 
             sd->toplevelId = WaylandServer::GetInstance()->NextToplevelId();
             d->toplevelId = sd->toplevelId;
             td->toplevelId = sd->toplevelId;
+            AssociateToplevelWithSession(FindSessionIdForClientPid(sd->clientPid),
+                                         sd->clientPid, sd->toplevelId);
             WaylandServer::GetInstance()->RegisterToplevelResource(sd->toplevelId, tl);
             // PC 模式: created 延迟到首帧 commit (此时才知 wl_shm 格式,
             // ARGB 异型窗口需走子窗口路线而非 ability, 见 surface_commit)
@@ -398,6 +402,7 @@ static void xs_resource_destroy(wl_resource* r) {
     if (d && d->wlSurface) {
         auto* sd = static_cast<SurfaceData*>(wl_resource_get_user_data(d->wlSurface));
         if (sd && sd->hasToplevel) {
+            RemoveToplevelAssociation(sd->toplevelId);
             OH_LOG_INFO(LOG_APP, "[MW-Life] xs_resource_destroy → OnToplevelDestroyed tl=%{public}u (client disconnect)", sd->toplevelId);
             WaylandServer::GetInstance()->OnToplevelDestroyed(sd->toplevelId);
             WaylandServer::GetInstance()->FireToplevelEvent(sd->toplevelId, "destroyed");

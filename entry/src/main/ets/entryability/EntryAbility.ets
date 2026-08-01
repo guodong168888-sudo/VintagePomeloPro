@@ -18,8 +18,8 @@ export default class EntryAbility extends UIAbility {
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
-    const useForkNcp = DeviceCapabilityPolicy.usesForkNativeChildProcess();
-    testNapi.setForkNcpEnabled(useForkNcp);
+    const useForkNcp = DeviceCapabilityPolicy.isPhoneDevice();
+    testNapi.setPhoneMode(useForkNcp);
     hilog.info(DOMAIN, 'EntryAbility', 'NCP backend=%{public}s deviceType=%{public}s',
       useForkNcp ? 'fork' : 'system', DeviceCapabilityPolicy.deviceType());
     this.ensureDownloadGamesDirectory('onCreate');

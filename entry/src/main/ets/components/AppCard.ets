@@ -78,6 +78,7 @@ export struct AppCard {
     if (this.app.id === 'builtin-regedit') return $r('app.media.builtin_regedit');
     if (this.app.id === 'builtin-cmd') return $r('app.media.builtin_cmd');
     if (this.app.id === 'builtin-graphics-smoke') return $r('app.media.builtin_graphics');
+    if (this.app.id === 'builtin-dxvk-cube') return $r('app.media.builtin_graphics');
     if (this.app.id === 'builtin-audio-smoke') return $r('app.media.builtin_audio');
     return $r('app.media.builtin_desktop');
   }
@@ -86,6 +87,7 @@ export struct AppCard {
     // Explorer supplies both the desktop shell and the file manager.  Label the
     // shell role explicitly while keeping explorer.exe as the actual launch target.
     if (this.app.id === 'builtin-desktop') return 'desktop (explorer)';
+    if (this.app.id === 'builtin-dxvk-cube') return 'DXVK Legacy · D3D11';
     return this.app.launchTarget.executable;
   }
 

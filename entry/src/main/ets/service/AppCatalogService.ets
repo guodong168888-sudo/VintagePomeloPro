@@ -16,7 +16,8 @@ import {
   catalogFileName,
   catalogNameWithoutExtension,
   chooseCoverFileName,
-  chooseExecutablePath
+  chooseExecutablePath,
+  isWindowsLaunchTarget
 } from '../model/AppCatalogRules';
 
 interface BuiltinLaunchParams {
@@ -194,6 +195,22 @@ export class AppCatalogService {
     return this.ensureGamesDirectory().error;
   }
 
+  /**
+   * Returns every supported Windows launch target below one card's game
+   * directory. The result is deliberately constrained to the app-owned games
+   * library: re-association must not become a shortcut to an arbitrary file in
+   * the system picker.
+   */
+  getGameLaunchTargetCandidates(directory: string): string[] {
+    const status = this.ensureGamesDirectory();
+    if (!status.ready || !this.isPathInsideDirectory(directory, status.games)) return [];
+    const normalizedDirectory = directory.replace(/\\/g, '/').replace(/\/+$/, '');
+    const normalizedGames = status.games.replace(/\\/g, '/').replace(/\/+$/, '');
+    // Standalone files placed directly in games/ form their own root-level
+    // cards. Do not let one such card browse into every sibling game's folder.
+    return this.collectLaunchTargets(directory, normalizedDirectory !== normalizedGames);
+  }
+
   ensureGamesDirectory(): GamesDirectoryStatus {
     const libraryRoot = this.getLibraryRoot();
     const gamesPath = joinPath(libraryRoot, GAMES_DIRECTORY);
@@ -360,6 +377,9 @@ export class AppCatalogService {
         { id: 'builtin-regedit', title: '注册表编辑器', launchKind: 'wine-system', launchParams: { executable: 'regedit.exe' }, cover: '' },
         { id: 'builtin-cmd', title: '命令提示符', launchKind: 'wine-system', launchParams: { executable: 'wineconsole.exe', arguments: ['cmd.exe'] }, cover: '' },
         { id: 'builtin-graphics-smoke', title: '图形测试', launchKind: 'wine-system', launchParams: { executable: 'winehua_graphics_smoke.exe' }, cover: '' },
+        { id: 'builtin-dxvk-cube', title: 'DXVK 立方体测试', launchKind: 'wine-system', launchParams: {
+          executable: 'C:\\smoke\\x64\\winehua_d3d_switch_cube.exe', arguments: ['--d3d11'],
+          workingDirectory: 'C:\\smoke\\x64' }, cover: '' },
         { id: 'builtin-audio-smoke', title: '音频测试', launchKind: 'wine-system', launchParams: { executable: 'winehua_audio_smoke.exe' }, cover: '' }
       ]
     };
@@ -388,7 +408,7 @@ export class AppCatalogService {
       if (isDirectory(path)) {
         const app = this.createDirectoryApp(path);
         if (app) result.push(app);
-      } else if (name.toLowerCase().endsWith('.exe')) {
+      } else if (isWindowsLaunchTarget(name)) {
         result.push(this.createExternalApp(path, gamesPath, withoutExtension(name), ''));
       }
     });
@@ -396,7 +416,7 @@ export class AppCatalogService {
   }
 
   private createDirectoryApp(directory: string): AppDescriptor | null {
-    const candidates = this.collectExecutables(directory, 0);
+    const candidates = this.collectLaunchTargets(directory);
     const automaticExecutable = this.chooseExecutable(directory, candidates);
     const cached = AppSettingsStore.getInstance().getCatalogCache()
       .find((item: AppDescriptor) => item.directory === directory);
@@ -432,25 +452,33 @@ export class AppCatalogService {
     };
   }
 
-  private collectExecutables(directory: string, depth: number): string[] {
+  private isPathInsideDirectory(path: string, directory: string): boolean {
+    const normalizedPath = path.replace(/\\/g, '/').replace(/\/+$/, '');
+    const normalizedDirectory = directory.replace(/\\/g, '/').replace(/\/+$/, '');
+    return normalizedPath === normalizedDirectory || normalizedPath.startsWith(normalizedDirectory + '/');
+  }
+
+  private collectLaunchTargets(directory: string, recursive: boolean = true): string[] {
     const result: string[] = [];
-    if (depth > 5) return result;
-    let names: string[] = [];
+    let entries: string[] = [];
     try {
-      names = fs.listFileSync(directory);
+      // listFileSync returns paths relative to the supplied directory. Using
+      // its recursive mode avoids the former five-level traversal ceiling, so
+      // launchers nested under game data directories are discoverable too.
+      entries = recursive ? fs.listFileSync(directory, { recursion: true }) : fs.listFileSync(directory);
     } catch (_) {
       return result;
     }
-    names.forEach((name: string) => {
-      const path = joinPath(directory, name);
-      if (isDirectory(path)) {
-        const nested = this.collectExecutables(path, depth + 1);
-        nested.forEach((item: string) => result.push(item));
-      } else if (name.toLowerCase().endsWith('.exe')) {
-        result.push(path);
-      }
+    entries.forEach((relativePath: string) => {
+      const relative = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
+      // listFileSync is specified to return relative paths. Rejecting parent
+      // components defensively keeps this picker rooted in its game card even
+      // if a provider ever returns an unexpected entry.
+      if (!relative || relative.split('/').some((part: string) => part === '..')) return;
+      const path = joinPath(directory, relative);
+      if (isWindowsLaunchTarget(path) && !isDirectory(path) && exists(path)) result.push(path);
     });
-    return result;
+    return result.sort((left: string, right: string) => left.toLowerCase().localeCompare(right.toLowerCase()));
   }
 
   private chooseExecutable(directory: string, candidates: string[]): string {
