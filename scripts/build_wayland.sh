@@ -75,8 +75,18 @@ cp "$WL_SRC/egl/wayland-egl.h" "$SYSROOT_EXT_INC/" 2>/dev/null || true
 cp "$WL_SRC/egl/wayland-egl-core.h" "$SYSROOT_EXT_INC/" 2>/dev/null || true
 
 # 2. wayland-protocols
+# wayland-protocols declares wayland-scanner as a native (build-machine)
+# dependency; meson resolves native deps through the native file's
+# pkg_config_path, not the cross file or the ambient environment.
+NATIVE_FILE="$BUILD_DIR/host-tools-native.txt"
+cat > "$NATIVE_FILE" << EOF
+[binaries]
+pkg-config = '$PKG_CONFIG_BIN'
+[built-in options]
+pkg_config_path = ['$BUILD_DIR/host-tools/lib/pkgconfig']
+EOF
 meson_build "$WL_BUILD/protocols" "$WP_SRC" \
-    -Dtests=false
+    -Dtests=false --native-file "$NATIVE_FILE"
 ninja -C "$WL_BUILD/protocols"
 
 # 安装协议 XML 到 sysroot-ext
