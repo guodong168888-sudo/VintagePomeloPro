@@ -6,9 +6,8 @@ source "$SCRIPT_DIR/env.sh"
 
 log "=== 构建 xkbcommon 依赖 (x86_64) ==="
 
-if [ "$HOST_OS" = "Darwin" ]; then
-    export PKG_CONFIG_PATH_FOR_BUILD="$BUILD_DIR/host-tools/lib/pkgconfig${PKG_CONFIG_PATH_FOR_BUILD:+:$PKG_CONFIG_PATH_FOR_BUILD}"
-fi
+export PKG_CONFIG_PATH="$BUILD_DIR/host-tools/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+export PKG_CONFIG_PATH_FOR_BUILD="$BUILD_DIR/host-tools/lib/pkgconfig${PKG_CONFIG_PATH_FOR_BUILD:+:$PKG_CONFIG_PATH_FOR_BUILD}"
 
 if [ -f "$SYSROOT_EXT_LIB/libxkbcommon.so.0" ] \
    && [ -f "$SYSROOT_EXT_LIB/libxkbcommon.so" ] \
