@@ -3,7 +3,11 @@ import { DeviceCapabilityPolicy } from './DeviceCapabilityPolicy';
 
 // HDS MINI's actual visual title height.  Do not add an arbitrary gap here:
 // the page-specific cards already own their own outer spacing.
-export const HDS_MINI_TITLE_HEIGHT_VP: number = 40;
+// Measured on-device: the phone HDS MINI title bar renders ~56vp (its
+// content area is 40vp but the bar includes touch/menu padding), while the
+// tablet/2-in-1 shell renders the 40vp bar.
+export const HDS_MINI_TITLE_HEIGHT_VP: number =
+  DeviceCapabilityPolicy.isPhoneDevice() ? 56 : 40;
 const STATUS_ONLY_SYSTEM_BARS: Array<'status' | 'navigation'> = ['status'];
 
 export interface StatusOnlyWindowInsets {
