@@ -12,6 +12,7 @@ assemble_pad() {
 
     local wine_data="$STAGING_DIR/wine-data"
     local guest_arch="${GUEST_ARCH:-x86_64}"
+    local smoke_suite_version="phase2-vulkan-dxvk-legacy-v6-d3d8-d3d9"
     rm -rf "$STAGING_DIR"
     rm -rf "$wine_data"
     mkdir -p "$wine_data/bin/x86_64-windows"
@@ -228,11 +229,42 @@ assemble_pad() {
     for exe in "$BUILD_DIR/wine-ohos/programs/"*/x86_64-windows/*.exe; do
         cp "$exe" "$wine_data/bin/"
     done
-    # graphics smoke test (OHOS 交叉编译产物, 不在 build-native/)
-    if [ -f "$BUILD_DIR/wine-ohos/programs/winehua_graphics_smoke/x86_64-windows/winehua_graphics_smoke.exe" ]; then
-        cp "$BUILD_DIR/wine-ohos/programs/winehua_graphics_smoke/x86_64-windows/winehua_graphics_smoke.exe" "$wine_data/bin/x86_64-windows/"
-        log "  winehua_graphics_smoke.exe → x86_64-windows/"
-    fi
+    # Built-in smoke tests are launched by name.  Keep their PE stubs in the
+    # architecture directory as well as bin/ so WINEDLLDIR0 can resolve them.
+    for smoke in winehua_graphics_smoke winehua_audio_smoke; do
+        smoke_exe="$BUILD_DIR/wine-ohos/programs/$smoke/x86_64-windows/$smoke.exe"
+        if [ -f "$smoke_exe" ]; then
+            cp "$smoke_exe" "$wine_data/bin/x86_64-windows/"
+            log "  $smoke.exe → x86_64-windows/"
+        fi
+    done
+    # The built-in audio smoke must be self-contained and use a format accepted
+    # by wineohos.drv.  Wine's idw_testsound.wav is IMA ADPCM, while the native
+    # bridge accepts PCM/float input, so generate a deterministic PCM16 stereo
+    # fixture instead of depending on user media or an external codec tool.
+    python3 - "$wine_data/bin/Alarm01.wav" <<'PY'
+import math
+import struct
+import sys
+import wave
+
+output = sys.argv[1]
+rate = 48000
+seconds = 2
+amplitude = 7200
+with wave.open(output, 'wb') as wav:
+    wav.setnchannels(2)
+    wav.setsampwidth(2)
+    wav.setframerate(rate)
+    frames = bytearray()
+    for index in range(rate * seconds):
+        value = int(amplitude * (math.sin(2.0 * math.pi * 523.25 * index / rate) +
+                                 0.45 * math.sin(2.0 * math.pi * 659.25 * index / rate)))
+        sample = max(-32768, min(32767, value))
+        frames.extend(struct.pack('<hh', sample, sample))
+    wav.writeframes(frames)
+PY
+    log "  generated PCM16 stereo → bin/Alarm01.wav (audio smoke fixture)"
 
     # Versioned, App-managed C:\smoke payload.  Keep it separate from Wine's
     # DLL search directories so a prefix refresh can update tests without
@@ -267,15 +299,16 @@ assemble_pad() {
         cp "$guest_shader_root/$smoke_shader.spv" "$smoke_dir/assets/$smoke_shader.spv"
     done
     local dxvk_root="$DXVK_BUILD_ROOT"
-    [ -f "$dxvk_root/x64/bin/d3d11.dll" ] || err "DXVK Legacy x64 d3d11.dll missing: $dxvk_root/x64/bin/d3d11.dll"
-    [ -f "$dxvk_root/x64/bin/dxgi.dll" ] || err "DXVK Legacy x64 dxgi.dll missing: $dxvk_root/x64/bin/dxgi.dll"
-    [ -f "$dxvk_root/x86/bin/d3d11.dll" ] || err "DXVK Legacy x86 d3d11.dll missing: $dxvk_root/x86/bin/d3d11.dll"
-    [ -f "$dxvk_root/x86/bin/dxgi.dll" ] || err "DXVK Legacy x86 dxgi.dll missing: $dxvk_root/x86/bin/dxgi.dll"
     mkdir -p "$wine_data/dxvk/legacy/x64" "$wine_data/dxvk/legacy/x86"
-    cp "$dxvk_root/x64/bin/d3d11.dll" "$wine_data/dxvk/legacy/x64/d3d11.dll"
-    cp "$dxvk_root/x64/bin/dxgi.dll" "$wine_data/dxvk/legacy/x64/dxgi.dll"
-    cp "$dxvk_root/x86/bin/d3d11.dll" "$wine_data/dxvk/legacy/x86/d3d11.dll"
-    cp "$dxvk_root/x86/bin/dxgi.dll" "$wine_data/dxvk/legacy/x86/dxgi.dll"
+    local dxvk_arch dxvk_dll
+    for dxvk_arch in x64 x86; do
+        for dxvk_dll in d3d9.dll d3d10core.dll d3d10.dll d3d10_1.dll d3d11.dll dxgi.dll; do
+            [ -f "$dxvk_root/$dxvk_arch/bin/$dxvk_dll" ] || \
+                err "DXVK Legacy $dxvk_arch $dxvk_dll missing: $dxvk_root/$dxvk_arch/bin/$dxvk_dll"
+            cp "$dxvk_root/$dxvk_arch/bin/$dxvk_dll" \
+                "$wine_data/dxvk/legacy/$dxvk_arch/$dxvk_dll"
+        done
+    done
     # The DXVK binaries are runtime-owned overlays.  Do not place them next
     # to the smoke executables: that would make the test layout look like a
     # game distribution and would force real games to carry WineHua-specific
@@ -317,9 +350,20 @@ assemble_pad() {
     separated_sample_sha="$(sha256sum "$smoke_dir/assets/venus_separated_sample.spv" | awk '{print $1}')"
     local dxvk_commit
     dxvk_commit="$(git -c safe.directory="$DXVK_SRC" -C "$DXVK_SRC" rev-parse HEAD 2>/dev/null || echo unknown)"
-    local dxvk64_d3d11_sha dxvk64_dxgi_sha dxvk32_d3d11_sha dxvk32_dxgi_sha
+    local dxvk64_d3d9_sha dxvk64_d3d10core_sha dxvk64_d3d10_sha dxvk64_d3d10_1_sha
+    local dxvk64_d3d11_sha dxvk64_dxgi_sha
+    local dxvk32_d3d9_sha dxvk32_d3d10core_sha dxvk32_d3d10_sha dxvk32_d3d10_1_sha
+    local dxvk32_d3d11_sha dxvk32_dxgi_sha
+    dxvk64_d3d9_sha="$(sha256sum "$wine_data/dxvk/legacy/x64/d3d9.dll" | awk '{print $1}')"
+    dxvk64_d3d10core_sha="$(sha256sum "$wine_data/dxvk/legacy/x64/d3d10core.dll" | awk '{print $1}')"
+    dxvk64_d3d10_sha="$(sha256sum "$wine_data/dxvk/legacy/x64/d3d10.dll" | awk '{print $1}')"
+    dxvk64_d3d10_1_sha="$(sha256sum "$wine_data/dxvk/legacy/x64/d3d10_1.dll" | awk '{print $1}')"
     dxvk64_d3d11_sha="$(sha256sum "$wine_data/dxvk/legacy/x64/d3d11.dll" | awk '{print $1}')"
     dxvk64_dxgi_sha="$(sha256sum "$wine_data/dxvk/legacy/x64/dxgi.dll" | awk '{print $1}')"
+    dxvk32_d3d9_sha="$(sha256sum "$wine_data/dxvk/legacy/x86/d3d9.dll" | awk '{print $1}')"
+    dxvk32_d3d10core_sha="$(sha256sum "$wine_data/dxvk/legacy/x86/d3d10core.dll" | awk '{print $1}')"
+    dxvk32_d3d10_sha="$(sha256sum "$wine_data/dxvk/legacy/x86/d3d10.dll" | awk '{print $1}')"
+    dxvk32_d3d10_1_sha="$(sha256sum "$wine_data/dxvk/legacy/x86/d3d10_1.dll" | awk '{print $1}')"
     dxvk32_d3d11_sha="$(sha256sum "$wine_data/dxvk/legacy/x86/d3d11.dll" | awk '{print $1}')"
     dxvk32_dxgi_sha="$(sha256sum "$wine_data/dxvk/legacy/x86/dxgi.dll" | awk '{print $1}')"
     cat > "$wine_data/dxvk/manifest.json" <<EOF
@@ -336,15 +380,15 @@ assemble_pad() {
     "descriptorIndexing": false
   },
   "runtimes": {
-    "x64": {"d3d11.dll": "$dxvk64_d3d11_sha", "dxgi.dll": "$dxvk64_dxgi_sha"},
-    "x86": {"d3d11.dll": "$dxvk32_d3d11_sha", "dxgi.dll": "$dxvk32_dxgi_sha"}
+    "x64": {"d3d9.dll": "$dxvk64_d3d9_sha", "d3d10core.dll": "$dxvk64_d3d10core_sha", "d3d10.dll": "$dxvk64_d3d10_sha", "d3d10_1.dll": "$dxvk64_d3d10_1_sha", "d3d11.dll": "$dxvk64_d3d11_sha", "dxgi.dll": "$dxvk64_dxgi_sha"},
+    "x86": {"d3d9.dll": "$dxvk32_d3d9_sha", "d3d10core.dll": "$dxvk32_d3d10core_sha", "d3d10.dll": "$dxvk32_d3d10_sha", "d3d10_1.dll": "$dxvk32_d3d10_1_sha", "d3d11.dll": "$dxvk32_d3d11_sha", "dxgi.dll": "$dxvk32_dxgi_sha"}
   }
 }
 EOF
     cat > "$smoke_dir/manifest.json" <<EOF
 {
   "schemaVersion": 1,
-  "suiteVersion": "phase2-vulkan-dxvk-legacy-v6-d3d8-d3d9",
+  "suiteVersion": "$smoke_suite_version",
   "enabledSuites": ["core", "audio", "opengl", "wine-vulkan", "d3d8", "d3d9", "dxvk"],
   "managedRoot": "C:\\\\smoke",
   "files": {
@@ -453,6 +497,36 @@ HKLM,%FontSubStr%,"Lucida Console",,"Noto Sans Mono"' "$wine_data/share/wine/win
         mkdir -p "$wine_data/bin/guest_gfx"
         cp -a "$BUILD_DIR/guest_gfx/$guest_arch/"* "$wine_data/bin/guest_gfx/"
         log "  guest_gfx ($guest_arch): $(ls "$wine_data/bin/guest_gfx/lib"/*.so* 2>/dev/null | wc -l) .so files"
+
+        # On an x86_64 HarmonyOS device the platform linker rejects dlopen()
+        # from the writable app sandbox, even when the extracted files are
+        # executable. Put the Mesa receiver in the HAP native-lib namespace as
+        # well. The ARM package keeps the x86_64 receiver only in wine-data,
+        # because Box64 rather than the platform linker loads those files.
+        if [ "$NATIVE_ARCH" = "x86_64" ]; then
+            local guest_lib="$BUILD_DIR/guest_gfx/$guest_arch/lib"
+            local guest_name
+            # Never expose guest EGL/GLES/DRM under their standard names in
+            # the HAP. Those names can override the system libraries used by
+            # libentry/libvirglrenderer and crash the emulator host renderer.
+            rm -f "$NATIVE_LIBS"/libEGL.so "$NATIVE_LIBS"/libEGL.so.1 \
+                  "$NATIVE_LIBS"/libGLESv1_CM.so "$NATIVE_LIBS"/libGLESv1_CM.so.1 \
+                  "$NATIVE_LIBS"/libGLESv2.so "$NATIVE_LIBS"/libGLESv2.so.2 \
+                  "$NATIVE_LIBS"/libdrm.so "$NATIVE_LIBS"/libdrm.so.2 \
+                  "$NATIVE_LIBS"/libwinehua_guest_EGL.so
+            [ -f "$guest_lib/libEGL.so" ] || err "missing x86 bundled guest gfx library: libEGL.so"
+            [ -f "$guest_lib/libgallium-25.0.1.so" ] || err "missing x86 bundled guest gfx library: libgallium-25.0.1.so"
+            cp -a "$guest_lib/libEGL.so" "$NATIVE_LIBS/libwinehua_guest_EGL.so"
+            cp -a "$guest_lib/libgallium-25.0.1.so" "$NATIVE_LIBS/libgallium-25.0.1.so"
+            # Mesa selects swrast as its DRI frontend and GALLIUM_DRIVER=virpipe
+            # as the actual renderer. Keep all public filenames expected by
+            # Mesa even though these generated entrypoints are identical.
+            for guest_name in kms_swrast_dri.so swrast_dri.so virtio_gpu_dri.so; do
+                [ -f "$guest_lib/dri/$guest_name" ] || err "missing x86 bundled DRI driver: $guest_name"
+                cp -a "$guest_lib/dri/$guest_name" "$NATIVE_LIBS/$guest_name"
+            done
+            log "  guest_gfx (x86_64): uniquely named EGL + Mesa DRI mirrored into HAP native libs"
+        fi
     else
         if [ "${BUILD_GUEST_GFX:-0}" = "1" ]; then
             err "BUILD_GUEST_GFX=1 but build/guest_gfx/$guest_arch/lib is missing"
@@ -501,7 +575,7 @@ HKLM,%FontSubStr%,"Lucida Console",,"Noto Sans Mono"' "$wine_data/share/wine/win
   "schemaVersion": 1,
   "payload": "wine-data.zip",
   "payloadSha256": "$payload_sha",
-  "smokeSuiteVersion": "phase2-vulkan-b3-v1"
+  "smokeSuiteVersion": "$smoke_suite_version"
 }
 EOF
     log "  $zip_name → rawfile/ ($(du -h "$rawfile_dir/$zip_name" | cut -f1))"
