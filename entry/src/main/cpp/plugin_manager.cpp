@@ -78,6 +78,19 @@ void PluginManager::ResizeRenderer(uint32_t toplevelId, int w, int h) {
     }
 }
 
+void PluginManager::RefreshRenderer(uint32_t toplevelId) {
+    auto it = toplevelRenderers_.find(toplevelId);
+    if (it == toplevelRenderers_.end() || !it->second->IsValid()) {
+        OH_LOG_WARN(LOG_APP, "[MW-Refresh] toplevel #%{public}u renderer NOT found or invalid", toplevelId);
+        return;
+    }
+
+    // 压测路径绝不能模拟 onSurfaceDestroyed/onSurfaceCreated：频繁释放 EGL
+    // Surface 会与 ArkUI 的真实生命周期竞争。请求 Wayland 将当前帧重新提交，
+    // 能覆盖 compositor/renderer 刷新，同时保留同一个 NativeWindow 与 EGLContext。
+    WaylandServer::GetInstance()->ForceToplevelRedraw(toplevelId);
+}
+
 void PluginManager::DestroyToplevel(uint32_t toplevelId) {
     OH_LOG_INFO(LOG_APP, "[MW-Life] DestroyRenderer tl=%{public}u count=%{public}zu→%{public}zu",
                 toplevelId, toplevelRenderers_.size(), toplevelRenderers_.size() > 0 ? toplevelRenderers_.size() - 1 : 0);
