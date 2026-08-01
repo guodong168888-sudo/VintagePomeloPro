@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import util from '@ohos.util';
+import bundleManager from '@ohos.bundle.bundleManager';
 import {
   AppDescriptor,
   AppSettings,
@@ -41,11 +42,28 @@ interface BuiltinCatalogFile {
 }
 
 const CATALOG_RAWFILE = 'builtin_apps/catalog.json';
-const APPLICATION_DIRECTORY = 'com.vintage.pomelopro';
 const GAMES_DIRECTORY = 'games';
-const DOWNLOAD_LIBRARY_URI = 'file://docs/storage/Users/currentUser/Download/' + APPLICATION_DIRECTORY;
 const DOMAIN = 0x0000;
 const TAG = 'AppCatalog';
+
+// The Download/<bundleName> directory is app-scoped and system-owned. Resolve
+// the bundle name from the API at runtime (same approach as VintagePomelo)
+// instead of hardcoding it, so the library path can never drift from the
+// installed bundle identity.
+let cachedDownloadLibraryRoot = '';
+
+function resolveDownloadLibraryRoot(): string {
+  if (cachedDownloadLibraryRoot) return cachedDownloadLibraryRoot;
+  try {
+    const bundleInfo = bundleManager.getBundleInfoForSelfSync(
+      bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION);
+    const uri = `file://docs/storage/Users/currentUser/Download/${bundleInfo.name}`;
+    cachedDownloadLibraryRoot = new fileUri.FileUri(uri).path;
+  } catch (_) {
+    cachedDownloadLibraryRoot = '';
+  }
+  return cachedDownloadLibraryRoot;
+}
 
 export interface GamesDirectoryStatus {
   root: string;
@@ -112,6 +130,31 @@ function ensureDirectory(path: string): string {
   }
 }
 
+/**
+ * mkdir can succeed while the mount is read-only or the directory is
+ * otherwise unusable. Probe with a real create/delete so "ready" means the
+ * games directory can actually hold game files.
+ */
+function verifyDirectoryWritable(dir: string): string {
+  const probe = joinPath(dir, '.winehua_write_probe');
+  try {
+    const output = fs.openSync(probe,
+      fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC);
+    try {
+      fs.writeSync(output.fd, 'ok');
+    } finally {
+      fs.closeSync(output);
+    }
+    try {
+      fs.unlinkSync(probe);
+    } catch (_) {
+    }
+    return '';
+  } catch (error) {
+    return describeFileError(error);
+  }
+}
+
 function fileName(path: string): string {
   return catalogFileName(path);
 }
@@ -154,7 +197,7 @@ export class AppCatalogService {
 
   private directLibraryRoot(): string {
     try {
-      return new fileUri.FileUri(DOWNLOAD_LIBRARY_URI).path;
+      return resolveDownloadLibraryRoot();
     } catch (_) {
       return '';
     }
@@ -248,6 +291,19 @@ export class AppCatalogService {
       };
       hilog.error(DOMAIN, TAG, 'Failed to prepare games directory %{public}s: %{public}s',
         gamesPath, gamesError);
+      return this.directoryStatus;
+    }
+
+    const writeError = verifyDirectoryWritable(gamesPath);
+    if (writeError) {
+      this.directoryStatus = {
+        root: libraryRoot,
+        games: gamesPath,
+        ready: false,
+        error: 'games-writable: ' + writeError
+      };
+      hilog.error(DOMAIN, TAG, 'Games directory is not writable %{public}s: %{public}s',
+        gamesPath, writeError);
       return this.directoryStatus;
     }
 

@@ -1,4 +1,4 @@
-import { display, window } from '@kit.ArkUI';
+import { componentUtils, display, window } from '@kit.ArkUI';
 import { DeviceCapabilityPolicy } from './DeviceCapabilityPolicy';
 
 // HDS MINI's actual visual title height.  Do not add an arbitrary gap here:
@@ -9,6 +9,29 @@ import { DeviceCapabilityPolicy } from './DeviceCapabilityPolicy';
 export const HDS_MINI_TITLE_HEIGHT_VP: number =
   DeviceCapabilityPolicy.isPhoneDevice() ? 56 : 40;
 const STATUS_ONLY_SYSTEM_BARS: Array<'status' | 'navigation'> = ['status'];
+
+// The HDS title bar is a real component with id "HdsTitleBar", so its exact
+// rendered height can be read through componentUtils instead of guessing a
+// per-device constant. The cache is invalidated on rotation / inset changes.
+let cachedHdsTitleBarHeightVp = 0;
+
+function measureHdsTitleBarHeightVp(): number {
+  if (cachedHdsTitleBarHeightVp > 0) return cachedHdsTitleBarHeightVp;
+  try {
+    const info = componentUtils.getRectangleById('HdsTitleBar');
+    const density = Math.max(1, display.getDefaultDisplaySync().densityPixels);
+    if (info && info.size && info.size.height > 0) {
+      cachedHdsTitleBarHeightVp = Math.ceil(info.size.height / density);
+    }
+  } catch (_) {
+  }
+  return cachedHdsTitleBarHeightVp;
+}
+
+/** Call after rotation or system-inset changes so the measurement re-runs. */
+export function resetHdsTitleBarMeasurement(): void {
+  cachedHdsTitleBarHeightVp = 0;
+}
 
 export interface StatusOnlyWindowInsets {
   top: number;
@@ -80,7 +103,9 @@ export function getStatusOnlyWindowInsets(pageWindow: window.Window): StatusOnly
 
 /** Content begins after the measured system inset and the HDS MINI title. */
 export function getMiniTitleContentTopInset(pageWindow: window.Window): number {
-  return HDS_MINI_TITLE_HEIGHT_VP + getStatusOnlyWindowInsets(pageWindow).top;
+  const measured = measureHdsTitleBarHeightVp();
+  const titleHeight = measured > 0 ? measured : HDS_MINI_TITLE_HEIGHT_VP;
+  return titleHeight + getStatusOnlyWindowInsets(pageWindow).top;
 }
 
 /**
@@ -93,6 +118,7 @@ export function observeStatusOnlyWindowInsets(
   listener: (insets: StatusOnlyWindowInsets) => void,
 ): () => void {
   const refresh = (): void => {
+    resetHdsTitleBarMeasurement();
     listener(getStatusOnlyWindowInsets(pageWindow));
   };
   const callback = (_data: window.AvoidAreaOptions): void => {
