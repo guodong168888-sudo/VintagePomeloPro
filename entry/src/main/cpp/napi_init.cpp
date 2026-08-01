@@ -1,4 +1,5 @@
 #include <napi/native_api.h>
+#include "fs_utils.h"
 #include "wayland_server.h"
 #include "plugin_manager.h"
 #include "input_manager.h"
@@ -13,6 +14,7 @@
 #include "wine_exe.h"
 #include "wine_mmap_test.h"
 #include "host_vulkan_probe.h"
+#include "phone_adapter/phone_adapter.h"
 
 #include <unistd.h>
 #include <signal.h>
@@ -33,6 +35,8 @@
 #include <dlfcn.h>
 
 #undef LOG_TAG
+#undef LOG_DOMAIN
+#define LOG_DOMAIN 0x0000
 #define LOG_TAG "WL_NAPI"
 #include <hilog/log.h>
 
@@ -120,27 +124,111 @@ static napi_value SetHostShadowProfile(napi_env env, napi_callback_info info) {
         napi_get_value_string_utf8(env, args[0], profile, sizeof(profile), nullptr);
 
     const bool skip = !strcmp(profile, "shadow-none");
-    const bool trace = !strcmp(profile, "shadow-trace");
+    const bool preciseStrongTrace =
+        !strcmp(profile, "shadow-precise-strong-ring-trace");
+    const bool preciseStrongPerf =
+        !strcmp(profile, "shadow-precise-strong-ring-perf");
+    const bool legacyHostSync =
+        !strcmp(profile, "shadow-precise-legacy-host-sync");
+    const bool preciseDirtyPerf = !strcmp(profile, "shadow-precise-dirty-ring-perf");
+    const bool preciseDirtyGpuFrameProfile =
+        !strcmp(profile, "shadow-precise-dirty-ring-gpu-frame-profile");
+    const bool preciseDirtyFrameTimeline =
+        !strcmp(profile, "shadow-precise-dirty-ring-frame-timeline");
+    const bool preciseDirtyNoMerge = !strcmp(profile, "shadow-precise-dirty-ring-no-merge");
+    const bool preciseDirtyNoUpload = !strcmp(profile, "shadow-precise-dirty-ring-no-upload");
+    const bool preciseDirtyNoUploadFast =
+        !strcmp(profile, "shadow-precise-dirty-ring-no-upload-fast");
+    const bool preciseDirtyDescriptorSerialized =
+        !strcmp(profile, "shadow-precise-dirty-ring-inline-upload-descriptor-serialized");
+    const bool preciseDirtyCoverageSort =
+        !strcmp(profile, "shadow-precise-dirty-ring-inline-upload-coverage-sort");
+    const bool preciseDirtyCoverageSortSampled =
+        !strcmp(profile, "shadow-precise-dirty-ring-coverage-sort-sampled");
+    /* Keep the established precise-dirty/coverage upload path unchanged
+     * while measuring only the host-side completion-wait mechanism. */
+    const bool preciseDirtyCoveragePoll =
+        !strcmp(profile, "shadow-precise-dirty-ring-coverage-poll");
+    const bool preciseDirtyAliasCover =
+        !strcmp(profile,
+                "shadow-precise-dirty-ring-inline-upload-alias-cover");
+    const bool preciseDirtyFrameAssocTrace =
+        !strcmp(profile, "shadow-precise-dirty-ring-frame-assoc-trace");
+    const bool preciseDirtyPresentImageTrace =
+        !strcmp(profile, "shadow-precise-dirty-ring-present-image-trace");
+    const bool preciseDirtyInlineUpload =
+        !strcmp(profile, "shadow-precise-dirty-ring-inline-upload") ||
+        preciseDirtyCoverageSort || preciseDirtyCoverageSortSampled ||
+        preciseDirtyCoveragePoll ||
+        preciseDirtyDescriptorSerialized ||
+        preciseDirtyFrameAssocTrace || preciseDirtyAliasCover;
+    const bool preciseDirtyInlineUploadSerialized =
+        !strcmp(profile, "shadow-precise-dirty-ring-inline-upload-serialized");
+    const bool preciseDirtyRing =
+        !strcmp(profile, "shadow-precise-dirty-ring") ||
+        preciseDirtyPresentImageTrace;
+    const bool trace = !strcmp(profile, "shadow-trace") || preciseStrongTrace;
     const bool explicitToHost = !strcmp(profile, "shadow-to-host-explicit");
     const bool deferShmemUnref = !strcmp(profile, "shadow-precise-retain-shmem");
+    const bool cpuShadowUpload =
+        !strcmp(profile, "shadow-precise-cpu-upload");
+    const bool waitShadowUpload = !strcmp(profile, "shadow-precise-sync-submit");
     const bool mailboxPresent = !strcmp(profile, "shadow-precise-strong-ring-mailbox");
     const bool asyncPresent = !strcmp(
         profile, "shadow-precise-strong-ring-async-present");
     const bool pollPresent = !strcmp(
-        profile, "shadow-precise-strong-ring-fence-poll");
+        profile, "shadow-precise-strong-ring-fence-poll") ||
+        preciseDirtyCoveragePoll;
     const bool precise = !strcmp(profile, "shadow-precise") ||
         !strcmp(profile, "shadow-precise-single-ring") ||
         !strcmp(profile, "shadow-precise-sync-submit") ||
-        !strcmp(profile, "shadow-precise-strong-ring") ||
+        (!strcmp(profile, "shadow-precise-strong-ring") || legacyHostSync || preciseStrongTrace ||
+         preciseStrongPerf || preciseDirtyRing || preciseDirtyPerf || preciseDirtyNoMerge || preciseDirtyNoUpload ||
+         preciseDirtyGpuFrameProfile ||
+         preciseDirtyFrameTimeline ||
+         preciseDirtyCoverageSortSampled ||
+         preciseDirtyNoUploadFast || preciseDirtyInlineUpload ||
+         preciseDirtyInlineUploadSerialized) ||
         asyncPresent ||
         pollPresent ||
         mailboxPresent ||
         !strcmp(profile, "shadow-precise-direct-fence") ||
-        deferShmemUnref;
-    const char* mode = precise ? "precise" : skip ? "none" :
+        deferShmemUnref ||
+        cpuShadowUpload;
+    const char* mode = (preciseDirtyRing || preciseDirtyPerf || preciseDirtyGpuFrameProfile ||
+                        preciseDirtyFrameTimeline ||
+                        preciseDirtyCoverageSortSampled || preciseDirtyNoUpload ||
+                        preciseDirtyNoUploadFast || preciseDirtyInlineUpload ||
+                        preciseDirtyInlineUploadSerialized ||
+                        preciseDirtyNoMerge) ? "precise-dirty" : precise ? "precise" : skip ? "none" :
         (explicitToHost ? "to-host-explicit" : "full");
     setenv("VKR_WINEHUA_SHADOW_FROM_HOST", mode, 1);
-    setenv("VKR_WINEHUA_SHADOW_TRACE", trace ? "1" : "0", 1);
+    /* Preserve the precise shadow contract while carrying one diagnostic
+     * selector through the existing graphics-broker IPC. The child converts
+     * this selector to the concrete renderer flags before vtest starts. */
+    const char* shadowSelector =
+        legacyHostSync ? "legacy-host-sync" :
+        preciseDirtyAliasCover ? "inline-gpu-upload-alias-cover" :
+        preciseDirtyCoveragePoll ? "inline-gpu-upload-coverage-sort" :
+        preciseDirtyCoverageSortSampled ? "inline-gpu-upload-coverage-sort-sampled" :
+        preciseDirtyCoverageSort ? "inline-gpu-upload-coverage-sort" :
+        preciseDirtyDescriptorSerialized ? "inline-gpu-upload-descriptor-serialized" :
+        preciseDirtyFrameAssocTrace ? "inline-gpu-upload-frame-assoc-trace" :
+        preciseDirtyPresentImageTrace ? "present-image-trace" :
+        preciseDirtyFrameTimeline ? "frame-timeline" :
+        preciseDirtyGpuFrameProfile ? "gpu-frame-profile" :
+        cpuShadowUpload ? "cpu-upload" :
+        preciseDirtyInlineUploadSerialized ? "inline-gpu-upload-serialized" :
+        preciseDirtyInlineUpload ? "inline-gpu-upload" :
+        preciseDirtyNoUpload ? "no-gpu-upload" :
+        preciseDirtyNoUploadFast ? "no-gpu-upload-fast" :
+        (preciseStrongPerf || preciseDirtyPerf || preciseDirtyNoMerge) ? "perf" :
+        trace ? "1" : "0";
+    setenv("VKR_WINEHUA_SHADOW_TRACE", shadowSelector, 1);
+    setenv("VKR_WINEHUA_SHADOW_MERGE_RANGES", preciseDirtyNoMerge ? "0" : "1", 1);
+    setenv("VKR_WINEHUA_GPU_UPLOAD_WAIT", waitShadowUpload ? "1" : "0", 1);
+    setenv("VKR_WINEHUA_DESCRIPTOR_UPDATE_SERIALIZE",
+           preciseDirtyDescriptorSerialized ? "1" : "0", 1);
     setenv("VN_WINEHUA_DEFER_SHMEM_UNREF", deferShmemUnref ? "1" : "0", 1);
     const char* presentMode = mailboxPresent ? "mailbox" :
         (asyncPresent ? "fifo-async" : (pollPresent ? "fifo-poll" : "fifo"));
@@ -159,9 +247,19 @@ static napi_value SetHostShadowProfile(napi_env env, napi_callback_info info) {
     setenv("WINEHUA_VIRGL_HOST_PRESENT_MODE", presentMode, 1);
     OH_LOG_INFO(LOG_APP,
                 "[NAPI] host shadow profile=%{public}s mode=%{public}s "
-                "trace=%{public}s defer_shmem_unref=%{public}s present_mode=%{public}s",
-                profile, mode, trace ? "1" : "0", deferShmemUnref ? "1" : "0",
-                presentMode);
+                "trace=%{public}s selector=%{public}s perf_summary=%{public}s "
+                "gpu_upload=%{public}s upload_wait=%{public}s "
+                "descriptor_serialize=%{public}s defer_shmem_unref=%{public}s "
+                "present_mode=%{public}s",
+                profile, mode, trace ? "1" : "0", shadowSelector,
+                (preciseStrongPerf || preciseDirtyPerf || preciseDirtyNoMerge ||
+                 preciseDirtyNoUpload || preciseDirtyInlineUpload ||
+                 preciseDirtyInlineUploadSerialized) ? "1" : "0",
+                (legacyHostSync || preciseDirtyNoUpload || preciseDirtyNoUploadFast) ? "0" :
+                    (cpuShadowUpload ? "cpu" : "auto"),
+                waitShadowUpload ? "1" : "0",
+                preciseDirtyDescriptorSerialized ? "1" : "0",
+                deferShmemUnref ? "1" : "0", presentMode);
 
     napi_value result;
     napi_get_boolean(env, true, &result);
@@ -243,7 +341,9 @@ static napi_value CheckWinePrefix(napi_env env, napi_callback_info info) {
         napi_get_value_string_utf8(env, args[0], mode, sizeof(mode), nullptr);
         if (!strcmp(mode, "clean")) prefix = WINE_SMOKE_PREFIX;
     }
-    bool ok = IsWinePrefixInitialized(prefix);
+    const std::string initMarker = prefix + "/.winehua-init-in-progress";
+    bool ok = IsWinePrefixInitialized(prefix)
+        && access(initMarker.c_str(), F_OK) != 0;
     OH_LOG_INFO(LOG_APP, "[Wine] checkWinePrefix prefix=%{public}s initialized=%{public}s",
                 prefix.c_str(), ok ? "yes" : "no");
     napi_value r;
@@ -510,7 +610,7 @@ static napi_value DestroyRenderer(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
-// -- NAPI: setDisplayScale -- (传入设备 densityPixels, 供渲染层计算 viewport)
+// -- NAPI: setOutputSize --
 static napi_value SetOutputSize(napi_env env, napi_callback_info info) {
     size_t argc = 2;
     napi_value args[2];
@@ -523,14 +623,11 @@ static napi_value SetOutputSize(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
+// 已无效: C++ 坐标换算不使用 display scale (letterbox 由 renderer viewport 推导,
+// globalDisplayScale_ 只写不读已删除)。保留导出仅为兼容 ArkTS 侧调用, 收到直接忽略。
 static napi_value SetDisplayScale(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    double scale;
-    napi_get_value_double(env, args[0], &scale);
-    EglRenderer::SetGlobalDisplayScale((float)scale);
-    OH_LOG_INFO(LOG_APP, "[MW-NAPI] setDisplayScale = %{public}.2f", scale);
+    (void)env;
+    (void)info;
     return nullptr;
 }
 
@@ -547,11 +644,57 @@ static napi_value SetDesktopMode(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
+static napi_value SetPhoneMode(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc >= 1) {
+        bool on;
+        napi_get_value_bool(env, args[0], &on);
+        PhoneAdapter_SetPhoneMode(on);
+        OH_LOG_INFO(LOG_APP, "[MW-NAPI] setPhoneMode = %{public}s", on ? "true" : "false");
+    }
+    return nullptr;
+}
+
 static napi_value GetDesktopRootId(napi_env env, napi_callback_info) {
     uint32_t id = WaylandServer::GetInstance()->GetDesktopRootToplevelId();
     napi_value r;
     napi_create_uint32(env, id, &r);
     return r;
+}
+
+// -- NAPI: takeWindowMask -- (ARGB 异型窗口剪影掩码, ArkTS 轮询拉取)
+static napi_value TakeWindowMask(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    uint32_t id = 0;
+    if (argc >= 1) {
+        napi_get_value_uint32(env, args[0], &id);
+    }
+    int w = 0, h = 0;
+    std::vector<uint8_t> bits;
+    if (!WaylandServer::GetInstance()->TakeWindowMask(id, w, h, bits)) {
+        return nullptr;
+    }
+    napi_value result, wv, hv, buf;
+    napi_create_object(env, &result);
+    napi_create_int32(env, w, &wv);
+    napi_create_int32(env, h, &hv);
+    void* data = nullptr;
+    napi_create_arraybuffer(env, bits.size(), &data, &buf);
+    if (data && !bits.empty()) {
+        memcpy(data, bits.data(), bits.size());
+    }
+    napi_value wKey, hKey, bufKey;
+    napi_create_string_utf8(env, "w", 1, &wKey);
+    napi_create_string_utf8(env, "h", 1, &hKey);
+    napi_create_string_utf8(env, "buffer", 6, &bufKey);
+    napi_set_property(env, result, wKey, wv);
+    napi_set_property(env, result, hKey, hv);
+    napi_set_property(env, result, bufKey, buf);
+    return result;
 }
 
 // -- Input forwarding NAPI (unified InputManager path) --
@@ -631,7 +774,9 @@ static napi_value RaiseToplevel(napi_env env, napi_callback_info info) {
     if (argc < 1) return nullptr;
     uint32_t tl;
     napi_get_value_uint32(env, args[0], &tl);
-    WaylandServer::GetInstance()->RaiseToplevel(tl);
+    // 用户显式操作 (任务栏/窗口点击) 路径: 已 fullscreen 的目标会重新取
+    // 全屏优先级号, 支撑两个全屏窗口间的主动切换
+    WaylandServer::GetInstance()->RaiseToplevel(tl, true);
     return nullptr;
 }
 
@@ -748,6 +893,9 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"runWineExe",     nullptr, RunWineExe,     nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runWineProgram", nullptr, RunWineProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runGuestProgram", nullptr, RunGuestProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"runHostProgram", nullptr, RunHostProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"runHostReplay", nullptr, RunHostReplay, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"isHostReplayRunning", nullptr, IsHostReplayRunning, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"queryWineProcess", nullptr, QueryWineProcess, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"terminateWineProcess", nullptr, TerminateWineProcess, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"checkWinePrefix",nullptr, CheckWinePrefix,nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -764,12 +912,14 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setOutputSize",   nullptr, SetOutputSize,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setDisplayScale",  nullptr, SetDisplayScale,  nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setDesktopMode",   nullptr, SetDesktopMode,   nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setPhoneMode",     nullptr, SetPhoneMode,     nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getDesktopRootId", nullptr, GetDesktopRootId, nullptr, nullptr, nullptr, napi_default, nullptr},
         // ArkTS input forwarding (unified InputManager path)
         {"sendPointerEvent", nullptr, SendPointerEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"sendKeyEvent",     nullptr, SendKeyEvent,     nullptr, nullptr, nullptr, napi_default, nullptr},
         {"sendScrollEvent",   nullptr, SendScrollEvent,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"notifyToplevelResize",nullptr,NotifyToplevelResize,nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"takeWindowMask", nullptr, TakeWindowMask, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"findToplevelAt",   nullptr, FindToplevelAt,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"raiseToplevel",    nullptr, RaiseToplevel,    nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setToplevelVisible", nullptr, SetToplevelVisible, nullptr, nullptr, nullptr, napi_default, nullptr},

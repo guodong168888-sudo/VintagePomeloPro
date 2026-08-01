@@ -102,6 +102,7 @@ bool DesktopCompositor::ReorderSubsurfaceLayerBelow(wl_resource* child, wl_resou
 void DesktopCompositor::RemoveZeroCopyKeyLocked(uint64_t surfaceKey)
 {
     zeroCopySurfaceKeys_.erase(surfaceKey);
+    zeroCopyProtocolGeometryLogged_.erase(surfaceKey);
 }
 
 bool DesktopCompositor::HasZeroCopyLayerForToplevelLocked(uint32_t id) const
@@ -127,6 +128,7 @@ void DesktopCompositor::ResolveSubsurfaceLayerPositionLocked(
 }
 
 bool DesktopCompositor::GetZeroCopyLayerInfo(uint64_t surfaceKey, uint32_t rendererToplevelId,
+                                             int fallbackWidth, int fallbackHeight,
                                              ZeroCopyLayerInfo& info)
 {
     auto lk = tmgr_.Lock();
@@ -162,9 +164,48 @@ bool DesktopCompositor::GetZeroCopyLayerInfo(uint64_t surfaceKey, uint32_t rende
                 info.desktopCoordinates = true;
                 if (const auto* pst = tmgr_.FindToplevelLocked(layer.parentToplevel))
                     info.fullscreen = pst->fullscreen;
+                info.protocolOnly = false;
                 return info.width > 0 && info.height > 0;
             }
-            return false;
+
+            // Vulkan private-present surfaces may have no wl_shm commit. Wayland
+            // still supplies the parent/offset while the present protocol supplies
+            // the image dimensions.
+            int sx = sd->subsurfaceX;
+            int sy = sd->subsurfaceY;
+            const auto* parentState = tmgr_.FindToplevelLocked(info.parentToplevel);
+            if (parentState && parentState->minimized) {
+                if (sx > 16000) sx -= 32000;
+                if (sy > 16000) sy -= 32000;
+            }
+            const int compX = parentState ? parentState->x : 0;
+            const int compY = parentState ? parentState->y : 0;
+            const int wineX = parentState ? parentState->wineX : 0;
+            const int wineY = parentState ? parentState->wineY : 0;
+            const int compW = parentState ? parentState->w : 0;
+            const int compH = parentState ? parentState->h : 0;
+            const bool insideWin = sx >= 0 && sx < compW && sy >= 0 && sy < compH;
+            info.x = (insideWin ? compX : wineX) + sx;
+            info.y = (insideWin ? compY : wineY) + sy;
+            info.width = sd->vpDstW > 0 ? sd->vpDstW : sd->w;
+            info.height = sd->vpDstH > 0 ? sd->vpDstH : sd->h;
+            if (info.width <= 0) info.width = fallbackWidth;
+            if (info.height <= 0) info.height = fallbackHeight;
+            info.shmCommitSerial = sd->shmCommitSerial.load(std::memory_order_acquire);
+            info.desktopCoordinates = true;
+            info.protocolOnly = true;
+            if (parentState) info.fullscreen = parentState->fullscreen;
+            if (zeroCopyProtocolGeometryLogged_.insert(surfaceKey).second) {
+                OH_LOG_INFO(LOG_APP,
+                            "[MW-ZC] protocol-only geometry key=%{public}llu "
+                            "pid=%{public}u surface=%{public}u parent=%{public}u "
+                            "offset=%{public}d,%{public}d layer=%{public}dx%{public}d "
+                            "fallback=%{public}dx%{public}d",
+                            static_cast<unsigned long long>(surfaceKey), info.clientPid,
+                            info.surfaceId, info.parentToplevel, sx, sy, info.width,
+                            info.height, fallbackWidth, fallbackHeight);
+            }
+            return info.width > 0 && info.height > 0;
         }
 
         if (rendererToplevelId != info.parentToplevel) return false;
@@ -178,6 +219,8 @@ bool DesktopCompositor::GetZeroCopyLayerInfo(uint64_t surfaceKey, uint32_t rende
     info.parentToplevel = sd->toplevelId;
     info.width = sd->w;
     info.height = sd->h;
+    if (info.width <= 0) info.width = fallbackWidth;
+    if (info.height <= 0) info.height = fallbackHeight;
     info.shmCommitSerial = sd->shmCommitSerial.load(std::memory_order_acquire);
     if (policy_.RootCompositing())
     {
@@ -212,7 +255,7 @@ int DesktopCompositor::GetZeroCopyOccluders(uint64_t surfaceKey, uint32_t render
 {
     if (!out || maxOut <= 0) return 0;
     ZeroCopyLayerInfo info;
-    if (!GetZeroCopyLayerInfo(surfaceKey, rendererToplevelId, info) ||
+    if (!GetZeroCopyLayerInfo(surfaceKey, rendererToplevelId, 0, 0, info) ||
         !info.desktopCoordinates)
         return 0;
 

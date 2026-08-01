@@ -96,6 +96,10 @@ void WaylandServer::compositor_create_surface(wl_client* client, wl_resource* co
     sd->clientPid = GetWaylandClientPid(client);
     sd->protocolId = id;
     sd->surfaceKey = MakeSurfaceKey(sd->clientPid, id);
+    OH_LOG_INFO(LOG_APP,
+                "[MW-ZC] surface created pid=%{public}u surface=%{public}u key=%{public}llu resource=%{public}p",
+                sd->clientPid, sd->protocolId,
+                static_cast<unsigned long long>(sd->surfaceKey), surfRes);
     wl_resource_set_implementation(surfRes, &kSurfaceImpl, sd, [](wl_resource* r) {
         auto* sd = static_cast<SurfaceData*>(wl_resource_get_user_data(r));
         auto* self = GetInstance();

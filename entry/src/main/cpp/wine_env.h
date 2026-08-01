@@ -74,6 +74,8 @@ void AppendD3dBackendEnv(std::vector<std::string>& env,
 int CreateAudioBootstrapFd(const std::string& runtimeDir);
 
 // -- entryParams 序列化 --
+size_t AppendMissingEntryParamsEnvOverrides(std::string& entryParams,
+                                            const std::vector<std::string>& env);
 std::string SerializeEnvToEntryParams(const std::vector<std::string>& env);
 
 // -- Graphics 辅助 --

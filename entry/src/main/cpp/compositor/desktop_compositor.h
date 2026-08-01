@@ -21,6 +21,7 @@ struct ZeroCopyLayerInfo {
     int height = 0;
     uint64_t shmCommitSerial = 0;
     bool desktopCoordinates = false;
+    bool protocolOnly = false;
     bool fullscreen = false;  // 所属 toplevel 全屏: GL 层保比例缩放铺满视口 (ZC 游戏)
 };
 
@@ -73,6 +74,7 @@ public:
 
     // -- Zero-copy layer 管理 --
     bool GetZeroCopyLayerInfo(uint64_t surfaceKey, uint32_t rendererToplevelId,
+                              int fallbackWidth, int fallbackHeight,
                               ZeroCopyLayerInfo& info);
     void SetSurfaceZeroCopy(uint64_t surfaceKey, bool enabled);
     int GetZeroCopyOccluders(uint64_t surfaceKey, uint32_t rendererToplevelId,
@@ -127,6 +129,7 @@ private:
 
     std::vector<SubsurfaceLayer> subsurfaceLayers_;
     std::unordered_set<uint64_t> zeroCopySurfaceKeys_;
+    std::unordered_set<uint64_t> zeroCopyProtocolGeometryLogged_;
     uint64_t desktopCompositionSignature_ = 0;
     uint64_t desktopOutputRootFrameSerial_ = 0;
     bool desktopOutputInitialized_ = false;
