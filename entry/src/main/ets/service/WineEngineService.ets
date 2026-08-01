@@ -191,6 +191,14 @@ export class WineEngineService {
         // Wayland desktop frame from being created at the old orientation.
         WineWindowManager.getInstance().prepareOutputForOrientation(orientation);
       }
+      // Product DXVK/Venus path: select the precise-dirty ring + inline GPU
+      // upload + coverage-sort host profile BEFORE the VirGL host starts.
+      // Wine children already receive the matching WINEHUA_PERF_PROFILE env;
+      // without this the host runs the full-shadow baseline (~4 FPS cube).
+      try {
+        testNapi.setHostShadowProfile('shadow-precise-dirty-ring-inline-upload-coverage-sort');
+      } catch (_) {
+      }
       const serverReady = testNapi.startServer(SOCK) as boolean;
       if (!serverReady) {
         this.setState(EngineState.ERROR, 'Wayland 服务启动失败');
