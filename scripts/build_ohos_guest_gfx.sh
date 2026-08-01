@@ -562,14 +562,27 @@ ensure_modern_wayland_protocols() {
     log "wayland-protocols source: $WAYLAND_PROTOCOLS_SOURCE_ROOT"
     log "wayland-protocols build: $build_root"
 
+    # wayland-protocols declares wayland-scanner as a native (build-machine)
+    # dependency; meson resolves native deps through the native file's
+    # pkg_config_path, not the cross file or the ambient environment.
+    NATIVE_FILE="$BUILD_DIR/host-tools-native.txt"
+    if [ ! -f "$NATIVE_FILE" ]; then
+        cat > "$NATIVE_FILE" << EOF
+[binaries]
+pkg-config = '$PKG_CONFIG_BIN'
+[built-in options]
+pkg_config_path = ['$BUILD_DIR/host-tools/lib/pkgconfig']
+EOF
+    fi
+
     if [ -f "$build_root/build.ninja" ]; then
         meson setup "$build_root" "$WAYLAND_PROTOCOLS_SOURCE_ROOT" --reconfigure \
             "--prefix=$SYSROOT_EXT/usr" \
-            "-Dtests=false"
+            "-Dtests=false" --native-file "$NATIVE_FILE"
     else
         meson setup "$build_root" "$WAYLAND_PROTOCOLS_SOURCE_ROOT" \
             "--prefix=$SYSROOT_EXT/usr" \
-            "-Dtests=false"
+            "-Dtests=false" --native-file "$NATIVE_FILE"
     fi
 
     meson compile -C "$build_root"
