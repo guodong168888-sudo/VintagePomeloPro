@@ -140,6 +140,17 @@ void AppendD3dBackendEnv(std::vector<std::string>& env,
                          const std::string& d3dBackend,
                          const std::string& binDir)
 {
+    if (d3dBackend == "wined3d") {
+        const std::vector<std::string> managed = {
+            "WINEHUA_D3D_BACKEND=wined3d",
+            /* Compatibility mode must be deterministic even when a game
+             * directory contains a copied DXVK DLL. Wine's built-in D3D
+             * modules render through WineD3D -> OpenGL -> VirGL. */
+            "WINEDLLOVERRIDES=d3d8=b;d3d9=b;d3d10core=b;d3d10=b;d3d10_1=b;d3d11=b;dxgi=b",
+        };
+        for (const std::string& line : managed) UpsertEnvLine(env, line);
+        return;
+    }
     if (d3dBackend.rfind("dxvk_", 0) != 0) return;
 
     std::string profile = d3dBackend.substr(strlen("dxvk_"));
@@ -182,7 +193,7 @@ void AppendD3dBackendEnv(std::vector<std::string>& env,
          * visible through WineHua's explicit Guest/Host shadow mapping.
          * Query the real Host objects instead of polling stale Guest words. */
         "VN_PERF=no_fence_feedback,no_query_feedback",
-        "WINEDLLOVERRIDES=d3d11=n;dxgi=n",
+        "WINEDLLOVERRIDES=d3d9=n;d3d10core=n;d3d10=n;d3d10_1=n;d3d11=n;dxgi=n",
         "DXVK_WINEHUA_COMMAND_QUERY_RESET=1",
         "DXVK_WINEHUA_FLUSH_DYNAMIC_MAPPED=1",
         /* Prefer the native RGBA8 SNORM render-target path. On devices such

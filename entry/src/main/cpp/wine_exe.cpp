@@ -672,13 +672,13 @@ static napi_value MakeLaunchResult(napi_env env, int32_t pid,
 
 napi_value RunWineExe(napi_env env, napi_callback_info info)
 {
-    size_t argc = 8;
-    napi_value args[8] = {};
+    size_t argc = 9;
+    napi_value args[9] = {};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     if (argc < 4) return MakeLaunchResult(env, -1, "", false);
 
     char binDir[512] = {}, sockPath[512] = {}, libPath[2048] = {}, wineExe[1024] = {},
-         homePath[1024] = {}, workingDirectoryPath[1024] = {};
+         homePath[1024] = {}, workingDirectoryPath[1024] = {}, d3dBackend[64] = "dxvk_legacy";
     napi_get_value_string_utf8(env, args[0], binDir, sizeof(binDir), nullptr);
     napi_get_value_string_utf8(env, args[1], sockPath, sizeof(sockPath), nullptr);
     napi_get_value_string_utf8(env, args[2], libPath, sizeof(libPath), nullptr);
@@ -708,6 +708,14 @@ napi_value RunWineExe(napi_env env, napi_callback_info info)
     if (argc >= 8) {
         napi_get_value_string_utf8(env, args[7], workingDirectoryPath,
                                    sizeof(workingDirectoryPath), nullptr);
+    }
+    if (argc >= 9) {
+        char requestedBackend[64] = {};
+        napi_get_value_string_utf8(env, args[8], requestedBackend,
+                                   sizeof(requestedBackend), nullptr);
+        if (!strcmp(requestedBackend, "wined3d") ||
+            !strncmp(requestedBackend, "dxvk_", 5))
+            strncpy(d3dBackend, requestedBackend, sizeof(d3dBackend) - 1);
     }
 
     std::string homeDir(homePath);
@@ -746,13 +754,14 @@ napi_value RunWineExe(napi_env env, napi_callback_info info)
     // App cards, scanned games and Explorer descendants must resolve the same
     // qualified DXVK/Venus/Box64 product stack. Previously only the initial
     // desktop and automation runWineProgram path received this overlay.
-    AppendD3dBackendEnv(wineEnv, "dxvk_legacy", binDir);
-    AppendProductDxvkEnv(wineEnv, "dxvk_legacy");
+    AppendD3dBackendEnv(wineEnv, d3dBackend, binDir);
+    AppendProductDxvkEnv(wineEnv, d3dBackend);
     if (workingDirectoryPath[0])
         UpsertEnv(&wineEnv, "WINEHUA_WORKING_DIRECTORY=" +
                   std::string(workingDirectoryPath));
     OH_LOG_INFO(LOG_APP,
-                "[Wine] product D3D backend=dxvk_legacy cwd=%{public}s",
+                "[Wine] product D3D backend=%{public}s cwd=%{public}s",
+                d3dBackend,
                 workingDirectoryPath[0] ? workingDirectoryPath : "(derived)");
 
     // desktop 模式: 将进程接入 explorer 创建的 shell desktop,

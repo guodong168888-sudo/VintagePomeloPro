@@ -80,6 +80,8 @@ struct InputOverlayPage {
   private touchpadDragTouchId: number = -1;
   private touchpadDragCandidate: boolean = false;
   private touchpadDragActive: boolean = false;
+  private mouseLeftActive: boolean = false;
+  private mouseLeftReleaseTimer: number = -1;
 
   aboutToAppear(): void {
     this.listener = (snapshot: InputOverlaySnapshot): void => {
@@ -119,6 +121,9 @@ struct InputOverlayPage {
     if (this.listener) InputOverlayWindowCoordinator.getInstance().unsubscribe(this.listener);
     if (this.engineListener) WineEngineService.getInstance().unsubscribe(this.engineListener);
     this.cancelCursorTimers();
+    if (this.mouseLeftReleaseTimer >= 0) clearTimeout(this.mouseLeftReleaseTimer);
+    this.mouseLeftReleaseTimer = -1;
+    this.mouseLeftActive = false;
     this.resetTouchpadGesture();
     InputDispatcher.getInstance().releaseAll('overlay-page-disappear');
   }
@@ -513,6 +518,13 @@ struct InputOverlayPage {
   }
 
   private handleOverlayTouch(event: TouchEvent): void {
+    // A physical left click can produce both MouseEvent and TouchEvent on API
+    // 23. Keep the real press/release sequence and discard its synthesized
+    // touch copy; DirectInput games otherwise see a duplicate collapsed click.
+    if (this.mouseLeftActive) {
+      event.stopPropagation();
+      return;
+    }
     if (this.touchpadMode) this.handleTouchpadTouch(event);
     else this.handleDirectTouch(event);
   }
@@ -530,11 +542,24 @@ struct InputOverlayPage {
     const source = 'external-mouse';
     const x = vp2px(event.x);
     const y = vp2px(event.y);
+    const button = mapMouseButton(event.button);
     if (event.action === MouseAction.Press) {
-      InputDispatcher.getInstance().pointerDown(source, x, y, mapMouseButton(event.button));
+      if (button === 272) {
+        if (this.mouseLeftReleaseTimer >= 0) clearTimeout(this.mouseLeftReleaseTimer);
+        this.mouseLeftReleaseTimer = -1;
+        this.mouseLeftActive = true;
+      }
+      InputDispatcher.getInstance().pointerDown(source, x, y, button);
     }
     else if (event.action === MouseAction.Release) {
-      InputDispatcher.getInstance().pointerUp(source, x, y, mapMouseButton(event.button));
+      InputDispatcher.getInstance().pointerUp(source, x, y, button);
+      if (button === 272) {
+        if (this.mouseLeftReleaseTimer >= 0) clearTimeout(this.mouseLeftReleaseTimer);
+        this.mouseLeftReleaseTimer = setTimeout((): void => {
+          this.mouseLeftReleaseTimer = -1;
+          this.mouseLeftActive = false;
+        }, 120) as number;
+      }
       this.hideForExternalInput();
     }
     else InputDispatcher.getInstance().pointerMove(source, x, y, false);
@@ -589,6 +614,8 @@ struct InputOverlayPage {
           opacityValue: this.snapshot.opacity,
           controlsVisible: this.snapshot.controlsVisible,
           controlBarDirection: this.settings.controlBarDirection,
+          controlBarPositionX: this.settings.controlBarPositionX,
+          controlBarPositionY: this.settings.controlBarPositionY,
           touchpadMode: this.touchpadMode,
           onOpenLayoutEditor: (): void => { this.openInputEditor('input-layout'); },
           onOpenKeyMappingEditor: (): void => { this.openInputEditor('key-mapping'); },
@@ -596,6 +623,11 @@ struct InputOverlayPage {
             InputOverlayWindowCoordinator.getInstance().setControlsVisible(visible);
           },
           onTouchpadModeChange: (enabled: boolean): void => this.setTouchpadMode(enabled),
+          onControlBarPositionChange: (x: number, y: number): void => {
+            AppSettingsStore.getInstance().setControlBarPosition(x, y).then((): void => {
+              this.settings = AppSettingsStore.getInstance().getGlobalSettings();
+            }).catch((): void => {});
+          },
           onUnhandledTouch: (event: TouchEvent): void => this.handleOverlayTouch(event),
           onUnhandledMouse: (event: MouseEvent): void => this.handleDirectMouse(event),
           onUnhandledAxis: (event?: AxisEvent): void => this.handleDirectAxis(event)

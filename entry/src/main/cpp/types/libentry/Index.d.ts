@@ -20,7 +20,7 @@ export interface WineSessionInfo {
 }
 export const runWineExe: (binDir: string, sockPath: string, libPath: string, exePath: string,
   homeDir: string, argumentsValue?: string[], singleAppRoot?: boolean,
-  workingDirectory?: string) => WineLaunchResult;
+  workingDirectory?: string, d3dBackend?: string) => WineLaunchResult;
 export const runWineExeLegacy: (binDir: string, sockPath: string, libPath: string,
   exePath: string, homeDir: string) => number;
 export const getWineSession: (sessionId: string) => WineSessionInfo | null;

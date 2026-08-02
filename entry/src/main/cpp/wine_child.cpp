@@ -355,8 +355,10 @@ static void log_d3d_environment_summary()
     const char* rgba8SnormRt = getenv("DXVK_WINEHUA_EMULATE_RGBA8_SNORM_RT");
 
     std::string root = dxvkRoot && dxvkRoot[0] ? dxvkRoot : "";
+    const std::string x64D3d9 = root + "/x64/d3d9.dll";
     const std::string x64D3d11 = root + "/x64/d3d11.dll";
     const std::string x64Dxgi = root + "/x64/dxgi.dll";
+    const std::string x86D3d9 = root + "/x86/d3d9.dll";
     const std::string x86D3d11 = root + "/x86/d3d11.dll";
     const std::string x86Dxgi = root + "/x86/dxgi.dll";
     auto present = [](const std::string& path) {
@@ -365,7 +367,8 @@ static void log_d3d_environment_summary()
     OH_LOG_INFO(LOG_APP,
                 "[WineChild] final D3D env backend=%{public}s dxvkVersion=%{public}s "
                 "override=%{public}s dllPath=%{public}s root=%{public}s "
-                "x64=(%{public}s,%{public}s) x86=(%{public}s,%{public}s) "
+                "x64=(d3d9:%{public}s,d3d11:%{public}s,dxgi:%{public}s) "
+                "x86=(d3d9:%{public}s,d3d11:%{public}s,dxgi:%{public}s) "
                 "profile=%{public}s logLevel=%{public}s "
                 "logPath=%{public}s dumpPath=%{public}s "
                 "traceSampled=%{public}s traceFlow=%{public}s "
@@ -373,8 +376,8 @@ static void log_d3d_environment_summary()
                 "batchMappedFlush=%{public}s rgba8SnormRt=%{public}s",
                 backend ? backend : "", dxvkVersion ? dxvkVersion : "",
                 dllOverrides ? dllOverrides : "", dllPath ? dllPath : "",
-                dxvkRoot ? dxvkRoot : "", present(x64D3d11), present(x64Dxgi),
-                present(x86D3d11), present(x86Dxgi),
+                dxvkRoot ? dxvkRoot : "", present(x64D3d9), present(x64D3d11), present(x64Dxgi),
+                present(x86D3d9), present(x86D3d11), present(x86Dxgi),
                 profile ? profile : "", logLevel ? logLevel : "",
                 logPath ? logPath : "", dumpPath ? dumpPath : "",
                 traceSampled ? traceSampled : "", traceFlow ? traceFlow : "",

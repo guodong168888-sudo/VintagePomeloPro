@@ -68,11 +68,15 @@ export struct VirtualInputOverlay {
   @Prop hideToolbar: boolean = false;
   @Prop @Watch('onControlsVisibleChanged') controlsVisible: boolean = true;
   @Prop @Watch('onControlBarDirectionChanged') controlBarDirection: ControlBarDirection = ControlBarDirection.AUTO;
+  @Prop @Watch('onControlBarPositionChanged') controlBarPositionX: number = 1;
+  @Prop @Watch('onControlBarPositionChanged') controlBarPositionY: number = 0;
   @Prop @Watch('onTouchpadModeChanged') touchpadMode: boolean = false;
   onOpenLayoutEditor: () => void = (): void => {};
   onOpenKeyMappingEditor: () => void = (): void => {};
   onControlsVisibleChange: (visible: boolean) => void = (_visible: boolean): void => {};
   onTouchpadModeChange: (enabled: boolean) => void = (_enabled: boolean): void => {};
+  onControlBarPositionChange: (x: number, y: number) => void =
+    (_x: number, _y: number): void => {};
   onUnhandledTouch: (event: TouchEvent) => void = (_event: TouchEvent): void => {};
   onUnhandledMouse: (event: MouseEvent) => void = (_event: MouseEvent): void => {};
   onUnhandledAxis: (event?: AxisEvent) => void = (_event?: AxisEvent): void => {};
@@ -100,6 +104,8 @@ export struct VirtualInputOverlay {
   // by the coordinator and never disables the full-screen mouse surface.
   @State private toolbarExpanded: boolean = true;
   @State private toolbarAutoHidden: boolean = false;
+  @State private toolbarX: number = 4;
+  @State private toolbarY: number = 8;
   @State private controlsVisibleVisual: boolean = true;
   @State private touchpadModeVisual: boolean = false;
   @State private renderedProfile: InputProfile = createDefaultInputProfile();
@@ -119,7 +125,18 @@ export struct VirtualInputOverlay {
   private lastActionTouchAt: number = 0;
   private toolbarTouchId: number = -1;
   private toolbarTouchAction: ToolbarAction | null = null;
+  private toolbarTouchStartX: number = 0;
+  private toolbarTouchStartY: number = 0;
+  private toolbarTouchOriginX: number = 0;
+  private toolbarTouchOriginY: number = 0;
+  private toolbarTouchMoved: boolean = false;
   private toolbarMouseAction: ToolbarAction | null = null;
+  private toolbarMouseTracking: boolean = false;
+  private toolbarMouseStartX: number = 0;
+  private toolbarMouseStartY: number = 0;
+  private toolbarMouseOriginX: number = 0;
+  private toolbarMouseOriginY: number = 0;
+  private toolbarMouseMoved: boolean = false;
   private lastToolbarTouchAt: number = 0;
   private lastToolbarButtonTouchAt: number = 0;
   private toolbarAutoHideTimer: number = -1;
@@ -273,17 +290,21 @@ export struct VirtualInputOverlay {
 
   private startToolbarAutoHide(): void {
     this.cancelToolbarAutoHide();
-    if (!this.isAutoHideMode() || this.toolbarExpanded) return;
+    if (!this.isAutoHideMode() || this.toolbarAutoHidden) return;
     this.toolbarAutoHideTimer = setTimeout((): void => {
       this.toolbarAutoHideTimer = -1;
-      if (this.isAutoHideMode() && !this.toolbarExpanded) this.toolbarAutoHidden = true;
+      if (this.isAutoHideMode()) this.toolbarAutoHidden = true;
     }, 3000) as number;
   }
 
   private onControlBarDirectionChanged(): void {
     this.toolbarAutoHidden = false;
-    if (this.toolbarExpanded) this.cancelToolbarAutoHide();
-    else this.startToolbarAutoHide();
+    this.applyConfiguredToolbarPosition();
+    this.startToolbarAutoHide();
+  }
+
+  private onControlBarPositionChanged(): void {
+    this.applyConfiguredToolbarPosition();
   }
 
   private onTouchpadModeChanged(): void {
@@ -324,6 +345,8 @@ export struct VirtualInputOverlay {
     this.renderedProfile = cloneInputProfile(this.profile);
     this.controlsVisibleVisual = this.controlsVisible;
     this.touchpadModeVisual = this.touchpadMode;
+    this.applyConfiguredToolbarPosition();
+    this.startToolbarAutoHide();
   }
 
   aboutToDisappear(): void {
@@ -331,36 +354,85 @@ export struct VirtualInputOverlay {
     this.releaseRightJoystickInteraction();
   }
 
+  private toolbarWidth(): number {
+    if (!this.toolbarExpanded) return 44;
+    return this.resolveToolbarVertical() ? 52 : 220;
+  }
+
+  private toolbarHeight(): number {
+    if (!this.toolbarExpanded) return 44;
+    return this.resolveToolbarVertical() ? 220 : 52;
+  }
+
   private toolbarOriginX(): number {
-    if (this.resolveToolbarVertical()) return Math.max(4, this.overlayW - 54);
-    return Math.max(4, this.overlayW - (this.toolbarExpanded ? 230 : 54));
+    return this.toolbarX;
+  }
+
+  private toolbarOriginY(): number {
+    return this.toolbarY;
+  }
+
+  private clampToolbarX(value: number): number {
+    return Math.max(4, Math.min(Math.max(4, this.overlayW - this.toolbarWidth() - 4), value));
+  }
+
+  private clampToolbarY(value: number): number {
+    return Math.max(8, Math.min(Math.max(8, this.overlayH - this.toolbarHeight() - 8), value));
+  }
+
+  private applyConfiguredToolbarPosition(): void {
+    if (this.overlayW <= 0 || this.overlayH <= 0) return;
+    const spanX = Math.max(0, this.overlayW - this.toolbarWidth() - 8);
+    const spanY = Math.max(0, this.overlayH - this.toolbarHeight() - 16);
+    this.toolbarX = this.clampToolbarX(4 + spanX * Math.max(0, Math.min(1, this.controlBarPositionX)));
+    this.toolbarY = this.clampToolbarY(8 + spanY * Math.max(0, Math.min(1, this.controlBarPositionY)));
+  }
+
+  private persistToolbarPosition(): void {
+    const spanX = Math.max(0, this.overlayW - this.toolbarWidth() - 8);
+    const spanY = Math.max(0, this.overlayH - this.toolbarHeight() - 16);
+    const normalizedX = spanX > 0 ? (this.toolbarX - 4) / spanX : 0;
+    const normalizedY = spanY > 0 ? (this.toolbarY - 8) / spanY : 0;
+    this.onControlBarPositionChange(
+      Math.max(0, Math.min(1, normalizedX)), Math.max(0, Math.min(1, normalizedY)));
+  }
+
+  private toolbarPanelContains(x: number, y: number): boolean {
+    if (this.toolbarAutoHidden && this.isAutoHideMode()) {
+      return this.rectContains(x, y, this.toolbarOriginX(), this.toolbarOriginY(), 48, 48);
+    }
+    return this.rectContains(x, y, this.toolbarOriginX(), this.toolbarOriginY(),
+      this.toolbarWidth(), this.toolbarHeight());
   }
 
   private toolbarActionAt(x: number, y: number): ToolbarAction | null {
     const originX = this.toolbarOriginX();
+    const originY = this.toolbarOriginY();
     if (this.toolbarAutoHidden && this.isAutoHideMode()) {
-      return this.rectContains(x, y, Math.max(0, this.overlayW - 52), 8, 48, 48) ? 'wake' : null;
+      return this.rectContains(x, y, originX, originY, 48, 48) ? 'wake' : null;
     }
     if (!this.toolbarExpanded) {
-      return this.rectContains(x, y, originX, 14, 44, 44) ? 'toolbar' : null;
+      return this.rectContains(x, y, originX, originY, 44, 44) ? 'toolbar' : null;
     }
     if (this.resolveToolbarVertical()) {
-      if (this.rectContains(x, y, originX, 14, 44, 40)) return 'toolbar';
-      if (this.rectContains(x, y, originX, 54, 44, 44)) return 'editor';
-      if (this.rectContains(x, y, originX, 98, 44, 44)) return 'mapping';
-      if (this.rectContains(x, y, originX, 142, 44, 44)) return 'controls';
-      if (this.rectContains(x, y, originX, 186, 44, 44)) return 'mouse';
+      if (this.rectContains(x, y, originX, originY, 44, 40)) return 'toolbar';
+      if (this.rectContains(x, y, originX, originY + 40, 44, 44)) return 'editor';
+      if (this.rectContains(x, y, originX, originY + 84, 44, 44)) return 'mapping';
+      if (this.rectContains(x, y, originX, originY + 128, 44, 44)) return 'controls';
+      if (this.rectContains(x, y, originX, originY + 172, 44, 44)) return 'mouse';
       return null;
     }
-    if (this.rectContains(x, y, originX + 4, 14, 40, 48)) return 'toolbar';
-    if (this.rectContains(x, y, originX + 44, 14, 44, 52)) return 'editor';
-    if (this.rectContains(x, y, originX + 88, 14, 44, 52)) return 'mapping';
-    if (this.rectContains(x, y, originX + 132, 14, 44, 52)) return 'controls';
-    if (this.rectContains(x, y, originX + 176, 14, 44, 52)) return 'mouse';
+    if (this.rectContains(x, y, originX, originY, 44, 52)) return 'toolbar';
+    if (this.rectContains(x, y, originX + 44, originY, 44, 52)) return 'editor';
+    if (this.rectContains(x, y, originX + 88, originY, 44, 52)) return 'mapping';
+    if (this.rectContains(x, y, originX + 132, originY, 44, 52)) return 'controls';
+    if (this.rectContains(x, y, originX + 176, originY, 44, 52)) return 'mouse';
     return null;
   }
 
   private runToolbarAction(action: ToolbarAction): void {
+    this.toolbarAutoHidden = false;
+    this.startToolbarAutoHide();
     if (action === 'editor') {
       this.onOpenLayoutEditor();
       return;
@@ -382,24 +454,26 @@ export struct VirtualInputOverlay {
       return;
     }
     if (action === 'wake') {
-      this.toolbarAutoHidden = false;
       this.startToolbarAutoHide();
       return;
     }
     this.toolbarExpanded = !this.toolbarExpanded;
-    this.toolbarAutoHidden = false;
-    if (this.toolbarExpanded) this.cancelToolbarAutoHide();
-    else this.startToolbarAutoHide();
+    this.applyConfiguredToolbarPosition();
+    this.startToolbarAutoHide();
   }
 
   private handleToolbarButtonTouch(event: TouchEvent, action: () => void): void {
     event.stopPropagation();
+    this.toolbarAutoHidden = false;
+    this.startToolbarAutoHide();
     if (event.type !== TouchType.Up) return;
     this.invokeToolbarButtonAction(action);
   }
 
   private handleToolbarButtonMouse(event: MouseEvent, action: () => void): void {
     event.stopPropagation();
+    this.toolbarAutoHidden = false;
+    this.startToolbarAutoHide();
     if (event.action === MouseAction.Release) this.invokeToolbarButtonAction(action);
   }
 
@@ -416,38 +490,91 @@ export struct VirtualInputOverlay {
     if (this.toolbarTouchId === touch.id) {
       event.stopPropagation();
       this.lastToolbarTouchAt = Date.now();
-      if (event.type === TouchType.Up && this.toolbarTouchAction) this.runToolbarAction(this.toolbarTouchAction);
+      const x = Number(touch.x);
+      const y = Number(touch.y);
+      if (event.type === TouchType.Move && this.toolbarTouchAction !== 'wake') {
+        const dx = x - this.toolbarTouchStartX;
+        const dy = y - this.toolbarTouchStartY;
+        if (this.toolbarTouchMoved || Math.abs(dx) + Math.abs(dy) >= 6) {
+          this.toolbarTouchMoved = true;
+          this.toolbarX = this.clampToolbarX(this.toolbarTouchOriginX + dx);
+          this.toolbarY = this.clampToolbarY(this.toolbarTouchOriginY + dy);
+        }
+      }
+      if (event.type === TouchType.Up) {
+        if (this.toolbarTouchMoved) this.persistToolbarPosition();
+        else if (this.toolbarTouchAction) this.runToolbarAction(this.toolbarTouchAction);
+      }
       if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
         this.toolbarTouchId = -1;
         this.toolbarTouchAction = null;
+        this.toolbarTouchMoved = false;
+        this.startToolbarAutoHide();
       }
       return true;
     }
     if (event.type !== TouchType.Down) return false;
-    const action = this.toolbarActionAt(Number(touch.x), Number(touch.y));
-    if (!action) return false;
+    const x = Number(touch.x);
+    const y = Number(touch.y);
+    const action = this.toolbarActionAt(x, y);
+    // Swallow the complete panel rectangle. Empty padding and gaps are valid
+    // drag surfaces and must never fall through to the Wine desktop below.
+    if (!action && !this.toolbarPanelContains(x, y)) return false;
     this.toolbarTouchId = touch.id;
     this.toolbarTouchAction = action;
+    this.toolbarTouchStartX = x;
+    this.toolbarTouchStartY = y;
+    this.toolbarTouchOriginX = this.toolbarOriginX();
+    this.toolbarTouchOriginY = this.toolbarOriginY();
+    this.toolbarTouchMoved = false;
+    this.toolbarAutoHidden = false;
+    this.startToolbarAutoHide();
     this.lastToolbarTouchAt = Date.now();
     event.stopPropagation();
     return true;
   }
 
   private handleToolbarOverlayMouse(event: MouseEvent): boolean {
-    const action = this.toolbarActionAt(Number(event.x), Number(event.y));
-    if (event.action === MouseAction.Press && action) {
+    const x = Number(event.x);
+    const y = Number(event.y);
+    const action = this.toolbarActionAt(x, y);
+    if (event.action === MouseAction.Press && (action || this.toolbarPanelContains(x, y))) {
       this.toolbarMouseAction = action;
+      this.toolbarMouseTracking = true;
+      this.toolbarMouseStartX = x;
+      this.toolbarMouseStartY = y;
+      this.toolbarMouseOriginX = this.toolbarOriginX();
+      this.toolbarMouseOriginY = this.toolbarOriginY();
+      this.toolbarMouseMoved = false;
+      this.toolbarAutoHidden = false;
+      this.startToolbarAutoHide();
       event.stopPropagation();
       return true;
     }
-    if (event.action === MouseAction.Release && this.toolbarMouseAction) {
+    if (this.toolbarMouseTracking && event.action === MouseAction.Move) {
+      const dx = x - this.toolbarMouseStartX;
+      const dy = y - this.toolbarMouseStartY;
+      if (this.toolbarMouseAction !== 'wake' &&
+        (this.toolbarMouseMoved || Math.abs(dx) + Math.abs(dy) >= 6)) {
+        this.toolbarMouseMoved = true;
+        this.toolbarX = this.clampToolbarX(this.toolbarMouseOriginX + dx);
+        this.toolbarY = this.clampToolbarY(this.toolbarMouseOriginY + dy);
+      }
+      event.stopPropagation();
+      return true;
+    }
+    if (event.action === MouseAction.Release && this.toolbarMouseTracking) {
       const active = this.toolbarMouseAction;
       this.toolbarMouseAction = null;
+      this.toolbarMouseTracking = false;
       event.stopPropagation();
-      if (Date.now() - this.lastToolbarTouchAt > 350) this.runToolbarAction(active);
+      if (this.toolbarMouseMoved) this.persistToolbarPosition();
+      else if (active && Date.now() - this.lastToolbarTouchAt > 350) this.runToolbarAction(active);
+      this.toolbarMouseMoved = false;
+      this.startToolbarAutoHide();
       return true;
     }
-    if (action) {
+    if (action || this.toolbarPanelContains(x, y)) {
       event.stopPropagation();
       return true;
     }
@@ -1298,12 +1425,9 @@ export struct VirtualInputOverlay {
     .backgroundColor(this.toolbarExpanded ? '#1AFFFFFF' : '#BF282828')
     .border({ width: 1, color: '#33FFFFFF' })
     .id('wine-input-overlay-toggle')
-    .hitTestBehavior(HitTestMode.Block)
-    .onTouch((event: TouchEvent): void => this.handleToolbarButtonTouch(event,
-      (): void => this.runToolbarAction('toolbar')))
-    .onMouse((event: MouseEvent): void => this.handleToolbarButtonMouse(event,
-      (): void => this.runToolbarAction('toolbar')))
-    .onClick((): void => this.invokeToolbarButtonAction((): void => this.runToolbarAction('toolbar')))
+    // The root overlay owns this button's pointer stream so a click toggles
+    // the bar while a drag repositions it without leaking events to Wine.
+    .hitTestBehavior(HitTestMode.None)
   }
 
   /** Direct ArkTS adaptation of VintagePomelo's collapsible icon control bar. */
@@ -1313,10 +1437,9 @@ export struct VirtualInputOverlay {
       Button({ type: ButtonType.Normal }) {}
         .width(48).height(48)
         .backgroundColor('#00000000').opacity(0)
-        .hitTestBehavior(HitTestMode.Block)
-        .position({ x: Math.max(0, this.overlayW - 52), y: 8 })
+        .hitTestBehavior(HitTestMode.None)
+        .position({ x: this.toolbarOriginX(), y: this.toolbarOriginY() })
         .id('wine-input-overlay-wake')
-        .onClick((): void => this.runToolbarAction('wake'))
         .zIndex(30)
     } else if (this.resolveToolbarVertical()) {
       Column({ space: 8 }) {
@@ -1330,7 +1453,7 @@ export struct VirtualInputOverlay {
       .backgroundColor('#4D000000')
       .borderRadius(20)
       .hitTestBehavior(HitTestMode.Transparent)
-      .position({ x: this.toolbarOriginX(), y: 14 })
+      .position({ x: this.toolbarOriginX(), y: this.toolbarOriginY() })
       .id('wine-input-toolbar-vertical')
       .zIndex(30)
     } else {
@@ -1345,7 +1468,7 @@ export struct VirtualInputOverlay {
       .backgroundColor('#4D000000')
       .borderRadius(20)
       .hitTestBehavior(HitTestMode.Transparent)
-      .position({ x: this.toolbarOriginX(), y: 14 })
+      .position({ x: this.toolbarOriginX(), y: this.toolbarOriginY() })
       .id('wine-input-toolbar-horizontal')
       .zIndex(30)
     }
@@ -1376,6 +1499,7 @@ export struct VirtualInputOverlay {
     .onAreaChange((_oldValue: Area, area: Area): void => {
       this.overlayW = area.width as number;
       this.overlayH = area.height as number;
+      this.applyConfiguredToolbarPosition();
     })
   }
 }

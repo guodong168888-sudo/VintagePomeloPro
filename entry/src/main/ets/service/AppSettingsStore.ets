@@ -5,6 +5,7 @@ import {
   AppSettings,
   AppDescriptor,
   ControlBarDirection,
+  D3DRendererPreference,
   DisplayMode,
   GlobalSettings,
   ViewMode,
@@ -69,10 +70,13 @@ export class AppSettingsStore {
       showVirtualControls: current.showVirtualControls,
       autoHideVirtualControls: current.autoHideVirtualControls,
       controlBarDirection: current.controlBarDirection,
+      controlBarPositionX: current.controlBarPositionX,
+      controlBarPositionY: current.controlBarPositionY,
       virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
-      outputScale: current.outputScale
+      outputScale: current.outputScale,
+      d3dRendererPreference: current.d3dRendererPreference
     };
     await this.store.put(GLOBAL_KEY, JSON.stringify(this.globalSettings));
     await this.store.put(PLATFORM_DEFAULTS_KEY, '1');
@@ -114,10 +118,15 @@ export class AppSettingsStore {
         showVirtualControls: stored.showVirtualControls ?? defaults.showVirtualControls,
         autoHideVirtualControls: stored.autoHideVirtualControls ?? defaults.autoHideVirtualControls,
         controlBarDirection: stored.controlBarDirection ?? ControlBarDirection.AUTO,
+        controlBarPositionX: Math.max(0, Math.min(1,
+          stored.controlBarPositionX ?? defaults.controlBarPositionX)),
+        controlBarPositionY: Math.max(0, Math.min(1,
+          stored.controlBarPositionY ?? defaults.controlBarPositionY)),
         virtualMouseConfig: cloneVirtualMouseConfig(stored.virtualMouseConfig ?? defaults.virtualMouseConfig),
         controlOpacity: stored.controlOpacity ?? defaults.controlOpacity,
         gamepadDeadzone: stored.gamepadDeadzone ?? defaults.gamepadDeadzone,
-        outputScale: stored.outputScale ?? defaults.outputScale
+        outputScale: stored.outputScale ?? defaults.outputScale,
+        d3dRendererPreference: stored.d3dRendererPreference ?? D3DRendererPreference.DXVK
       };
     } catch (_) {
       this.globalSettings = createDefaultGlobalSettings();
@@ -178,10 +187,13 @@ export class AppSettingsStore {
       showVirtualControls: current.showVirtualControls,
       autoHideVirtualControls: current.autoHideVirtualControls,
       controlBarDirection: current.controlBarDirection,
+      controlBarPositionX: current.controlBarPositionX,
+      controlBarPositionY: current.controlBarPositionY,
       virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
-      outputScale: current.outputScale
+      outputScale: current.outputScale,
+      d3dRendererPreference: current.d3dRendererPreference
     });
   }
 
@@ -200,10 +212,38 @@ export class AppSettingsStore {
       showVirtualControls: current.showVirtualControls,
       autoHideVirtualControls: current.autoHideVirtualControls,
       controlBarDirection: current.controlBarDirection,
+      controlBarPositionX: current.controlBarPositionX,
+      controlBarPositionY: current.controlBarPositionY,
       virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
-      outputScale: current.outputScale
+      outputScale: current.outputScale,
+      d3dRendererPreference: current.d3dRendererPreference
+    });
+  }
+
+  async setControlBarPosition(x: number, y: number): Promise<void> {
+    const current = this.globalSettings;
+    await this.saveGlobalSettings({
+      defaultDisplayMode: current.defaultDisplayMode,
+      desktopOrientation: current.desktopOrientation,
+      desktopInputProfileId: current.desktopInputProfileId,
+      viewMode: current.viewMode,
+      themeMode: current.themeMode,
+      useGlassEffect: current.useGlassEffect,
+      usePageBackground: current.usePageBackground,
+      pageBackgroundUri: current.pageBackgroundUri,
+      virtualInputEnabled: current.virtualInputEnabled,
+      showVirtualControls: current.showVirtualControls,
+      autoHideVirtualControls: current.autoHideVirtualControls,
+      controlBarDirection: current.controlBarDirection,
+      controlBarPositionX: Math.max(0, Math.min(1, x)),
+      controlBarPositionY: Math.max(0, Math.min(1, y)),
+      virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),
+      controlOpacity: current.controlOpacity,
+      gamepadDeadzone: current.gamepadDeadzone,
+      outputScale: current.outputScale,
+      d3dRendererPreference: current.d3dRendererPreference
     });
   }
 

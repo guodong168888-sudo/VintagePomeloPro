@@ -4,6 +4,7 @@ import { zlib } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import testNapi from 'libentry.so';
 import {
+  D3DRendererPreference,
   DisplayMode,
   EngineState,
   NativeLaunchResult,
@@ -28,9 +29,9 @@ const PREFIX_MARKER = WINE_ROOT + '/share/wine/wine.inf';
 const RUNTIME_VERSION_RAWFILE = 'wine_runtime.version';
 const RUNTIME_VERSION_MARKER = WINE_ROOT + '/.winehua-runtime-version';
 // Runtime extraction and prefix configuration are versioned independently.
-// A new wine-data.zip may require wineboot to refresh an existing prefix, but
-// the user's prefix and Download games must remain intact.
+// The user's prefix and Download games must remain intact across upgrades.
 const PREFIX_RUNTIME_VERSION_MARKER = FILES_BASE + '/.wine/.winehua-prefix-runtime-version';
+const PREFIX_SYSTEM_REG = FILES_BASE + '/.wine/system.reg';
 // Native wineboot allows up to 8 minutes on slow ARM devices, followed by a
 // registry flush window. Keep a margin so a valid first-run/update operation
 // is not reported as failed while it is still making progress.
@@ -41,6 +42,32 @@ interface RuntimePathRequirement {
   label: string;
   directory?: boolean;
 }
+
+interface FontSubstitute {
+  name: string;
+  replacement: string;
+}
+
+// Exact semantic font changes introduced by upstream master c8e1a21. Existing
+// prefixes predate the new wine.inf, so update only this registry section
+// directly before Wine starts instead of running the slow wineboot --update.
+const MASTER_FONT_SUBSTITUTES: FontSubstitute[] = [
+  { name: 'Cambria', replacement: 'Noto Serif' },
+  { name: 'Constantia', replacement: 'Noto Serif' },
+  { name: 'Palatino Linotype', replacement: 'Noto Serif' },
+  { name: 'Georgia', replacement: 'Noto Serif' },
+  { name: 'Times New Roman', replacement: 'Noto Serif' },
+  { name: 'SimSun', replacement: 'Noto Serif CJK SC' },
+  { name: 'NSimSun', replacement: 'Noto Serif CJK SC' },
+  { name: 'FangSong', replacement: 'Noto Serif CJK SC' },
+  { name: 'KaiTi', replacement: 'Noto Serif CJK SC' },
+  { name: 'STSong', replacement: 'Noto Serif CJK SC' },
+  { name: 'STKaiti', replacement: 'Noto Serif CJK SC' },
+  { name: 'STFangsong', replacement: 'Noto Serif CJK SC' },
+  { name: 'STZhongSong', replacement: 'Noto Serif CJK SC' },
+  { name: 'STBaoli', replacement: 'Noto Serif CJK SC' },
+  { name: 'DFKai-SB', replacement: 'Noto Serif CJK TC' }
+];
 
 const REQUIRED_RUNTIME_PATHS: RuntimePathRequirement[] = [
   { path: PREFIX_MARKER, label: 'share/wine/wine.inf' },
@@ -113,6 +140,7 @@ export class WineEngineService {
   private restartPromise: Promise<boolean> | null = null;
   private prefixRefreshRequired: boolean = false;
   private pendingPrefixVersion: Uint8Array = new Uint8Array(0);
+  private d3dBackend: string = 'dxvk_legacy';
 
   static getInstance(): WineEngineService {
     if (!WineEngineService.instance) WineEngineService.instance = new WineEngineService();
@@ -158,22 +186,27 @@ export class WineEngineService {
   async ensureReady(mode: DisplayMode, presentationMode: WinePresentationMode,
     homeDirectory: string): Promise<boolean> {
     if (!this.context) return false;
+    const requestedD3DBackend = this.selectedD3DBackend();
     if (this.state === EngineState.READY && this.mode === mode &&
-      this.presentationMode === presentationMode) {
+      this.presentationMode === presentationMode && this.d3dBackend === requestedD3DBackend) {
       this.syncManagedSmokePayload('ready-reuse');
       return true;
     }
     if (this.state === EngineState.PREPARING && this.mode === mode &&
-      this.presentationMode === presentationMode) return this.waitForReady();
+      this.presentationMode === presentationMode &&
+      this.d3dBackend === requestedD3DBackend) return this.waitForReady();
 
     if (this.state !== EngineState.STOPPED &&
-      (this.mode !== mode || this.presentationMode !== presentationMode)) {
-      this.setState(EngineState.SWITCHING, '正在切换显示模式');
+      (this.mode !== mode || this.presentationMode !== presentationMode ||
+       this.d3dBackend !== requestedD3DBackend)) {
+      this.setState(EngineState.SWITCHING,
+        this.d3dBackend !== requestedD3DBackend ? '正在切换 Direct3D 渲染策略' : '正在切换显示模式');
       await this.stopAll();
     }
 
     this.mode = mode;
     this.presentationMode = presentationMode;
+    this.d3dBackend = requestedD3DBackend;
     this.homeDirectory = homeDirectory;
     this.setState(EngineState.PREPARING, '正在准备 Wine 引擎');
 
@@ -205,10 +238,10 @@ export class WineEngineService {
         this.finishWaiters(false);
         return false;
       }
-      // The native launcher runs wineboot --init for a new prefix and
-      // wineboot --update when this runtime version has not configured it yet.
+      // Native runs wineboot --init only for a new prefix. Existing prefixes
+      // are migrated above before any wineserver process starts.
       testNapi.launchClient(BOX64, [], SOCK, WINE_BIN + ':' + WINE_LIB,
-        homeDirectory, prefixRefreshRequired);
+        homeDirectory, false, '', this.d3dBackend);
       return this.waitForReady();
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'ensureReady failed: %{public}s', JSON.stringify(error));
@@ -244,8 +277,14 @@ export class WineEngineService {
       this.homeDirectory,
       launchArguments,
       singleAppRoot,
-      workingDirectory
+      workingDirectory,
+      this.d3dBackend
     ) as NativeLaunchResult;
+  }
+
+  private selectedD3DBackend(): string {
+    const preference = AppSettingsStore.getInstance().getGlobalSettings().d3dRendererPreference;
+    return preference === D3DRendererPreference.VIRGL ? 'wined3d' : 'dxvk_legacy';
   }
 
   /**
@@ -463,6 +502,66 @@ export class WineEngineService {
     return this.versionMarkerMatches(PREFIX_RUNTIME_VERSION_MARKER, expected);
   }
 
+  private prefixFontSubstitutesCurrent(): boolean {
+    if (!pathExists(PREFIX_SYSTEM_REG)) return false;
+    try {
+      const registry = fs.readTextSync(PREFIX_SYSTEM_REG);
+      return registry.includes('"Times New Roman"="Noto Serif"') &&
+        registry.includes('"SimSun"="Noto Serif CJK SC"') &&
+        registry.includes('"DFKai-SB"="Noto Serif CJK TC"');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  private updatePrefixFontSubstitutes(): boolean {
+    if (!pathExists(PREFIX_SYSTEM_REG)) return false;
+    const temporary = PREFIX_SYSTEM_REG + '.winehua-fonts.tmp';
+    let output: fs.File | null = null;
+    try {
+      let registry = fs.readTextSync(PREFIX_SYSTEM_REG);
+      let additions = '';
+      MASTER_FONT_SUBSTITUTES.forEach((item: FontSubstitute) => {
+        const line = '"' + item.name + '"="' + item.replacement + '"';
+        const pattern = new RegExp('^"' + item.name + '"=.*$', 'm');
+        if (pattern.test(registry)) {
+          registry = registry.replace(pattern, line);
+        } else {
+          additions += line + '\n';
+        }
+      });
+      if (additions.length > 0) {
+        const sectionHeader = '[Software\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\FontSubstitutes]';
+        const sectionStart = registry.indexOf(sectionHeader);
+        if (sectionStart < 0) throw new Error('FontSubstitutes registry section missing');
+        let sectionEnd = registry.indexOf('\n[', sectionStart + sectionHeader.length);
+        if (sectionEnd < 0) sectionEnd = registry.length;
+        const prefix = sectionEnd > 0 && registry.charAt(sectionEnd - 1) === '\n' ? '' : '\n';
+        registry = registry.substring(0, sectionEnd) + prefix + additions + registry.substring(sectionEnd);
+      }
+      output = fs.openSync(temporary,
+        fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC);
+      fs.writeSync(output.fd, registry);
+      fs.closeSync(output);
+      output = null;
+      // rename is atomic on the prefix filesystem and replaces the old file.
+      fs.renameSync(temporary, PREFIX_SYSTEM_REG);
+      if (!this.prefixFontSubstitutesCurrent()) {
+        throw new Error('FontSubstitutes verification failed after registry update');
+      }
+      hilog.info(DOMAIN, TAG, 'updated existing prefix to master FontSubstitutes without wineboot');
+      return true;
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'FontSubstitutes registry update failed: %{public}s', JSON.stringify(error));
+      try { fs.unlinkSync(temporary); } catch (_) {}
+      return false;
+    } finally {
+      if (output) {
+        try { fs.closeSync(output); } catch (_) {}
+      }
+    }
+  }
+
   private writeVersionMarker(path: string, expected: Uint8Array): boolean {
     let output: fs.File | null = null;
     try {
@@ -487,15 +586,20 @@ export class WineEngineService {
     const missingBefore = this.getMissingRuntimePaths();
     const versionMatches = this.runtimeVersionMatches(bundledVersion);
     const prefixMatches = this.prefixVersionMatches(bundledVersion);
+    const fontSubstitutesCurrent = this.prefixFontSubstitutesCurrent();
     if (missingBefore.length === 0 && versionMatches) {
-      if (prefixMatches) return false;
+      if (prefixMatches && fontSubstitutesCurrent) return false;
       // Upgrade path for versions released before the prefix marker existed:
       // when the extracted runtime itself did not change and the prefix is
-      // complete, adopt it as the baseline. Running wineboot --update here
-      // would make every existing user pay a multi-minute migration for no
-      // runtime change. A future runtime-content hash change still refreshes.
+      // complete, migrate the targeted registry values and adopt it.
       let prefixInitialized = false;
       try { prefixInitialized = testNapi.checkWinePrefix() as boolean; } catch (_) {}
+      if (prefixInitialized && !fontSubstitutesCurrent) {
+        hilog.warn(DOMAIN, TAG, 'existing prefix uses stale FontSubstitutes; applying direct migration');
+        if (!this.updatePrefixFontSubstitutes()) {
+          throw new Error('Unable to migrate master FontSubstitutes');
+        }
+      }
       if (prefixInitialized) {
         hilog.info(DOMAIN, TAG, 'adopting initialized prefix for unchanged runtime version');
         if (!this.writeVersionMarker(PREFIX_RUNTIME_VERSION_MARKER, bundledVersion)) {
@@ -508,8 +612,9 @@ export class WineEngineService {
     if (!this.context) throw new Error('Ability context unavailable');
     hilog.warn(DOMAIN, TAG,
       'runtime refresh required, extracting wine-data.zip, runtimeVersionMatch=%{public}s '
-        + 'prefixVersionMatch=%{public}s missing=%{public}s',
-      versionMatches ? 'true' : 'false', prefixMatches ? 'true' : 'false', missingBefore.join(','));
+        + 'prefixVersionMatch=%{public}s fontSubstitutesCurrent=%{public}s missing=%{public}s',
+      versionMatches ? 'true' : 'false', prefixMatches ? 'true' : 'false',
+      fontSubstitutesCurrent ? 'true' : 'false', missingBefore.join(','));
     const rawFd = this.context.resourceManager.getRawFdSync('wine-data.zip');
     const temporaryZip = FILES_BASE + '/wine-data.zip';
     try {
@@ -540,6 +645,11 @@ export class WineEngineService {
     } finally {
       this.context.resourceManager.closeRawFdSync('wine-data.zip');
       try { fs.unlinkSync(temporaryZip); } catch (_) {}
+    }
+    let prefixInitialized = false;
+    try { prefixInitialized = testNapi.checkWinePrefix() as boolean; } catch (_) {}
+    if (prefixInitialized && !this.prefixFontSubstitutesCurrent() && !this.updatePrefixFontSubstitutes()) {
+      throw new Error('Unable to migrate master FontSubstitutes after runtime refresh');
     }
     return true;
   }

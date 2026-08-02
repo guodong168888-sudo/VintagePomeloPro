@@ -32,6 +32,7 @@ import deviceInfo from '@ohos.deviceInfo';
 import {
   applyStatusOnlyImmersiveShell,
   getMiniTitleContentTopInset,
+  getStatusOnlyWindowInsets,
   observeStatusOnlyWindowInsets
 } from '../common/StatusOnlyImmersiveShell';
 import {
@@ -78,6 +79,7 @@ struct Index {
   @State private engineState: EngineState = EngineState.STOPPED;
   @State private engineMessage: string = 'Wine 引擎未启动';
   @State private scanning: boolean = false;
+  @State private refreshing: boolean = false;
   @State private runningAppIds: Set<string> = new Set<string>();
   @State private phoneNavIndex: number = PHONE_NAV_BUILTIN;
   @State private viewportWidth: number = 0;
@@ -96,6 +98,7 @@ struct Index {
   private refreshTimer: number = -1;
   private disposeWindowInsetObserver: (() => void) | null = null;
   private catalogInitialized: boolean = false;
+  private launchInProgress: boolean = false;
 
   private isPhone(): boolean {
     return DeviceCapabilityPolicy.isPhoneDevice() || this.breakpoint === 'xs' || this.breakpoint === 'sm';
@@ -199,7 +202,9 @@ struct Index {
 
   private refreshPageInsets(pageWindow: window.Window): void {
     this.titleContentTopInsetVp = getMiniTitleContentTopInset(pageWindow);
-    this.statusBarHeightVp = Math.max(0, this.titleContentTopInsetVp - 40);
+    // Wide layouts do not render HDS MINI. Offset them by the physical status
+    // inset only, independently from the narrow-layout title height.
+    this.statusBarHeightVp = getStatusOnlyWindowInsets(pageWindow).top;
   }
 
   private startWindowInsetObserver(pageWindow: window.Window): void {
@@ -265,6 +270,19 @@ struct Index {
       this.refreshRunningState();
     } finally {
       this.scanning = false;
+    }
+  }
+
+  private async refreshFromPull(): Promise<void> {
+    // Refresh's two-way binding updates `refreshing` before onRefreshing is
+    // invoked. Keep it separate from the actual scan mutex; sharing one flag
+    // made rescan() observe itself as already running and return forever with
+    // the refresh indicator still active.
+    this.refreshing = true;
+    try {
+      await this.rescan();
+    } finally {
+      this.refreshing = false;
     }
   }
 
@@ -464,9 +482,21 @@ struct Index {
     return '1fr 1fr';
   }
 
+  private phoneGridItemMinHeight(): number {
+    // Grid can under-measure an auto-height card while a narrow two-column
+    // layout is settling. Reserve the cover, fixed title row and shadow inset
+    // explicitly so the following row can never paint over this card.
+    if (this.settings.viewMode === ViewMode.COMPACT) return 120;
+    const coverHeight = this.settings.viewMode === ViewMode.LARGE ? 196 : 120;
+    return coverHeight + 71 + 16;
+  }
+
   private async launch(app: AppDescriptor): Promise<void> {
+    if (this.launchInProgress) {
+      promptAction.showToast({ message: '正在处理上一次启动，请稍候' });
+      return;
+    }
     if (!app.available) {
-      promptAction.showToast({ message: '未找到主程序，请在游戏目录中重新选择' });
       this.openAppSettings(app, true);
       return;
     }
@@ -504,18 +534,29 @@ struct Index {
       this.refreshRunningState();
       return;
     }
+    if (this.launchInProgress) return;
+    this.launchInProgress = true;
     let session: RuntimeSession | null = null;
-    if (switchMode) {
-      session = await AppSessionService.getInstance().switchModeAndLaunch(app, this.settings, root);
-    } else {
-      session = await LauncherAdapterRegistry.getInstance().launch(app, this.settings, root);
+    try {
+      if (switchMode) {
+        session = await AppSessionService.getInstance().switchModeAndLaunch(app, this.settings, root);
+      } else {
+        session = await LauncherAdapterRegistry.getInstance().launch(app, this.settings, root);
+      }
+      if (!session && (app.launchTarget.kind === LaunchKind.WINE_EXE ||
+        app.launchTarget.kind === LaunchKind.WINE_SYSTEM ||
+        app.launchTarget.kind === LaunchKind.WINE_DESKTOP)) {
+        const engineMessage = WineEngineService.getInstance().getMessage();
+        promptAction.showToast({
+          message: engineMessage === 'Wine 引擎已就绪' ? '程序启动失败，请稍后重试' : engineMessage
+        });
+      }
+    } catch (_) {
+      promptAction.showToast({ message: '程序启动异常，请稍后重试' });
+    } finally {
+      this.launchInProgress = false;
+      this.refreshRunningState();
     }
-    if (!session && (app.launchTarget.kind === LaunchKind.WINE_EXE ||
-      app.launchTarget.kind === LaunchKind.WINE_SYSTEM ||
-      app.launchTarget.kind === LaunchKind.WINE_DESKTOP)) {
-      promptAction.showToast({ message: WineEngineService.getInstance().getMessage() });
-    }
-    this.refreshRunningState();
   }
 
   private isEngineBusy(): boolean {
@@ -824,12 +865,13 @@ struct Index {
         // Shadows extend beyond the card's measured bounds. Without this
         // inset Grid clips the last row's rounded bottom edge and shadow.
         .padding({ left: 4, right: 4, top: 4, bottom: 12 })
+        .constraintSize({ minHeight: this.isPhone() ? this.phoneGridItemMinHeight() : 0 })
       }, (app: AppDescriptor): string => app.id)
     }
     .columnsTemplate(this.settings.viewMode === ViewMode.COMPACT ? this.compactGridColumns() :
       (this.settings.viewMode === ViewMode.LARGE ? this.largeGridColumns() : this.gridColumns()))
     .columnsGap(8)
-    .rowsGap(4)
+    .rowsGap(this.isPhone() ? 8 : 4)
     .width('100%')
   }
 
@@ -917,7 +959,7 @@ struct Index {
 
   @Builder
   private WindowsRefreshContent() {
-    Refresh({ refreshing: $$this.scanning }) {
+    Refresh({ refreshing: $$this.refreshing }) {
       if (this.scanning) {
         Row({ space: 10 }) {
           LoadingProgress().width(20).height(20)
@@ -931,7 +973,7 @@ struct Index {
     }
     .layoutWeight(1)
     .width('100%')
-    .onRefreshing((): void => { void this.rescan(); })
+    .onRefreshing((): void => { void this.refreshFromPull(); })
     .id('windows-library-refresh')
   }
 

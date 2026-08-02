@@ -303,13 +303,13 @@ struct AppSettingsPage {
     promptAction.showToast({ message: '已选择主程序，请点击右上角保存' });
   }
 
-  private openExecutablePicker(): void {
+  private async openExecutablePicker(): Promise<void> {
     if (!this.app || this.app.source !== AppSource.DOWNLOAD) return;
-    const candidates = AppCatalogService.getInstance().getGameLaunchTargetCandidates(this.app.directory);
+    const candidates = await AppCatalogService.getInstance().getGameLaunchTargetCandidates(this.app.directory);
     if (candidates.length === 0) {
       AlertDialog.show({
         title: '未找到可启动的主程序',
-        message: '已扫描当前游戏目录和所有子目录，未发现 EXE、COM、BAT 或 CMD。请确认游戏文件已完整放入此目录。',
+        message: '已扫描当前游戏目录及两层子目录，未发现 EXE、COM、BAT 或 CMD。请确认游戏文件已完整放入此目录。',
         primaryButton: { value: '知道了', action: (): void => {} }
       });
       return;

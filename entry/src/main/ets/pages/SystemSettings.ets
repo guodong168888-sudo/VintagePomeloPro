@@ -5,6 +5,7 @@ import { picker } from '@kit.CoreFileKit';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import {
   ControlBarDirection,
+  D3DRendererPreference,
   DisplayMode,
   EngineState,
   GlobalSettings,
@@ -32,6 +33,7 @@ import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
 import {
   applyStatusOnlyImmersiveShell,
   getMiniTitleContentTopInset,
+  getStatusOnlyWindowInsets,
   observeStatusOnlyWindowInsets
 } from '../common/StatusOnlyImmersiveShell';
 import {
@@ -200,7 +202,7 @@ struct SystemSettingsPage {
 
   private refreshStatusBarInset(pageWindow: window.Window): void {
     this.titleContentTopInsetVp = getMiniTitleContentTopInset(pageWindow);
-    this.statusBarHeightVp = Math.max(0, this.titleContentTopInsetVp - 40);
+    this.statusBarHeightVp = getStatusOnlyWindowInsets(pageWindow).top;
   }
 
   private startWindowInsetObserver(pageWindow: window.Window): void {
@@ -295,7 +297,10 @@ struct SystemSettingsPage {
      desktopInputProfileId: string = this.settings.desktopInputProfileId,
      pageBackgroundUri: string = this.settings.pageBackgroundUri,
       virtualInputEnabled: boolean = this.settings.virtualInputEnabled,
-      desktopOrientation: ScreenOrientationSetting = this.settings.desktopOrientation): void {
+      desktopOrientation: ScreenOrientationSetting = this.settings.desktopOrientation,
+      controlBarPositionX: number = this.settings.controlBarPositionX,
+      controlBarPositionY: number = this.settings.controlBarPositionY,
+      d3dRendererPreference: D3DRendererPreference = this.settings.d3dRendererPreference): void {
     const virtualInputChanged = this.settings.virtualInputEnabled !== virtualInputEnabled;
     this.settings = {
       defaultDisplayMode: mode,
@@ -310,10 +315,13 @@ struct SystemSettingsPage {
       showVirtualControls: controls,
       autoHideVirtualControls: autoHide,
       controlBarDirection: controlBarDirection,
+      controlBarPositionX: controlBarPositionX,
+      controlBarPositionY: controlBarPositionY,
       virtualMouseConfig: cloneVirtualMouseConfig(virtualMouseConfig),
       controlOpacity: opacity,
       gamepadDeadzone: deadzone,
-      outputScale: scale
+      outputScale: scale,
+      d3dRendererPreference: d3dRendererPreference
     };
     GamepadManager.getInstance().setDeadzone(deadzone);
     WineWindowManager.getInstance().setOutputScalePercent(scale);
@@ -397,6 +405,20 @@ struct SystemSettingsPage {
       this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
       this.settings.controlOpacity, this.settings.gamepadDeadzone,
       this.settings.outputScale, this.settings.themeMode, direction);
+  }
+
+  private updateD3DRendererPreference(preference: D3DRendererPreference): void {
+    if (preference === this.settings.d3dRendererPreference) return;
+    this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
+      this.settings.useGlassEffect, this.settings.usePageBackground,
+      this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
+      this.settings.controlOpacity, this.settings.gamepadDeadzone,
+      this.settings.outputScale, this.settings.themeMode,
+      this.settings.controlBarDirection, this.settings.virtualMouseConfig,
+      this.settings.desktopInputProfileId, this.settings.pageBackgroundUri,
+      this.settings.virtualInputEnabled, this.settings.desktopOrientation,
+      this.settings.controlBarPositionX, this.settings.controlBarPositionY, preference);
+    promptAction.showToast({ message: '渲染策略已保存；重启 Wine 引擎后生效' });
   }
 
   private updateVirtualMouse(sensitivity: number = this.settings.virtualMouseConfig.mouseSensitivity,
@@ -572,6 +594,21 @@ struct SystemSettingsPage {
       .backgroundColor(this.settings.controlBarDirection === direction ? $r('app.color.accent') : $r('app.color.search_background'))
       .id('control-bar-direction-' + direction)
       .onClick((): void => this.updateControlBarDirection(direction))
+  }
+
+  @Builder
+  private D3DRendererChip(label: string, preference: D3DRendererPreference) {
+    Button(label)
+      .height(42)
+      .layoutWeight(1)
+      .borderRadius(14)
+      .fontSize(13)
+      .fontColor(this.settings.d3dRendererPreference === preference ?
+        '#FFFFFFFF' : $r('app.color.text_primary'))
+      .backgroundColor(this.settings.d3dRendererPreference === preference ?
+        $r('app.color.accent') : $r('app.color.search_background'))
+      .id('d3d-renderer-' + preference)
+      .onClick((): void => this.updateD3DRendererPreference(preference))
   }
 
   private selectedProfileName(): string {
@@ -911,6 +948,19 @@ struct SystemSettingsPage {
           }
           .width('100%').padding(14).borderRadius(16)
           .backgroundColor($r('app.color.search_background'))
+
+          Text('Direct3D 渲染策略').fontSize(12).fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_secondary')).width('100%')
+          Row({ space: 10 }) {
+            this.D3DRendererChip('DXVK 优先', D3DRendererPreference.DXVK)
+            this.D3DRendererChip('VirGL 兼容优先', D3DRendererPreference.VIRGL)
+          }.width('100%')
+          Text(this.settings.d3dRendererPreference === D3DRendererPreference.DXVK ?
+            'Direct3D 9–11 使用 DXVK/Vulkan，通常性能更高。Direct3D 8 仍使用 WineD3D。' :
+            'Direct3D 8–11 强制使用 WineD3D/OpenGL/VirGL，适合 DXVK 不兼容的旧游戏。')
+            .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+          Text('更改后需要重启 Wine 引擎；运行中的游戏不会被立即中断。')
+            .fontSize(11).fontColor('#C47A20').width('100%')
 
           Text('会话维护').fontSize(12).fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_secondary')).width('100%')

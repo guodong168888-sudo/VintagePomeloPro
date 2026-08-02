@@ -409,7 +409,11 @@ export class AppSessionService {
   }
 
   private async ensureDesktopSession(): Promise<RuntimeSession | null> {
-    return this.waitForDesktopRoot(40);
+    // On ARM phones/tablets the first Explorer surface can arrive well after
+    // appspawn accepted the process, especially during first prefix setup or
+    // a slow Explorer desktop-root handoff. Ten seconds made the first card fail while a retry a
+    // moment later succeeded. Keep the wait bounded but cover the slow path.
+    return this.waitForDesktopRoot(120);
   }
 
   /** 等待 explorer surface 关联为 desktop root；不创建或重置任何 Wine 资源。 */

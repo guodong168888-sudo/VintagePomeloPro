@@ -1,9 +1,12 @@
 import { display, window } from '@kit.ArkUI';
 import { DeviceCapabilityPolicy } from './DeviceCapabilityPolicy';
 
-// HDS MINI's documented layout height. VintagePomelo also uses this fixed
-// value and adds the current status-bar avoid area exactly once.
-export const HDS_MINI_TITLE_HEIGHT_VP: number = 40;
+// HDS MINI is rendered at 56 vp on phone/tablet shells (the tablet reports a
+// 132 px title at 2.5 density). 40 vp is only the compact managed-window
+// contract. Measuring the component repeatedly is unsafe because routed
+// pages temporarily keep more than one HdsTitleBar alive.
+export const HDS_MINI_TITLE_HEIGHT_VP: number = 56;
+const MANAGED_HDS_MINI_TITLE_HEIGHT_VP: number = 40;
 const STATUS_ONLY_SYSTEM_BARS: Array<'status' | 'navigation'> = ['status'];
 const STATUS_ONLY_SYSTEM_BARS_KEY: string = STATUS_ONLY_SYSTEM_BARS.join(',');
 
@@ -100,7 +103,9 @@ export function getStatusOnlyWindowInsets(pageWindow: window.Window): StatusOnly
 
 /** Content begins after the measured system inset and the HDS MINI title. */
 export function getMiniTitleContentTopInset(pageWindow: window.Window): number {
-  return HDS_MINI_TITLE_HEIGHT_VP + getStatusOnlyWindowInsets(pageWindow).top;
+  const titleHeight = usesImmersiveLibraryLayout() ?
+    HDS_MINI_TITLE_HEIGHT_VP : MANAGED_HDS_MINI_TITLE_HEIGHT_VP;
+  return titleHeight + getStatusOnlyWindowInsets(pageWindow).top;
 }
 
 /**

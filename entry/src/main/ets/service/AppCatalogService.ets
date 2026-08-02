@@ -16,7 +16,6 @@ import {
 import { AppSettingsStore } from './AppSettingsStore';
 import {
   catalogFileName,
-  catalogNameWithoutExtension,
   chooseCoverFileName,
   chooseExecutablePath,
   isWindowsLaunchTarget,
@@ -43,8 +42,21 @@ interface BuiltinCatalogFile {
   apps: BuiltinCatalogItem[];
 }
 
+interface DirectoryScanFrame {
+  path: string;
+  depth: number;
+}
+
 const CATALOG_RAWFILE = 'builtin_apps/catalog.json';
 const GAMES_DIRECTORY = 'games';
+const MAX_LAUNCH_SCAN_DEPTH = 2;
+// A game card only needs a likely launcher, not an exhaustive file index.
+// Keep each directory scan bounded so asset-heavy games cannot monopolize the
+// ArkUI thread when the user pulls to refresh.
+const MAX_LAUNCH_SCAN_ENTRIES = 1024;
+const MAX_LAUNCH_TARGETS = 64;
+const MAX_GAME_DIRECTORIES = 256;
+const MAX_COVER_CANDIDATES = 128;
 const DOMAIN = 0x0000;
 const TAG = 'AppCatalog';
 
@@ -87,6 +99,24 @@ function exists(path: string): boolean {
 function isDirectory(path: string): boolean {
   try {
     return fs.statSync(path).isDirectory();
+  } catch (_) {
+    return false;
+  }
+}
+
+async function existsAsync(path: string): Promise<boolean> {
+  if (!path || path.trim().length === 0) return false;
+  try {
+    await fs.stat(path);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function isDirectoryAsync(path: string): Promise<boolean> {
+  try {
+    return (await fs.stat(path)).isDirectory();
   } catch (_) {
     return false;
   }
@@ -168,10 +198,6 @@ function fileName(path: string): string {
   return catalogFileName(path);
 }
 
-function withoutExtension(name: string): string {
-  return catalogNameWithoutExtension(name);
-}
-
 function joinPath(parent: string, child: string): string {
   return parent.endsWith('/') ? parent + child : parent + '/' + child;
 }
@@ -196,7 +222,11 @@ export class AppCatalogService {
   async initialize(context: common.UIAbilityContext): Promise<void> {
     this.context = context;
     this.libraryRoot = this.directLibraryRoot();
-    this.ensureGamesDirectory();
+    const status = this.ensureGamesDirectory();
+    // DOWNLOAD mode is a provisioning API, not a generic file chooser. It
+    // returns the app-scoped Download/<bundle> directory and restores its
+    // persistent access grant when the directory already exists.
+    if (!status.ready) await this.provisionGamesDirectory();
   }
 
   getLibraryRoot(): string {
@@ -214,8 +244,8 @@ export class AppCatalogService {
 
   getWineHomeDirectory(): string {
     const status = this.ensureGamesDirectory();
-    // Never hand Wine an unverified HOME. Starting with a guessed path makes
-    // the engine fail later and hides the actual storage error from the user.
+    // HOME remains Download/<bundle> so Explorer and every launched process
+    // share the product's stable Z:\games mapping.
     return status.ready ? status.root : '';
   }
 
@@ -253,7 +283,7 @@ export class AppCatalogService {
    * library: re-association must not become a shortcut to an arbitrary file in
    * the system picker.
    */
-  getGameLaunchTargetCandidates(directory: string): string[] {
+  async getGameLaunchTargetCandidates(directory: string): Promise<string[]> {
     const status = this.ensureGamesDirectory();
     if (!status.ready || !this.isPathInsideDirectory(directory, status.games)) return [];
     const normalizedDirectory = directory.replace(/\\/g, '/').replace(/\/+$/, '');
@@ -373,6 +403,7 @@ export class AppCatalogService {
       }
       this.libraryRoot = provisionedRoot;
       cachedDownloadLibraryRoot = provisionedRoot;
+      await AppSettingsStore.getInstance().saveLibraryPath(uris[0]);
       hilog.info(DOMAIN, TAG, 'System provisioned Download library: %{public}s', provisionedRoot);
       return this.ensureGamesDirectory();
     } catch (error) {
@@ -395,14 +426,17 @@ export class AppCatalogService {
 
     const directoryStatus = this.ensureGamesDirectory();
     if (directoryStatus.ready) {
-      const external = this.scanExternal(directoryStatus.games);
+      const external = await this.scanExternal(directoryStatus.games,
+        AppSettingsStore.getInstance().getCatalogCache());
       external.forEach((item: AppDescriptor) => merged.push(item));
     }
 
     const currentIds: Set<string> = new Set<string>();
     merged.forEach((item: AppDescriptor) => currentIds.add(item.id));
-    AppSettingsStore.getInstance().getCatalogCache().forEach((cached: AppDescriptor) => {
-      if (cached.source !== AppSource.DOWNLOAD || currentIds.has(cached.id)) return;
+    const cachedCards = AppSettingsStore.getInstance().getCatalogCache();
+    for (let cachedIndex = 0; cachedIndex < cachedCards.length; cachedIndex++) {
+      const cached = cachedCards[cachedIndex];
+      if (cached.source !== AppSource.DOWNLOAD || currentIds.has(cached.id)) continue;
       const settings = AppSettingsStore.getInstance().getAppSettings(cached.id);
       cached.title = settings.customTitle || cached.title;
       cached.coverPath = settings.customCover || cached.coverPath;
@@ -410,8 +444,8 @@ export class AppCatalogService {
       cached.launchTarget.arguments = settings.arguments;
       cached.launchTarget.workingDirectory = settings.workingDirectory || cached.launchTarget.workingDirectory;
       cached.displayModeOverride = settings.displayModeOverride;
-      const directoryStillExists = isDirectory(cached.directory);
-      const executableStillExists = exists(cached.launchTarget.executable);
+      const directoryStillExists = await isDirectoryAsync(cached.directory);
+      const executableStillExists = await existsAsync(cached.launchTarget.executable);
       const normalizedDirectory = cached.directory.replace(/\\/g, '/').replace(/\/+$/, '');
       const normalizedGames = directoryStatus.games.replace(/\\/g, '/').replace(/\/+$/, '');
       // A deleted game folder must disappear on the next scan. Directory
@@ -419,18 +453,28 @@ export class AppCatalogService {
       // a replacement launcher after an EXE was renamed or removed. A loose
       // executable directly under games/ has no distinct folder and is
       // removed as soon as that executable disappears.
-      if (!shouldRetainMissingCachedCard(directoryStillExists, executableStillExists,
-        normalizedDirectory === normalizedGames)) return;
+      const directoryIsGamesRoot = normalizedDirectory === normalizedGames;
+      const directoryIsLegacyNestedGamesRoot =
+        normalizedDirectory.toLowerCase() === (normalizedGames + '/games').toLowerCase();
+      // Cards represent game directories below games/. Never retain the
+      // library root itself or the accidental games/games container produced
+      // by older builds.
+      if (directoryIsGamesRoot || directoryIsLegacyNestedGamesRoot) continue;
+      if (!shouldRetainMissingCachedCard(directoryStillExists, executableStillExists, false)) continue;
       cached.available = executableStillExists;
       merged.push(cached);
-    });
+    }
 
     merged.sort((left: AppDescriptor, right: AppDescriptor) => {
       if (left.source !== right.source) return left.source === AppSource.BUILTIN ? -1 : 1;
       return left.title.localeCompare(right.title);
     });
     this.apps = merged;
-    await AppSettingsStore.getInstance().saveCatalogCache(merged.filter((item: AppDescriptor) => item.source === AppSource.DOWNLOAD));
+    // The visible refresh is complete once discovery/reconciliation finishes.
+    // Preference flushing is durable housekeeping and must not hold Refresh in
+    // its spinning state on a slow Download provider.
+    AppSettingsStore.getInstance().saveCatalogCache(
+      merged.filter((item: AppDescriptor) => item.source === AppSource.DOWNLOAD)).catch((): void => {});
     return merged;
   }
 
@@ -531,31 +575,40 @@ export class AppCatalogService {
     return LaunchKind.WINE_EXE;
   }
 
-  private scanExternal(gamesPath: string): AppDescriptor[] {
+  private async scanExternal(gamesPath: string, cachedCards: AppDescriptor[],
+    containerDepth: number = 0): Promise<AppDescriptor[]> {
     const result: AppDescriptor[] = [];
     let names: string[] = [];
     try {
-      names = fs.listFileSync(gamesPath);
+      names = await fs.listFile(gamesPath, { listNum: MAX_GAME_DIRECTORIES });
     } catch (_) {
       return result;
     }
 
-    names.forEach((name: string) => {
+    for (let index = 0; index < names.length; index++) {
+      const name = names[index];
       const path = joinPath(gamesPath, name);
-      if (isDirectory(path)) {
-        const app = this.createDirectoryApp(path);
+      if (await isDirectoryAsync(path)) {
+        // Some older builds provisioned an extra games/games level. Treat it
+        // as a structural container and expose each directory below it as its
+        // own card instead of showing one unavailable card named "games".
+        if (name.toLowerCase() === GAMES_DIRECTORY && containerDepth < 2) {
+          const nested = await this.scanExternal(path, cachedCards, containerDepth + 1);
+          nested.forEach((item: AppDescriptor) => result.push(item));
+          continue;
+        }
+        const app = await this.createDirectoryApp(path, cachedCards);
         if (app) result.push(app);
-      } else if (isWindowsLaunchTarget(name)) {
-        result.push(this.createExternalApp(path, gamesPath, withoutExtension(name), ''));
       }
-    });
+    }
     return result;
   }
 
-  private createDirectoryApp(directory: string): AppDescriptor | null {
-    const candidates = this.collectLaunchTargets(directory);
+  private async createDirectoryApp(directory: string,
+    cachedCards: AppDescriptor[]): Promise<AppDescriptor | null> {
+    const candidates = await this.collectLaunchTargets(directory);
     const automaticExecutable = this.chooseExecutable(directory, candidates);
-    const cached = AppSettingsStore.getInstance().getCatalogCache()
+    const cached = cachedCards
       .find((item: AppDescriptor) => item.directory === directory);
     const id = cached?.id ?? stableAppId(AppSource.DOWNLOAD, automaticExecutable || directory);
     const settings = AppSettingsStore.getInstance().getAppSettings(id);
@@ -563,12 +616,14 @@ export class AppCatalogService {
     // This lets the catalog expose an unavailable card that can be re-associated.
     const executable = settings.executable || automaticExecutable;
     const title = settings.customTitle || fileName(directory);
-    const cover = settings.customCover || this.findCover(directory);
-    return this.createExternalApp(executable, directory, title, cover, settings, id);
+    const cover = settings.customCover || await this.findCover(directory);
+    return this.createExternalApp(executable, directory, title, cover, settings, id,
+      await existsAsync(settings.executable || executable));
   }
 
   private createExternalApp(executable: string, directory: string, defaultTitle: string,
-    defaultCover: string, provided?: AppSettings, providedId?: string): AppDescriptor {
+    defaultCover: string, provided?: AppSettings, providedId?: string,
+    executableExists?: boolean): AppDescriptor {
     const id = providedId ?? stableAppId(AppSource.DOWNLOAD, executable);
     const settings = provided ?? AppSettingsStore.getInstance().getAppSettings(id);
     const target: LaunchTarget = {
@@ -583,7 +638,7 @@ export class AppCatalogService {
       source: AppSource.DOWNLOAD,
       directory: directory,
       coverPath: settings.customCover || defaultCover,
-      available: exists(target.executable),
+      available: executableExists ?? exists(target.executable),
       launchTarget: target,
       displayModeOverride: settings.displayModeOverride
     };
@@ -595,26 +650,38 @@ export class AppCatalogService {
     return normalizedPath === normalizedDirectory || normalizedPath.startsWith(normalizedDirectory + '/');
   }
 
-  private collectLaunchTargets(directory: string, recursive: boolean = true): string[] {
+  private async collectLaunchTargets(directory: string, recursive: boolean = true): Promise<string[]> {
     const result: string[] = [];
-    let entries: string[] = [];
-    try {
-      // listFileSync returns paths relative to the supplied directory. Using
-      // its recursive mode avoids the former five-level traversal ceiling, so
-      // launchers nested under game data directories are discoverable too.
-      entries = recursive ? fs.listFileSync(directory, { recursion: true }) : fs.listFileSync(directory);
-    } catch (_) {
-      return result;
+    const pending: DirectoryScanFrame[] = [{ path: directory, depth: 0 }];
+    const maxDepth = recursive ? MAX_LAUNCH_SCAN_DEPTH : 0;
+    let visitedEntries = 0;
+    while (pending.length > 0 && visitedEntries < MAX_LAUNCH_SCAN_ENTRIES &&
+      result.length < MAX_LAUNCH_TARGETS) {
+      const frame = pending.shift();
+      if (!frame) break;
+      let names: string[] = [];
+      try {
+        names = await fs.listFile(frame.path, {
+          listNum: Math.max(1, MAX_LAUNCH_SCAN_ENTRIES - visitedEntries)
+        });
+      } catch (_) {
+        continue;
+      }
+      for (let index = 0; index < names.length; index++) {
+        if (++visitedEntries > MAX_LAUNCH_SCAN_ENTRIES || result.length >= MAX_LAUNCH_TARGETS) break;
+        const name = names[index].replace(/\\/g, '/').replace(/^\/+/, '');
+        if (!name || name.split('/').some((part: string) => part === '..')) continue;
+        const path = joinPath(frame.path, name);
+        // listFile already proves a launch target exists. At the maximum
+        // depth, skip stat calls for every asset file; only shallower,
+        // non-launch entries need a type check to discover child directories.
+        if (isWindowsLaunchTarget(name)) {
+          result.push(path);
+        } else if (frame.depth < maxDepth && await isDirectoryAsync(path)) {
+          pending.push({ path: path, depth: frame.depth + 1 });
+        }
+      }
     }
-    entries.forEach((relativePath: string) => {
-      const relative = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
-      // listFileSync is specified to return relative paths. Rejecting parent
-      // components defensively keeps this picker rooted in its game card even
-      // if a provider ever returns an unexpected entry.
-      if (!relative || relative.split('/').some((part: string) => part === '..')) return;
-      const path = joinPath(directory, relative);
-      if (isWindowsLaunchTarget(path) && !isDirectory(path) && exists(path)) result.push(path);
-    });
     return result.sort((left: string, right: string) => left.toLowerCase().localeCompare(right.toLowerCase()));
   }
 
@@ -622,10 +689,10 @@ export class AppCatalogService {
     return chooseExecutablePath(directory, candidates);
   }
 
-  private findCover(directory: string): string {
+  private async findCover(directory: string): Promise<string> {
     let names: string[] = [];
     try {
-      names = fs.listFileSync(directory);
+      names = await fs.listFile(directory, { listNum: MAX_COVER_CANDIDATES });
     } catch (_) {
       return '';
     }

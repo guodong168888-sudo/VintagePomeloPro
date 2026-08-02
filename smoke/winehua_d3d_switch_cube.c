@@ -1000,7 +1000,11 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
         if (g_app.automation && (!g_app.duration_ms ||
             GetTickCount64() - g_app.run_start_ms < g_app.duration_ms))
             return 0;
-        break;
+        /* The interactive catalog launch has no automation guard. Destroying
+         * the HWND here also guarantees WM_DESTROY/WM_QUIT instead of falling
+         * out of this window procedure without a return value. */
+        DestroyWindow(hwnd);
+        return 0;
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;

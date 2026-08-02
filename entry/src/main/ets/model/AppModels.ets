@@ -67,6 +67,12 @@ export enum ControlBarDirection {
   AUTO_HIDE = 'auto_hide'
 }
 
+/** Global Direct3D translation policy used by Explorer and app-card launches. */
+export enum D3DRendererPreference {
+  DXVK = 'dxvk',
+  VIRGL = 'virgl'
+}
+
 export interface VirtualMouseConfig {
   mouseSensitivity: number;
   doubleClickInterval: number;
@@ -135,10 +141,14 @@ export interface GlobalSettings {
   showVirtualControls: boolean;
   autoHideVirtualControls: boolean;
   controlBarDirection: ControlBarDirection;
+  /** Normalized top-left anchor inside the available overlay area. */
+  controlBarPositionX: number;
+  controlBarPositionY: number;
   virtualMouseConfig: VirtualMouseConfig;
   controlOpacity: number;
   gamepadDeadzone: number;
   outputScale: number;
+  d3dRendererPreference: D3DRendererPreference;
 }
 
 export interface RuntimeSession {
@@ -592,10 +602,13 @@ export function createDefaultGlobalSettings(): GlobalSettings {
     // 独立 ArkTS 覆盖层默认保持可见，避免实体输入后无法恢复控制层。
     autoHideVirtualControls: false,
     controlBarDirection: ControlBarDirection.AUTO,
+    controlBarPositionX: 1,
+    controlBarPositionY: 0,
     virtualMouseConfig: cloneVirtualMouseConfig(DEFAULT_VIRTUAL_MOUSE_CONFIG),
     controlOpacity: 72,
     gamepadDeadzone: 18,
-    outputScale: 100
+    outputScale: 100,
+    d3dRendererPreference: D3DRendererPreference.DXVK
   };
 }
 
