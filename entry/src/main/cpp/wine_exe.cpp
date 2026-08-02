@@ -732,14 +732,6 @@ napi_value RunWineExe(napi_env env, napi_callback_info info)
         }
     }
 
-    const pid_t existingPid = FindRunningProcessByPath(wineExe);
-    if (existingPid > 0) {
-        const std::string existingSession = FindSessionIdForClientPid(existingPid);
-        OH_LOG_INFO(LOG_APP, "[Wine] singleton reuse pid=%{public}d exe=%{public}s",
-                    existingPid, wineExe);
-        return MakeLaunchResult(env, existingPid, existingSession, true);
-    }
-
     OH_LOG_INFO(LOG_APP, "[Wine] runWineExe bin=%{public}s exe=%{public}s (final=%{public}s) home=%{public}s",
                 binDir, wineExe, exePath.c_str(), homeDir.c_str());
 
