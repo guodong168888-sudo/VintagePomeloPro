@@ -63,12 +63,34 @@ assert.equal(
   rules.chooseCoverFileName(['folder.webp', 'screenshot.png']),
   'folder.webp'
 );
+assert.equal(rules.shouldRetainMissingCachedCard(false, false, false), false);
+assert.equal(rules.shouldRetainMissingCachedCard(true, false, false), true);
+assert.equal(rules.shouldRetainMissingCachedCard(true, false, true), false);
 
 assert.equal(models.normalizeLaunchPath(' C:\\Games\\Demo\\Game.EXE '), 'c:/games/demo/game.exe');
+assert.equal(
+  models.normalizeCatalogLaunchIdentity('/storage/Users/currentUser/Download/com.vintage.pomelopro/games/PAL/PAL2.EXE'),
+  'games/pal/pal2.exe'
+);
+assert.equal(
+  models.normalizeCatalogLaunchIdentity('Z:\\games\\PAL\\PAL2.EXE'),
+  'games/pal/pal2.exe'
+);
+assert.equal(models.normalizeCatalogLaunchIdentity('C:\\Games\\PAL\\PAL2.EXE'), 'c:/games/pal/pal2.exe');
 assert.equal(
   models.stableAppId(models.AppSource.DOWNLOAD, 'C:\\Games\\Demo\\Game.EXE'),
   models.stableAppId(models.AppSource.DOWNLOAD, 'c:/games/demo/game.exe')
 );
+const resolvedRunning = models.resolveRunningAppIds([
+  { id: 'session-only', launchTarget: { executable: '/games/session.exe' } },
+  { id: 'native-only', launchTarget: { executable: 'C:\\Games\\PAL\\PAL.EXE' } },
+  { id: 'desktop', launchTarget: { executable: 'explorer.exe' } },
+  { id: 'file-manager', launchTarget: { executable: 'EXPLORER.EXE' } }
+], new Set(['session-only']), new Set(['c:/games/pal/pal.exe', 'explorer.exe']));
+assert.equal(resolvedRunning.has('session-only'), true);
+assert.equal(resolvedRunning.has('native-only'), true);
+assert.equal(resolvedRunning.has('desktop'), false);
+assert.equal(resolvedRunning.has('file-manager'), false);
 assert.equal(
   models.resolveDisplayMode(null, models.DisplayMode.DESKTOP),
   models.DisplayMode.DESKTOP
@@ -125,4 +147,4 @@ assert.equal(
   false
 );
 
-console.log('catalog/model unit tests: 24 passed');
+console.log('catalog/model unit tests: 34 passed');

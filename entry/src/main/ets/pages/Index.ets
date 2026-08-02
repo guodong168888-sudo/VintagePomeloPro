@@ -13,7 +13,8 @@ import {
   RuntimeSession,
   ThemeMode,
   ViewMode,
-  normalizeLaunchPath
+  normalizeLaunchPath,
+  resolveRunningAppIds
 } from '../model/AppModels';
 import { AppCatalogService } from '../service/AppCatalogService';
 import { AppSessionService, LaunchConflictKind } from '../service/AppSessionService';
@@ -94,6 +95,7 @@ struct Index {
   private settingsCallback: ThemeSettingsListener | null = null;
   private refreshTimer: number = -1;
   private disposeWindowInsetObserver: (() => void) | null = null;
+  private catalogInitialized: boolean = false;
 
   private isPhone(): boolean {
     return DeviceCapabilityPolicy.isPhoneDevice() || this.breakpoint === 'xs' || this.breakpoint === 'sm';
@@ -172,7 +174,13 @@ struct Index {
 
   onPageShow(): void {
     this.settings = AppSettingsStore.getInstance().getGlobalSettings();
-    this.refreshRunningState();
+    if (this.catalogInitialized) {
+      // Wine/File Explorer can add, rename or remove programs while this page
+      // is hidden. Reconcile the catalog whenever it becomes visible again.
+      void this.rescan();
+    } else {
+      this.refreshRunningState();
+    }
     void this.applyPageWindowShell();
   }
 
@@ -246,17 +254,24 @@ struct Index {
     await InputProfileService.getInstance().initialize(this.context);
     GamepadManager.getInstance().initialize(this.settings.gamepadDeadzone);
     await this.rescan();
+    this.catalogInitialized = true;
   }
 
   private async rescan(): Promise<void> {
+    if (this.scanning) return;
     this.scanning = true;
-    this.apps = await AppCatalogService.getInstance().scan();
-    this.refreshRunningState();
-    this.scanning = false;
+    try {
+      this.apps = await AppCatalogService.getInstance().scan();
+      this.refreshRunningState();
+    } finally {
+      this.scanning = false;
+    }
   }
 
   private refreshRunningState(): void {
-    const running = AppSessionService.getInstance().getRunningAppIds();
+    const sessionService = AppSessionService.getInstance();
+    const running = resolveRunningAppIds(this.apps, sessionService.getRunningAppIds(),
+      sessionService.getRunningPaths());
     this.runningAppIds = running;
     this.visibleApps = this.filterApps(this.searchQuery, this.filter, running);
   }
@@ -317,6 +332,7 @@ struct Index {
         this.phoneNavController.changeIndex(index);
       }
     }
+    if (value === 'windows' && this.catalogInitialized) void this.rescan();
   }
 
   private openSidebarPage(url: string): void {
@@ -337,7 +353,7 @@ struct Index {
       const catalog = AppCatalogService.getInstance();
       return catalog.isGamesDirectoryReady() ?
         '来自 Download/com.vintage.pomelopro/games' :
-        '游戏目录尚未就绪，点击重新扫描重试';
+        '游戏目录尚未建立，点击创建并完成一次系统确认';
     }
     if (this.filter === 'running') return '点击卡片可恢复，长按可关闭会话';
     if (this.filter === 'favorite') return '已收藏的内建应用和 Windows 程序';
@@ -359,7 +375,7 @@ struct Index {
     if (this.filter === 'windows') {
       const catalog = AppCatalogService.getInstance();
       if (!catalog.isGamesDirectoryReady()) {
-        return '游戏目录创建失败：' + catalog.getGamesDirectoryError() + '。点击重新扫描重试';
+        return '系统需要一次确认来建立 Download/com.vintage.pomelopro，之后应用会自动创建 games';
       }
       return '将程序放入 Download/com.vintage.pomelopro/games，应用会自动扫描';
     }
@@ -375,7 +391,9 @@ struct Index {
 
   private emptyActionLabel(): string {
     if (this.searchQuery.trim()) return '清除搜索';
-    if (this.filter === 'windows') return '重新扫描';
+    if (this.filter === 'windows') {
+      return AppCatalogService.getInstance().isGamesDirectoryReady() ? '重新扫描' : '创建游戏目录';
+    }
     return '';
   }
 
@@ -384,7 +402,28 @@ struct Index {
       this.updateSearch('');
       return;
     }
-    if (this.filter === 'windows') this.rescan();
+    if (this.filter === 'windows') {
+      if (AppCatalogService.getInstance().isGamesDirectoryReady()) {
+        void this.rescan();
+      } else {
+        void this.prepareGamesDirectory();
+      }
+    }
+  }
+
+  private async prepareGamesDirectory(): Promise<void> {
+    if (this.scanning) return;
+    this.scanning = true;
+    try {
+      const status = await AppCatalogService.getInstance().provisionGamesDirectory();
+      this.apps = await AppCatalogService.getInstance().scan();
+      this.refreshRunningState();
+      promptAction.showToast({
+        message: status.ready ? '游戏目录已创建' : '未能创建游戏目录：' + status.error
+      });
+    } finally {
+      this.scanning = false;
+    }
   }
 
   private gridColumns(): string {
@@ -492,6 +531,22 @@ struct Index {
 
   private showAppLongPressMenu(app: AppDescriptor): void {
     const running = this.runningAppIds.has(app.id);
+    if (app.source === AppSource.DOWNLOAD && !app.available) {
+      promptAction.showDialog({
+        title: app.title,
+        message: '主程序已不存在，可重新关联或只删除卡片记录（不会删除任何文件）',
+        buttons: [
+          { text: '重新关联', color: '#5569D8' },
+          { text: '应用设置', color: $r('sys.color.ohos_id_color_text_primary') },
+          { text: '删除卡片', color: '#D94848' }
+        ]
+      }).then((result) => {
+        if (result.index === 0) this.openAppSettings(app, true);
+        else if (result.index === 1) this.openAppSettings(app);
+        else if (result.index === 2) this.confirmDeleteUnavailableApp(app);
+      }).catch((_error: Error) => {});
+      return;
+    }
     promptAction.showDialog({
       title: app.title,
       message: '请选择操作',
@@ -503,14 +558,34 @@ struct Index {
     }).then((result) => {
       if (result.index === 0) {
         if (running) {
-          const session = AppSessionService.getInstance().findByAppId(app.id);
-          if (session) AppSessionService.getInstance().stop(session);
+          AppSessionService.getInstance().stopApp(app);
           this.refreshRunningState();
         } else if (app.available) this.launch(app); else this.openAppSettings(app, true);
       } else if (result.index === 1) {
         this.openAppSettings(app);
       }
     }).catch((_error: Error) => {});
+  }
+
+  private confirmDeleteUnavailableApp(app: AppDescriptor): void {
+    AlertDialog.show({
+      title: '删除卡片记录',
+      message: `将从旧柚 Pro 中移除“${app.title}”卡片，不会删除 games 目录中的任何文件。`,
+      primaryButton: { value: '取消', action: (): void => {} },
+      secondaryButton: {
+        value: '删除',
+        fontColor: '#D94848',
+        action: (): void => { this.deleteUnavailableApp(app); }
+      }
+    });
+  }
+
+  private async deleteUnavailableApp(app: AppDescriptor): Promise<void> {
+    if (app.source !== AppSource.DOWNLOAD || app.available) return;
+    await AppSettingsStore.getInstance().removeCachedApp(app.id);
+    this.apps = this.apps.filter((item: AppDescriptor): boolean => item.id !== app.id);
+    this.refreshRunningState();
+    promptAction.showToast({ message: '卡片记录已删除' });
   }
 
   private async setViewMode(mode: ViewMode): Promise<void> {

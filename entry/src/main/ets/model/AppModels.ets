@@ -514,6 +514,56 @@ export function normalizeLaunchPath(path: string): string {
   return path.trim().replace(/\\/g, '/').replace(/\/+/g, '/').toLowerCase();
 }
 
+/**
+ * Wine maps the app-owned Download library to Z:\\, so a program started
+ * from Explorer is reported as Z:\\games\\... while the catalog stores the
+ * same file as /storage/Users/currentUser/Download/<bundle>/games/....
+ * Collapse only those two app-library forms; arbitrary C:\\Games paths must
+ * remain distinct from the app-owned games directory.
+ */
+export function normalizeCatalogLaunchIdentity(path: string): string {
+  const normalized = normalizeLaunchPath(path);
+  const gamesMarker = '/games/';
+  if (normalized.startsWith('z:/games/')) return normalized.substring(3);
+  if (normalized.startsWith('/storage/users/currentuser/download/')) {
+    const markerIndex = normalized.indexOf(gamesMarker);
+    if (markerIndex >= 0) return normalized.substring(markerIndex + 1);
+  }
+  return normalized;
+}
+
+/**
+ * Merge ArkTS-owned sessions with the native Wine process registry.  A native
+ * path is used only when it identifies one catalog card unambiguously; this
+ * avoids marking both the Wine desktop and File Explorer as running merely
+ * because they both launch explorer.exe.
+ */
+export function resolveRunningAppIds(apps: AppDescriptor[], sessionAppIds: Set<string>,
+  nativeRunningPaths: Set<string>): Set<string> {
+  const result: Set<string> = new Set<string>();
+  sessionAppIds.forEach((appId: string): void => { result.add(appId); });
+
+  const normalizedNativePaths: Set<string> = new Set<string>();
+  nativeRunningPaths.forEach((path: string): void => {
+    const normalized = normalizeCatalogLaunchIdentity(path);
+    if (normalized.length > 0) normalizedNativePaths.add(normalized);
+  });
+
+  const catalogPathCounts: Map<string, number> = new Map<string, number>();
+  apps.forEach((app: AppDescriptor): void => {
+    const normalized = normalizeCatalogLaunchIdentity(app.launchTarget.executable);
+    if (normalized.length > 0) {
+      catalogPathCounts.set(normalized, (catalogPathCounts.get(normalized) ?? 0) + 1);
+    }
+  });
+  apps.forEach((app: AppDescriptor): void => {
+    const normalized = normalizeCatalogLaunchIdentity(app.launchTarget.executable);
+    if (normalized.length > 0 && catalogPathCounts.get(normalized) === 1 &&
+      normalizedNativePaths.has(normalized)) result.add(app.id);
+  });
+  return result;
+}
+
 export function stableAppId(source: AppSource, path: string): string {
   const value = source + ':' + normalizeLaunchPath(path);
   let hash = 2166136261;

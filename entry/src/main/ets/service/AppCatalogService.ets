@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
-import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
+import { fileIo as fs, fileUri, picker } from '@kit.CoreFileKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import util from '@ohos.util';
 import bundleManager from '@ohos.bundle.bundleManager';
@@ -18,7 +19,8 @@ import {
   catalogNameWithoutExtension,
   chooseCoverFileName,
   chooseExecutablePath,
-  isWindowsLaunchTarget
+  isWindowsLaunchTarget,
+  shouldRetainMissingCachedCard
 } from '../model/AppCatalogRules';
 
 interface BuiltinLaunchParams {
@@ -92,6 +94,11 @@ function isDirectory(path: string): boolean {
 
 function describeFileError(error: Object): string {
   try {
+    const failure = error as BusinessError;
+    if (failure.message) return failure.message + ' (' + failure.code.toString() + ')';
+  } catch (_) {
+  }
+  try {
     const encoded = JSON.stringify(error);
     if (encoded && encoded !== '{}') return encoded;
   } catch (_) {
@@ -100,9 +107,11 @@ function describeFileError(error: Object): string {
 }
 
 /**
- * Create one directory and all missing parents, then verify the result. The
- * Download mount may not have the app-specific parent yet on a cold install,
- * so a single-level mkdir is not sufficient here.
+ * Create one directory and verify the result. The docs-backed Download
+ * provider creates app-scoped children reliably with a direct mkdir, but its
+ * recursive mkdir path fails when the bundle directory does not exist yet.
+ * ensureGamesDirectory deliberately calls this once for the bundle directory
+ * and then once for games/, matching the platform/VintagePomelo pattern.
  */
 function ensureDirectory(path: string): string {
   if (!path || path.trim().length === 0) return 'resolved path is empty';
@@ -112,7 +121,7 @@ function ensureDirectory(path: string): string {
   } catch (_) {
   }
   try {
-    fs.mkdirSync(path, true);
+    fs.mkdirSync(path);
   } catch (error) {
     // Another process may have created it between stat and mkdir.
     try {
@@ -318,6 +327,67 @@ export class AppCatalogService {
     return status.ready ? status.root : '';
   }
 
+  /**
+   * Public Download does not allow an application to recreate its own first
+   * level directory with raw file I/O after that directory was removed.
+   * DocumentPicker DOWNLOAD mode is the platform-supported provisioning path:
+   * the user confirms once, the system recreates Download/<bundle>, and this
+   * service can then create games/ normally.
+   */
+  async provisionGamesDirectory(): Promise<GamesDirectoryStatus> {
+    const current = this.ensureGamesDirectory();
+    if (current.ready) return current;
+    if (!this.context) {
+      this.directoryStatus = {
+        root: current.root,
+        games: current.games,
+        ready: false,
+        error: 'application context is not initialized'
+      };
+      return this.directoryStatus;
+    }
+    try {
+      const documentPicker = new picker.DocumentViewPicker(this.context);
+      const options = new picker.DocumentSaveOptions();
+      options.pickerMode = picker.DocumentPickerMode.DOWNLOAD;
+      const uris = await documentPicker.save(options);
+      if (uris.length === 0 || !uris[0]) {
+        this.directoryStatus = {
+          root: current.root,
+          games: current.games,
+          ready: false,
+          error: 'system Download provisioning returned no directory'
+        };
+        return this.directoryStatus;
+      }
+      const provisionedRoot = new fileUri.FileUri(uris[0]).path.replace(/\/+$/, '');
+      const expectedRoot = resolveDownloadLibraryRoot().replace(/\/+$/, '');
+      if (provisionedRoot !== expectedRoot) {
+        this.directoryStatus = {
+          root: expectedRoot,
+          games: joinPath(expectedRoot, GAMES_DIRECTORY),
+          ready: false,
+          error: 'system returned an unexpected Download directory'
+        };
+        return this.directoryStatus;
+      }
+      this.libraryRoot = provisionedRoot;
+      cachedDownloadLibraryRoot = provisionedRoot;
+      hilog.info(DOMAIN, TAG, 'System provisioned Download library: %{public}s', provisionedRoot);
+      return this.ensureGamesDirectory();
+    } catch (error) {
+      this.directoryStatus = {
+        root: current.root,
+        games: current.games,
+        ready: false,
+        error: 'system Download provisioning: ' + describeFileError(error as Object)
+      };
+      hilog.warn(DOMAIN, TAG, 'System Download provisioning was not completed: %{public}s',
+        this.directoryStatus.error);
+      return this.directoryStatus;
+    }
+  }
+
   async scan(): Promise<AppDescriptor[]> {
     const merged: AppDescriptor[] = [];
     const builtins = this.loadBuiltins();
@@ -340,7 +410,18 @@ export class AppCatalogService {
       cached.launchTarget.arguments = settings.arguments;
       cached.launchTarget.workingDirectory = settings.workingDirectory || cached.launchTarget.workingDirectory;
       cached.displayModeOverride = settings.displayModeOverride;
-      cached.available = exists(cached.launchTarget.executable);
+      const directoryStillExists = isDirectory(cached.directory);
+      const executableStillExists = exists(cached.launchTarget.executable);
+      const normalizedDirectory = cached.directory.replace(/\\/g, '/').replace(/\/+$/, '');
+      const normalizedGames = directoryStatus.games.replace(/\\/g, '/').replace(/\/+$/, '');
+      // A deleted game folder must disappear on the next scan. Directory
+      // cards remain only when their folder still exists, so users can choose
+      // a replacement launcher after an EXE was renamed or removed. A loose
+      // executable directly under games/ has no distinct folder and is
+      // removed as soon as that executable disappears.
+      if (!shouldRetainMissingCachedCard(directoryStillExists, executableStillExists,
+        normalizedDirectory === normalizedGames)) return;
+      cached.available = executableStillExists;
       merged.push(cached);
     });
 

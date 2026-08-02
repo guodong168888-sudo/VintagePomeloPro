@@ -12,6 +12,7 @@ import {
   RuntimeSession,
   SessionState,
   WinePresentationMode,
+  normalizeCatalogLaunchIdentity,
   normalizeLaunchPath,
   resolveLaunchDisplayMode,
   resolveWinePresentationMode
@@ -246,6 +247,36 @@ export class AppSessionService {
     if (session.pid > 0 && !testNapi.stopWineSession(session.sessionId)) testNapi.killProcess(session.pid);
     session.state = SessionState.STOPPED;
     this.sessions.delete(session.sessionId);
+  }
+
+  /** Stop a card even when its ArkTS session was lost but native Wine still
+   * reports the process. This is also the fallback used by the running filter. */
+  stopApp(app: AppDescriptor): boolean {
+    const session = this.findByAppId(app.id);
+    if (session) {
+      this.stop(session);
+      return true;
+    }
+    const expectedPath = normalizeCatalogLaunchIdentity(app.launchTarget.executable);
+    if (expectedPath.length === 0) return false;
+    let stopped = false;
+    this.getNativeProcesses().forEach((process: NativeProcessInfo): void => {
+      if (process.state !== 'running' ||
+        normalizeCatalogLaunchIdentity(process.path) !== expectedPath) return;
+      let processStopped = false;
+      try {
+        if (process.sessionId && process.sessionId.length > 0) {
+          processStopped = testNapi.stopWineSession(process.sessionId);
+        }
+      } catch (_) {
+        processStopped = false;
+      }
+      if (!processStopped) {
+        try { processStopped = testNapi.killProcess(process.pid); } catch (_) { processStopped = false; }
+      }
+      stopped = processStopped || stopped;
+    });
+    return stopped;
   }
 
   async stopAll(): Promise<void> {

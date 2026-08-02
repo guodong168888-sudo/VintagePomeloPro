@@ -77,3 +77,14 @@ export function chooseCoverFileName(names: string[]): string {
   }
   return '';
 }
+
+/**
+ * Decide whether a cached card that was not rediscovered by the current scan
+ * still represents something the user can repair. Folder cards survive a
+ * missing launcher so it can be re-associated; deleted folders and deleted
+ * loose files under games/ do not survive.
+ */
+export function shouldRetainMissingCachedCard(directoryExists: boolean,
+  executableExists: boolean, directoryIsGamesRoot: boolean): boolean {
+  return directoryExists && (!directoryIsGamesRoot || executableExists);
+}
