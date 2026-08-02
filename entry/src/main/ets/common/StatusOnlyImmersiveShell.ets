@@ -1,37 +1,22 @@
-import { componentUtils, display, window } from '@kit.ArkUI';
+import { display, window } from '@kit.ArkUI';
 import { DeviceCapabilityPolicy } from './DeviceCapabilityPolicy';
 
-// HDS MINI's actual visual title height.  Do not add an arbitrary gap here:
-// the page-specific cards already own their own outer spacing.
-// Measured on-device: the phone HDS MINI title bar renders ~56vp (its
-// content area is 40vp but the bar includes touch/menu padding), while the
-// tablet/2-in-1 shell renders the 40vp bar.
-export const HDS_MINI_TITLE_HEIGHT_VP: number =
-  DeviceCapabilityPolicy.isPhoneDevice() ? 56 : 40;
+// HDS MINI's documented layout height. VintagePomelo also uses this fixed
+// value and adds the current status-bar avoid area exactly once.
+export const HDS_MINI_TITLE_HEIGHT_VP: number = 40;
 const STATUS_ONLY_SYSTEM_BARS: Array<'status' | 'navigation'> = ['status'];
+const STATUS_ONLY_SYSTEM_BARS_KEY: string = STATUS_ONLY_SYSTEM_BARS.join(',');
 
-// The HDS title bar is a real component with id "HdsTitleBar", so its exact
-// rendered height can be read through componentUtils instead of guessing a
-// per-device constant. The cache is invalidated on rotation / inset changes.
-let cachedHdsTitleBarHeightVp = 0;
-
-function measureHdsTitleBarHeightVp(): number {
-  if (cachedHdsTitleBarHeightVp > 0) return cachedHdsTitleBarHeightVp;
-  try {
-    const info = componentUtils.getRectangleById('HdsTitleBar');
-    const density = Math.max(1, display.getDefaultDisplaySync().densityPixels);
-    if (info && info.size && info.size.height > 0) {
-      cachedHdsTitleBarHeightVp = Math.ceil(info.size.height / density);
-    }
-  } catch (_) {
-  }
-  return cachedHdsTitleBarHeightVp;
+interface WindowShellState {
+  immersive: boolean;
+  systemBarsKey: string;
 }
 
-/** Call after rotation or system-inset changes so the measurement re-runs. */
-export function resetHdsTitleBarMeasurement(): void {
-  cachedHdsTitleBarHeightVp = 0;
-}
+// Routed pages share one EntryAbility window. Reapplying the same system-bar
+// transaction at every push/pop produces extra avoidAreaChange passes on
+// tablets. Cache the applied contract by the real window id, as
+// VintagePomelo does, and only touch window chrome when the contract changed.
+const windowShellStateCache: Map<number, WindowShellState> = new Map<number, WindowShellState>();
 
 export interface StatusOnlyWindowInsets {
   top: number;
@@ -54,27 +39,39 @@ function usesImmersiveLibraryLayout(): boolean {
  */
 export async function applyStatusOnlyImmersiveShell(pageWindow: window.Window): Promise<void> {
   const immersive = usesImmersiveLibraryLayout();
-  if (pageWindow.getWindowProperties().isLayoutFullScreen !== immersive) {
+  const properties = pageWindow.getWindowProperties();
+  const cachedState = windowShellStateCache.get(properties.id);
+  const layoutChanged = properties.isLayoutFullScreen !== immersive;
+  const shellChanged = cachedState?.immersive !== immersive ||
+    cachedState?.systemBarsKey !== (immersive ? STATUS_ONLY_SYSTEM_BARS_KEY : 'managed');
+  if (layoutChanged) {
     await pageWindow.setWindowLayoutFullScreen(immersive);
   }
   if (!immersive) {
     // The normal PC/2-in-1 layout already reserves the system area.  Do not
     // change its navigation policy while returning from a routed page.
+    if (layoutChanged || shellChanged) {
+      try {
+        await pageWindow.setSpecificSystemBarEnabled('status', true);
+      } catch (_) {
+      }
+    }
+    windowShellStateCache.set(properties.id, { immersive: false, systemBarsKey: 'managed' });
+    return;
+  }
+  if (layoutChanged || shellChanged) {
+    await pageWindow.setWindowSystemBarEnable(STATUS_ONLY_SYSTEM_BARS);
     try {
       await pageWindow.setSpecificSystemBarEnabled('status', true);
     } catch (_) {
     }
-    return;
+    try {
+      await pageWindow.setSpecificSystemBarEnabled('navigationIndicator', false);
+    } catch (_) {
+    }
   }
-  await pageWindow.setWindowSystemBarEnable(STATUS_ONLY_SYSTEM_BARS);
-  try {
-    await pageWindow.setSpecificSystemBarEnabled('status', true);
-  } catch (_) {
-  }
-  try {
-    await pageWindow.setSpecificSystemBarEnabled('navigationIndicator', false);
-  } catch (_) {
-  }
+  windowShellStateCache.set(properties.id,
+    { immersive: true, systemBarsKey: STATUS_ONLY_SYSTEM_BARS_KEY });
 }
 
 /**
@@ -103,9 +100,7 @@ export function getStatusOnlyWindowInsets(pageWindow: window.Window): StatusOnly
 
 /** Content begins after the measured system inset and the HDS MINI title. */
 export function getMiniTitleContentTopInset(pageWindow: window.Window): number {
-  const measured = measureHdsTitleBarHeightVp();
-  const titleHeight = measured > 0 ? measured : HDS_MINI_TITLE_HEIGHT_VP;
-  return titleHeight + getStatusOnlyWindowInsets(pageWindow).top;
+  return HDS_MINI_TITLE_HEIGHT_VP + getStatusOnlyWindowInsets(pageWindow).top;
 }
 
 /**
@@ -118,7 +113,6 @@ export function observeStatusOnlyWindowInsets(
   listener: (insets: StatusOnlyWindowInsets) => void,
 ): () => void {
   const refresh = (): void => {
-    resetHdsTitleBarMeasurement();
     listener(getStatusOnlyWindowInsets(pageWindow));
   };
   const callback = (_data: window.AvoidAreaOptions): void => {

@@ -166,7 +166,7 @@ export struct AppCard {
 
   @Builder
   private Cover(height: number) {
-    Stack({ alignContent: Alignment.BottomStart }) {
+    Stack({ alignContent: Alignment.TopStart }) {
       if (this.app.coverPath.length > 0) {
         Image(this.coverSource())
           .width('100%')
@@ -191,7 +191,7 @@ export struct AppCard {
             this.CompactBadge(this.modeText(), '#E0525EC8')
           }
         }
-        .padding({ left: 8, right: 8, bottom: 8 })
+        .padding({ left: 8, right: 8, top: 8 })
         if (this.running) {
           Circle().width(10).height(10).fill('#FF35B779')
             .stroke('#E6FFFFFF').strokeWidth(1.5)
