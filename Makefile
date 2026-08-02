@@ -31,16 +31,8 @@ BUILD_DIR := $(ROOT)/build
 STAMPS    := $(BUILD_DIR)/.stamps
 SCRIPTS   := $(ROOT)/scripts
 DXVK_ARTIFACTS := \
-	$(BUILD_DIR)/dxvk/legacy/x64/bin/d3d9.dll \
-	$(BUILD_DIR)/dxvk/legacy/x64/bin/d3d10core.dll \
-	$(BUILD_DIR)/dxvk/legacy/x64/bin/d3d10.dll \
-	$(BUILD_DIR)/dxvk/legacy/x64/bin/d3d10_1.dll \
 	$(BUILD_DIR)/dxvk/legacy/x64/bin/d3d11.dll \
 	$(BUILD_DIR)/dxvk/legacy/x64/bin/dxgi.dll \
-	$(BUILD_DIR)/dxvk/legacy/x86/bin/d3d9.dll \
-	$(BUILD_DIR)/dxvk/legacy/x86/bin/d3d10core.dll \
-	$(BUILD_DIR)/dxvk/legacy/x86/bin/d3d10.dll \
-	$(BUILD_DIR)/dxvk/legacy/x86/bin/d3d10_1.dll \
 	$(BUILD_DIR)/dxvk/legacy/x86/bin/d3d11.dll \
 	$(BUILD_DIR)/dxvk/legacy/x86/bin/dxgi.dll
 DXVK_STAMP := $(STAMPS)/dxvk-legacy
@@ -79,7 +71,7 @@ $(DXVK_STAMP): $(SCRIPTS)/build_dxvk.sh $(DXVK_SOURCE_INPUTS) | $(STAMPS)
 	bash $(SCRIPTS)/build_dxvk.sh
 	touch $@
 
-# DXVK is produced as a complete D3D9/D3D10/D3D11 side effect of the stamp recipe. Give each
+# DXVK is produced as a four-file side effect of the stamp recipe. Give each
 # packaged DLL an explicit rule so a clean checkout can resolve the assemble
 # dependency before the stamp exists (the previous bare sentinel made CI stop
 # with "No rule to make target .../d3d11.dll").  The size check also prevents
