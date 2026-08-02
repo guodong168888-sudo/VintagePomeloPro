@@ -302,15 +302,16 @@ PY
         cp "$guest_shader_root/$smoke_shader.spv" "$smoke_dir/assets/$smoke_shader.spv"
     done
     local dxvk_root="$DXVK_BUILD_ROOT"
-    [ -f "$dxvk_root/x64/bin/d3d11.dll" ] || err "DXVK Legacy x64 d3d11.dll missing: $dxvk_root/x64/bin/d3d11.dll"
-    [ -f "$dxvk_root/x64/bin/dxgi.dll" ] || err "DXVK Legacy x64 dxgi.dll missing: $dxvk_root/x64/bin/dxgi.dll"
-    [ -f "$dxvk_root/x86/bin/d3d11.dll" ] || err "DXVK Legacy x86 d3d11.dll missing: $dxvk_root/x86/bin/d3d11.dll"
-    [ -f "$dxvk_root/x86/bin/dxgi.dll" ] || err "DXVK Legacy x86 dxgi.dll missing: $dxvk_root/x86/bin/dxgi.dll"
     mkdir -p "$wine_data/dxvk/legacy/x64" "$wine_data/dxvk/legacy/x86"
-    cp "$dxvk_root/x64/bin/d3d11.dll" "$wine_data/dxvk/legacy/x64/d3d11.dll"
-    cp "$dxvk_root/x64/bin/dxgi.dll" "$wine_data/dxvk/legacy/x64/dxgi.dll"
-    cp "$dxvk_root/x86/bin/d3d11.dll" "$wine_data/dxvk/legacy/x86/d3d11.dll"
-    cp "$dxvk_root/x86/bin/dxgi.dll" "$wine_data/dxvk/legacy/x86/dxgi.dll"
+    local dxvk_arch dxvk_dll
+    for dxvk_arch in x64 x86; do
+        for dxvk_dll in d3d9.dll d3d10core.dll d3d10.dll d3d10_1.dll d3d11.dll dxgi.dll; do
+            [ -f "$dxvk_root/$dxvk_arch/bin/$dxvk_dll" ] || \
+                err "DXVK Legacy $dxvk_arch $dxvk_dll missing: $dxvk_root/$dxvk_arch/bin/$dxvk_dll"
+            cp "$dxvk_root/$dxvk_arch/bin/$dxvk_dll" \
+                "$wine_data/dxvk/legacy/$dxvk_arch/$dxvk_dll"
+        done
+    done
     # The DXVK binaries are runtime-owned overlays.  Do not place them next
     # to the smoke executables: that would make the test layout look like a
     # game distribution and would force real games to carry WineHua-specific
@@ -352,9 +353,20 @@ PY
     separated_sample_sha="$(sha256sum "$smoke_dir/assets/venus_separated_sample.spv" | awk '{print $1}')"
     local dxvk_commit
     dxvk_commit="$(git -c safe.directory="$DXVK_SRC" -C "$DXVK_SRC" rev-parse HEAD 2>/dev/null || echo unknown)"
-    local dxvk64_d3d11_sha dxvk64_dxgi_sha dxvk32_d3d11_sha dxvk32_dxgi_sha
+    local dxvk64_d3d9_sha dxvk64_d3d10core_sha dxvk64_d3d10_sha dxvk64_d3d10_1_sha
+    local dxvk64_d3d11_sha dxvk64_dxgi_sha
+    local dxvk32_d3d9_sha dxvk32_d3d10core_sha dxvk32_d3d10_sha dxvk32_d3d10_1_sha
+    local dxvk32_d3d11_sha dxvk32_dxgi_sha
+    dxvk64_d3d9_sha="$(sha256sum "$wine_data/dxvk/legacy/x64/d3d9.dll" | awk '{print $1}')"
+    dxvk64_d3d10core_sha="$(sha256sum "$wine_data/dxvk/legacy/x64/d3d10core.dll" | awk '{print $1}')"
+    dxvk64_d3d10_sha="$(sha256sum "$wine_data/dxvk/legacy/x64/d3d10.dll" | awk '{print $1}')"
+    dxvk64_d3d10_1_sha="$(sha256sum "$wine_data/dxvk/legacy/x64/d3d10_1.dll" | awk '{print $1}')"
     dxvk64_d3d11_sha="$(sha256sum "$wine_data/dxvk/legacy/x64/d3d11.dll" | awk '{print $1}')"
     dxvk64_dxgi_sha="$(sha256sum "$wine_data/dxvk/legacy/x64/dxgi.dll" | awk '{print $1}')"
+    dxvk32_d3d9_sha="$(sha256sum "$wine_data/dxvk/legacy/x86/d3d9.dll" | awk '{print $1}')"
+    dxvk32_d3d10core_sha="$(sha256sum "$wine_data/dxvk/legacy/x86/d3d10core.dll" | awk '{print $1}')"
+    dxvk32_d3d10_sha="$(sha256sum "$wine_data/dxvk/legacy/x86/d3d10.dll" | awk '{print $1}')"
+    dxvk32_d3d10_1_sha="$(sha256sum "$wine_data/dxvk/legacy/x86/d3d10_1.dll" | awk '{print $1}')"
     dxvk32_d3d11_sha="$(sha256sum "$wine_data/dxvk/legacy/x86/d3d11.dll" | awk '{print $1}')"
     dxvk32_dxgi_sha="$(sha256sum "$wine_data/dxvk/legacy/x86/dxgi.dll" | awk '{print $1}')"
     cat > "$wine_data/dxvk/manifest.json" <<EOF
@@ -371,8 +383,8 @@ PY
     "descriptorIndexing": false
   },
   "runtimes": {
-    "x64": {"d3d11.dll": "$dxvk64_d3d11_sha", "dxgi.dll": "$dxvk64_dxgi_sha"},
-    "x86": {"d3d11.dll": "$dxvk32_d3d11_sha", "dxgi.dll": "$dxvk32_dxgi_sha"}
+    "x64": {"d3d9.dll": "$dxvk64_d3d9_sha", "d3d10core.dll": "$dxvk64_d3d10core_sha", "d3d10.dll": "$dxvk64_d3d10_sha", "d3d10_1.dll": "$dxvk64_d3d10_1_sha", "d3d11.dll": "$dxvk64_d3d11_sha", "dxgi.dll": "$dxvk64_dxgi_sha"},
+    "x86": {"d3d9.dll": "$dxvk32_d3d9_sha", "d3d10core.dll": "$dxvk32_d3d10core_sha", "d3d10.dll": "$dxvk32_d3d10_sha", "d3d10_1.dll": "$dxvk32_d3d10_1_sha", "d3d11.dll": "$dxvk32_d3d11_sha", "dxgi.dll": "$dxvk32_dxgi_sha"}
   }
 }
 EOF
@@ -417,6 +429,8 @@ EOF
     if ls "$BUILD_DIR/wine-ohos/share/wine/mono/"*.msi >/dev/null 2>&1; then
         cp "$BUILD_DIR/wine-ohos/share/wine/mono/"*.msi "$wine_data/share/wine/mono/"
         log "    wine-mono.msi → rawfile share/wine/mono/"
+    elif ls "$wine_data/bin/x86_64-windows/"appwiz.cpl >/dev/null 2>&1; then
+        err "appwiz.cpl packaged but wine-mono MSI missing; rebuild with BUILD_WINE_MONO=1"
     fi
     # wine.inf (含 OHOS font substitutes)
     cp "$BUILD_DIR/wine-ohos/loader/wine.inf" "$wine_data/share/wine/"
