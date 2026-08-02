@@ -4,6 +4,8 @@
 
 基线：WineHua `VintagePomeloMaster` @ `ba7218a`
 
+> **同步基线标记**：最新合并到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `0ed802c`）。下次同步先 `git log 0ed802c..origin/master --oneline`，避免重复合并。
+
 ## 2026-07-18 私有基线
 
 - 来源：本地 `VintagePomeloMaster` @ `ba7218a`
