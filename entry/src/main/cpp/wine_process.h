@@ -35,6 +35,9 @@ WineProcessEntry* AddProcess(pid_t pid, const std::string& exeFullPath, int stdo
 void RemoveProcess(pid_t pid, int exitCode = -1,
                    const std::string& exitCodeSource = "unknown");
 void KillAllProcesses();
+/** SIGKILL 目标 pid 及其全部后代 (box64/wine 会 fork 游戏子进程, 只杀根
+ * 进程会留下孤儿继续运行, 导致"停止程序"与 Wine 不联动)。 */
+void KillProcessTree(pid_t root);
 pid_t FindRunningProcessByPath(const std::string& exeFullPath);
 std::string FindSessionIdForClientPid(pid_t clientPid);
 bool GetProcessBySessionId(const std::string& sessionId, WineProcessEntry* result);

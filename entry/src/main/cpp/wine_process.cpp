@@ -14,6 +14,7 @@
 #include <atomic>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 #include <chrono>
 #include <fstream>
@@ -215,6 +216,47 @@ void KillAllProcesses() {
         }
     }
     gPendingToplevels.clear();
+}
+
+void KillProcessTree(pid_t root) {
+    if (root <= 1) return;
+    // BFS 收集 root 的全部后代 (wine/box64 的 fork 链), 后代先杀、根最后杀,
+    // 避免子进程被 reparent 后脱离进程树继续存活。
+    std::vector<pid_t> killOrder;
+    std::unordered_set<pid_t> members;
+    members.insert(root);
+    bool added = true;
+    while (added) {
+        added = false;
+        std::vector<pid_t> candidates;
+        DIR* dir = opendir("/proc");
+        if (!dir) break;
+        struct dirent* e;
+        while ((e = readdir(dir))) {
+            const pid_t pid = atoi(e->d_name);
+            if (pid > 1 && !members.count(pid)) candidates.push_back(pid);
+        }
+        closedir(dir);
+        for (pid_t pid : candidates) {
+            if (members.count(ReadParentPid(pid))) {
+                members.insert(pid);
+                killOrder.push_back(pid);
+                added = true;
+            }
+        }
+    }
+    for (auto it = killOrder.rbegin(); it != killOrder.rend(); ++it) {
+        if (kill(*it, SIGKILL) != 0 && errno != ESRCH) {
+            OH_LOG_WARN(LOG_APP, "[ProcReg] tree kill child pid=%{public}d failed: %{public}s",
+                        *it, strerror(errno));
+        }
+    }
+    if (kill(root, SIGKILL) != 0 && errno != ESRCH) {
+        OH_LOG_WARN(LOG_APP, "[ProcReg] tree kill root pid=%{public}d failed: %{public}s",
+                    root, strerror(errno));
+    }
+    OH_LOG_INFO(LOG_APP, "[ProcReg] tree kill root=%{public}d descendants=%{public}zu",
+                root, killOrder.size());
 }
 
 // -- 进程退出状态日志 --

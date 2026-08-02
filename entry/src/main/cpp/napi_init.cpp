@@ -883,8 +883,20 @@ static napi_value KillProcess(napi_env env, napi_callback_info info) {
     napi_get_value_int32(env, args[0], &pid);
     OH_LOG_INFO(LOG_APP, "[NAPI] killProcess pid=%{public}d", pid);
 
-    kill(pid, SIGKILL);
+    WineProcessEntry entry{};
+    const bool known = pid > 0 && QueryProcessSnapshot(pid, &entry);
+    KillProcessTree(pid);
     RemoveProcess(pid);
+    if (known && gStateTsfn) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "%d:exited", pid);
+        napi_call_threadsafe_function(gStateTsfn, strdup(msg), napi_tsfn_blocking);
+        if (entry.toplevelId > 0) {
+            // 立即联动: 让 ArkTS 关闭该进程的窗口, 不等 Wayland 断连回调
+            WaylandServer::GetInstance()->OnToplevelDestroyed(entry.toplevelId);
+            WaylandServer::GetInstance()->FireToplevelEvent(entry.toplevelId, "destroyed");
+        }
+    }
 
     napi_value r;
     napi_get_boolean(env, true, &r);
@@ -933,8 +945,20 @@ static napi_value StopWineSession(napi_env env, napi_callback_info info) {
     WineProcessEntry entry{};
     const bool found = GetProcessBySessionId(sessionId, &entry);
     if (found) {
-        kill(entry.pid, SIGKILL);
+        const uint32_t toplevelId = entry.toplevelId;
+        KillProcessTree(entry.pid);
         RemoveProcess(entry.pid, -1, "session-stop");
+        if (gStateTsfn) {
+            char msg[64];
+            snprintf(msg, sizeof(msg), "%d:exited", entry.pid);
+            napi_call_threadsafe_function(gStateTsfn, strdup(msg), napi_tsfn_blocking);
+        }
+        if (toplevelId > 0) {
+            // 立即通知 ArkTS 销毁窗口, 保证"关闭运行中的程序"与 Wine
+            // 进程/窗口状态联动, 不依赖 Wayland 断连的异步时序。
+            WaylandServer::GetInstance()->OnToplevelDestroyed(toplevelId);
+            WaylandServer::GetInstance()->FireToplevelEvent(toplevelId, "destroyed");
+        }
     }
     napi_value result;
     napi_get_boolean(env, found, &result);
