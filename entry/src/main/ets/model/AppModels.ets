@@ -59,6 +59,18 @@ export enum ScreenOrientationSetting {
   PORTRAIT = 'portrait'
 }
 
+/**
+ * Wine desktop host window layout. Rounded-screen tablets clip the start menu
+ * when the window is stretched edge-to-edge, so a safe-area mode keeps the
+ * system bars and the corner cutouts out of the Wine surface.
+ */
+export enum DesktopWindowMode {
+  /** Immersive edge-to-edge window with status/navigation bars hidden. */
+  FULLSCREEN = 'fullscreen',
+  /** Keep the window inside the system safe area (bars and rounded corners). */
+  SAFE_AREA = 'safe_area'
+}
+
 /** Matches VintagePomelo's control-bar behavior contract. */
 export enum ControlBarDirection {
   HORIZONTAL = 'horizontal',
@@ -129,6 +141,8 @@ export interface AppSettings {
 export interface GlobalSettings {
   defaultDisplayMode: DisplayMode;
   desktopOrientation: ScreenOrientationSetting;
+  /** Desktop host window layout: immersive fullscreen or safe-area inset. */
+  desktopWindowMode: DesktopWindowMode;
   /** Desktop mode always uses this global profile; single-app may override it. */
   desktopInputProfileId: string;
   viewMode: ViewMode;
@@ -588,6 +602,7 @@ export function createDefaultGlobalSettings(): GlobalSettings {
   return {
     defaultDisplayMode: DisplayMode.DESKTOP,
     desktopOrientation: ScreenOrientationSetting.SENSOR_LANDSCAPE,
+    desktopWindowMode: DesktopWindowMode.FULLSCREEN,
     desktopInputProfileId: 'default',
     viewMode: ViewMode.GRID,
     themeMode: ThemeMode.SYSTEM,

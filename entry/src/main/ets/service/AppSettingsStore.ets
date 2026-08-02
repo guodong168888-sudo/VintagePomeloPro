@@ -6,6 +6,7 @@ import {
   AppDescriptor,
   ControlBarDirection,
   D3DRendererPreference,
+  DesktopWindowMode,
   DisplayMode,
   GlobalSettings,
   ViewMode,
@@ -60,6 +61,7 @@ export class AppSettingsStore {
     this.globalSettings = {
       defaultDisplayMode: DisplayMode.DESKTOP,
       desktopOrientation: current.desktopOrientation,
+      desktopWindowMode: current.desktopWindowMode ?? DesktopWindowMode.FULLSCREEN,
       desktopInputProfileId: current.desktopInputProfileId,
       viewMode: current.viewMode,
       themeMode: current.themeMode,
@@ -108,6 +110,8 @@ export class AppSettingsStore {
       this.globalSettings = {
       defaultDisplayMode: stored.defaultDisplayMode ?? defaults.defaultDisplayMode,
         desktopOrientation: stored.desktopOrientation ?? defaults.desktopOrientation,
+        desktopWindowMode: stored.desktopWindowMode ??
+          this.resolveDesktopWindowModeDefault(defaults.desktopWindowMode),
         desktopInputProfileId: stored.desktopInputProfileId ?? defaults.desktopInputProfileId,
         viewMode: stored.viewMode ?? defaults.viewMode,
         themeMode: stored.themeMode ?? defaults.themeMode,
@@ -131,6 +135,12 @@ export class AppSettingsStore {
     } catch (_) {
       this.globalSettings = createDefaultGlobalSettings();
     }
+  }
+
+  /** Rounded-screen tablets keep the desktop inside the safe area by default so
+   * the start menu is never clipped; other device classes stay immersive. */
+  private resolveDesktopWindowModeDefault(fallback: DesktopWindowMode): DesktopWindowMode {
+    return DeviceCapabilityPolicy.isTabletDevice() ? DesktopWindowMode.SAFE_AREA : fallback;
   }
 
   private loadApps(): void {
@@ -177,6 +187,7 @@ export class AppSettingsStore {
     await this.saveGlobalSettings({
       defaultDisplayMode: current.defaultDisplayMode,
       desktopOrientation: current.desktopOrientation,
+      desktopWindowMode: current.desktopWindowMode,
       desktopInputProfileId: current.desktopInputProfileId,
       viewMode: value,
       themeMode: current.themeMode,
@@ -202,6 +213,7 @@ export class AppSettingsStore {
     await this.saveGlobalSettings({
       defaultDisplayMode: value,
       desktopOrientation: current.desktopOrientation,
+      desktopWindowMode: current.desktopWindowMode,
       desktopInputProfileId: current.desktopInputProfileId,
       viewMode: current.viewMode,
       themeMode: current.themeMode,
@@ -227,6 +239,7 @@ export class AppSettingsStore {
     await this.saveGlobalSettings({
       defaultDisplayMode: current.defaultDisplayMode,
       desktopOrientation: current.desktopOrientation,
+      desktopWindowMode: current.desktopWindowMode,
       desktopInputProfileId: current.desktopInputProfileId,
       viewMode: current.viewMode,
       themeMode: current.themeMode,

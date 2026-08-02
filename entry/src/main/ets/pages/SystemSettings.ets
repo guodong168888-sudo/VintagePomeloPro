@@ -6,6 +6,7 @@ import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import {
   ControlBarDirection,
   D3DRendererPreference,
+  DesktopWindowMode,
   DisplayMode,
   EngineState,
   GlobalSettings,
@@ -300,11 +301,13 @@ struct SystemSettingsPage {
       desktopOrientation: ScreenOrientationSetting = this.settings.desktopOrientation,
       controlBarPositionX: number = this.settings.controlBarPositionX,
       controlBarPositionY: number = this.settings.controlBarPositionY,
-      d3dRendererPreference: D3DRendererPreference = this.settings.d3dRendererPreference): void {
+      d3dRendererPreference: D3DRendererPreference = this.settings.d3dRendererPreference,
+      desktopWindowMode: DesktopWindowMode = this.settings.desktopWindowMode): void {
     const virtualInputChanged = this.settings.virtualInputEnabled !== virtualInputEnabled;
     this.settings = {
       defaultDisplayMode: mode,
        desktopOrientation: desktopOrientation,
+      desktopWindowMode: desktopWindowMode,
       desktopInputProfileId: desktopInputProfileId || 'default',
       viewMode: view,
       themeMode: theme,
@@ -419,6 +422,21 @@ struct SystemSettingsPage {
       this.settings.virtualInputEnabled, this.settings.desktopOrientation,
       this.settings.controlBarPositionX, this.settings.controlBarPositionY, preference);
     promptAction.showToast({ message: '渲染策略已保存；重启 Wine 引擎后生效' });
+  }
+
+  private updateDesktopWindowMode(mode: DesktopWindowMode): void {
+    if (mode === this.settings.desktopWindowMode) return;
+    this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
+      this.settings.useGlassEffect, this.settings.usePageBackground,
+      this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
+      this.settings.controlOpacity, this.settings.gamepadDeadzone,
+      this.settings.outputScale, this.settings.themeMode,
+      this.settings.controlBarDirection, this.settings.virtualMouseConfig,
+      this.settings.desktopInputProfileId, this.settings.pageBackgroundUri,
+      this.settings.virtualInputEnabled, this.settings.desktopOrientation,
+      this.settings.controlBarPositionX, this.settings.controlBarPositionY,
+      this.settings.d3dRendererPreference, mode);
+    promptAction.showToast({ message: '桌面窗口显示已保存；重新打开桌面窗口后生效' });
   }
 
   private updateVirtualMouse(sensitivity: number = this.settings.virtualMouseConfig.mouseSensitivity,
@@ -783,6 +801,24 @@ struct SystemSettingsPage {
                .fontColor(this.settings.desktopOrientation === ScreenOrientationSetting.PORTRAIT ? '#FFFFFFFF' : $r('app.color.text_primary'))
                .onClick(() => this.updateDesktopOrientation(ScreenOrientationSetting.PORTRAIT))
            }.width('100%')
+           Text('桌面窗口显示').fontSize(14).fontWeight(FontWeight.Medium)
+             .fontColor($r('app.color.text_primary')).width('100%')
+           Row({ space: 8 }) {
+             Button('全屏（沉浸）').layoutWeight(1).height(48).borderRadius(14)
+               .fontSize(this.isNarrowPhone() ? 11 : 13)
+               .padding({ left: this.isNarrowPhone() ? 4 : 12, right: this.isNarrowPhone() ? 4 : 12 })
+               .backgroundColor(this.settings.desktopWindowMode === DesktopWindowMode.FULLSCREEN ? $r('app.color.accent') : $r('app.color.search_background'))
+               .fontColor(this.settings.desktopWindowMode === DesktopWindowMode.FULLSCREEN ? '#FFFFFFFF' : $r('app.color.text_primary'))
+               .onClick(() => this.updateDesktopWindowMode(DesktopWindowMode.FULLSCREEN))
+             Button('切边（安全区）').layoutWeight(1).height(48).borderRadius(14)
+               .fontSize(this.isNarrowPhone() ? 11 : 13)
+               .padding({ left: this.isNarrowPhone() ? 4 : 12, right: this.isNarrowPhone() ? 4 : 12 })
+               .backgroundColor(this.settings.desktopWindowMode === DesktopWindowMode.SAFE_AREA ? $r('app.color.accent') : $r('app.color.search_background'))
+               .fontColor(this.settings.desktopWindowMode === DesktopWindowMode.SAFE_AREA ? '#FFFFFFFF' : $r('app.color.text_primary'))
+               .onClick(() => this.updateDesktopWindowMode(DesktopWindowMode.SAFE_AREA))
+           }.width('100%')
+           Text('圆角屏全屏可能遮挡开始菜单；切边模式保留状态栏与圆角安全区。').fontSize(12)
+             .fontColor($r('app.color.text_secondary')).width('100%')
           Text('输出缩放 ' + this.settings.outputScale + '%').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
            Slider({ value: this.settings.outputScale, min: 75, max: 150, step: 5 })
              // Match VintagePomelo: a press on the track must not immediately

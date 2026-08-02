@@ -8,7 +8,7 @@ import { InputRouter } from '../service/InputRouter';
 import { InputDispatcher } from '../service/InputDispatcher';
 import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
 import { AppSettingsStore } from '../service/AppSettingsStore';
-import { DisplayMode, ScreenOrientationSetting } from '../model/AppModels';
+import { DesktopWindowMode, DisplayMode, ScreenOrientationSetting } from '../model/AppModels';
 import { EngineState } from '../model/AppModels';
 import { WineEngineService } from '../service/WineEngineService';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
@@ -23,6 +23,7 @@ export default class DesktopAbility extends UIAbility {
   private windowSizeCallback: ((size: window.Size) => void) | null = null;
   private windowResizeGeneration: number = 0;
   private desktopOrientation: ScreenOrientationSetting = ScreenOrientationSetting.SENSOR_LANDSCAPE;
+  private lastAppliedWindowMode: string = '';
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
@@ -96,11 +97,7 @@ export default class DesktopAbility extends UIAbility {
           // old portrait rectangle into Wayland and leave a white strip after
           // a landscape launch. Apply the window chrome first, then wait for
           // the final rectangle before the first compositor resize.
-          await mw.setWindowLayoutFullScreen(true);
-          await Promise.all([
-            mw.setSpecificSystemBarEnabled('status', false),
-            mw.setSpecificSystemBarEnabled('navigationIndicator', false)
-          ]);
+          await this.applyDesktopWindowMode(mw);
           await this.waitForRequestedOrientation(mw);
 
           if (DeviceCapabilityPolicy.usesForkNativeChildProcess()) {
@@ -119,6 +116,32 @@ export default class DesktopAbility extends UIAbility {
       } catch (e) {
         hilog.error(DOMAIN, TAG, '[DWA] immersive ERR: %{public}s', JSON.stringify(e));
       }
+  }
+
+  /**
+   * Fullscreen stretches the Wine desktop edge-to-edge and hides the system
+   * bars; on rounded-screen tablets that clips the start menu. Safe-area mode
+   * keeps the window inside the system inset so corners and bars stay visible.
+   */
+  private async applyDesktopWindowMode(target: window.Window): Promise<void> {
+    const mode = AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode
+      ?? DesktopWindowMode.FULLSCREEN;
+    this.lastAppliedWindowMode = mode;
+    if (mode === DesktopWindowMode.SAFE_AREA) {
+      await target.setWindowLayoutFullScreen(false);
+      await Promise.all([
+        target.setSpecificSystemBarEnabled('status', true),
+        target.setSpecificSystemBarEnabled('navigationIndicator', true)
+      ]);
+      hilog.info(DOMAIN, TAG, '[DWA] desktop window safe-area layout applied');
+    } else {
+      await target.setWindowLayoutFullScreen(true);
+      await Promise.all([
+        target.setSpecificSystemBarEnabled('status', false),
+        target.setSpecificSystemBarEnabled('navigationIndicator', false)
+      ]);
+      hilog.info(DOMAIN, TAG, '[DWA] desktop window fullscreen layout applied');
+    }
   }
 
   private async waitForRequestedOrientation(target: window.Window): Promise<void> {
@@ -158,6 +181,15 @@ export default class DesktopAbility extends UIAbility {
     if (newId > 0) {
       this.toplevelId = newId;
       AppStorage.setOrCreate('desktopToplevelId', newId);
+    }
+    // A settings change while the singleton desktop ability stays alive must
+    // still reach the window; re-apply only when the mode actually differs.
+    const currentMode = AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode
+      ?? DesktopWindowMode.FULLSCREEN;
+    if (currentMode !== this.lastAppliedWindowMode && this.mainWindow) {
+      this.applyDesktopWindowMode(this.mainWindow).catch((error: Error) => {
+        hilog.warn(DOMAIN, TAG, '[DWA] re-apply window mode failed: %{public}s', JSON.stringify(error));
+      });
     }
     this.attachInputOverlay();
   }
