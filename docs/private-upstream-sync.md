@@ -63,3 +63,16 @@
 - 验证：目录与模型单元测试 24 项通过；Docker/Makefile ARM64 Debug HAP 构建成功，目标/兼容 API 均为 23，guest ABI 为 x86_64。包内包含 ARM64 的 Box64、entry、wine child、VirGL/Wayland 运行库和 `wine-data.zip`；嵌套运行时包含 guest-gfx 环境、EGL、virtio GPU 驱动及图形/音频 smoke。官方签名工具验证通过。
 - 兼容修复：私有 ArkTS 仍调用 `setDisplayScale`，上游合成器已从 `EglRenderer` 移除全局缩放。该 NAPI 导出保留为兼容空操作，实际渲染和输入变换由新合成器测量输出几何统一计算。
 - 未覆盖：尚未在物理 ARM 设备上回归零拷贝全屏、pointer warp/constraints 与私有手机应用内 VirGL；不能由本次离线构建替代。
+
+### 2026-08-02 dxvk 1.10.3 合并（版本 1.1.2 / 1001002）
+
+- 来源：WineHua `origin/master` `0ed802c`，按时间序 cherry-pick 36 个提交（dxvk legacy 1.10.3 phase-2、Venus 呈现/阴影上传优化、wine/PE 修复、d3d8 兼容子模块指针、guest-gfx/guest-vulkan 打包等），2 个跳过（`86838e2`、`6d64109`，仅改上游 Index/DesktopWindow 页）。14 个子模块 gitlink 与上游一致（dxvk=`abe71bc` v1.10.3-28；wine/mesa/virglrenderer=d3d8 兼容分支提交）。
+- 架构取舍：native 层对齐上游最终版；私有文件保留（`game_controller_bridge.*`、`ncp_shim/*`）；UI 与私有运行时 API 恢复自产品线（test 分支）——`runWineExe`（含 sessionId）、`checkWinePrefix`、`setForkNcpEnabled`、手柄回调等导出保留。
+- 关键修复（均为设备实测驱动）：
+  - 打包：DXVK Legacy 全量 DLL（d3d9/d3d10core/d3d10/d3d10_1/d3d11/dxgi ×x64/x86）、`bin/Alarm01.wav`、`bin/x86_64-windows` smoke 必须齐备，否则引擎初始化失败；
+  - wine-mono 11.1.0 与 `appwiz.cpl` 必须同包（缺失时 wineboot 弹框阻塞前缀初始化，导致音频驱动/图标缓存缺失）；assemble 增加守卫；
+  - DXVK 性能：启动前 `setHostShadowProfile('shadow-precise-dirty-ring-inline-upload-coverage-sort')`，立方体 4 FPS → 84 FPS；
+  - games 目录：`bundleManager.getBundleInfoForSelfSync` 动态取包名 + 写探针，杜绝硬编码/假 ready；
+  - 标题栏高度：`componentUtils.getRectangleById('HdsTitleBar')` 运行时实测，替代硬编码。
+- 验证：ARM64 Debug HAP（API 23、`com.vintage.pomelopro` 1.1.2/1001002、旧柚Pro、仅 arm64、guest-gfx+dxvk+mono 载荷完整，官方签名工具验签通过）；平板上引擎 READY、桌面 100+ FPS、DXVK 立方体 84 FPS、干净安装后音频与 Wine 内 EXE 图标恢复。
+- 发布：合入 `private/wine-engine-app` 并显式推送到 `VintagePomeloPro:main`（版本 1.1.2）。
