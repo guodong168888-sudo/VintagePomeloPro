@@ -259,7 +259,8 @@ export default class DesktopAbility extends UIAbility {
 
   private synchronizeDesktopWindow(width: number, height: number): void {
     if (width <= 0 || height <= 0) return;
-    WineWindowManager.getInstance().syncOutputSize(width, height);
+    const content = this.currentContentSize(width, height);
+    WineWindowManager.getInstance().syncOutputSize(content.width, content.height);
     InputOverlayWindowCoordinator.getInstance().syncBounds().catch(() => {});
     const generation = ++this.windowResizeGeneration;
     // Rotation delivers several transient sizes. Re-sample the real window
@@ -269,9 +270,38 @@ export default class DesktopAbility extends UIAbility {
       setTimeout((): void => {
         if (generation !== this.windowResizeGeneration || !this.mainWindow) return;
         const rect = this.mainWindow.getWindowProperties().windowRect;
-        WineWindowManager.getInstance().syncOutputSize(rect.width, rect.height);
+        const settled = this.currentContentSize(rect.width, rect.height);
+        WineWindowManager.getInstance().syncOutputSize(settled.width, settled.height);
         InputOverlayWindowCoordinator.getInstance().syncBounds().catch(() => {});
       }, delay);
     });
+  }
+
+  /**
+   * 窗口布局非全屏时 windowRect 仍是完整窗口尺寸（含状态栏/导航栏区域），
+   * 必须用系统 avoid area 扣除后才与 XComponent surface 内容区一致。
+   * 全屏模式直接返回窗口尺寸。
+   */
+  private currentContentSize(width: number, height: number): window.Size {
+    const mode = AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode
+      ?? DesktopWindowMode.FULLSCREEN;
+    if (mode !== DesktopWindowMode.SAFE_AREA || !this.mainWindow) {
+      return { width: width, height: height };
+    }
+    try {
+      const avoid = this.mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
+      const left = avoid.leftRect ? avoid.leftRect.width : 0;
+      const right = avoid.rightRect ? avoid.rightRect.width : 0;
+      const top = avoid.topRect ? avoid.topRect.height : 0;
+      const bottom = avoid.bottomRect ? avoid.bottomRect.height : 0;
+      const contentW = Math.max(1, width - left - right);
+      const contentH = Math.max(1, height - top - bottom);
+      hilog.info(DOMAIN, TAG,
+        '[DWA] content rect=%{public}dx%{public}d avoid=(l%{public}d r%{public}d t%{public}d b%{public}d)',
+        contentW, contentH, left, right, top, bottom);
+      return { width: contentW, height: contentH };
+    } catch (_) {
+      return { width: width, height: height };
+    }
   }
 }
