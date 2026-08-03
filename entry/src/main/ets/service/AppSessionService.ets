@@ -1,4 +1,5 @@
 import { common, Want } from '@kit.AbilityKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import testNapi from 'libentry.so';
 import {
   AppDescriptor,
@@ -21,6 +22,8 @@ import { WineEngineService } from './WineEngineService';
 import { WineWindowManager } from './WineWindowManager';
 import { InputOverlayWindowCoordinator } from './InputOverlayWindowCoordinator';
 import { AppSettingsStore } from './AppSettingsStore';
+
+const DOMAIN = 0x0000;
 
 export enum LaunchConflictKind {
   NONE = 'none',
@@ -168,7 +171,30 @@ export class AppSessionService {
     if (!ready) return null;
 
     if (presentationMode === WinePresentationMode.DESKTOP) {
-      const desktopSession = await this.ensureDesktopSession();
+      // 桌面根已存在 → 直接复用；已就绪但根丢失 → 短暂等待后重启 shell，
+      // 避免每个卡片启动都空等 30 秒再失败（表现为"所有卡片点击都不行"）。
+      const engine = WineEngineService.getInstance();
+      const wasDesktopReady = engine.isReady() &&
+        engine.getPresentationMode() === WinePresentationMode.DESKTOP;
+      let desktopSession = this.syncDesktopSessionFromNative();
+      if (desktopSession && desktopSession.toplevelId > 0) {
+        if (!WineWindowManager.getInstance().isDesktopAbilityForeground(desktopSession.toplevelId)) {
+          await this.resume(desktopSession);
+        } else {
+          try { testNapi.activateWineSession(desktopSession.sessionId); } catch (_) {}
+          try { testNapi.raiseToplevel(desktopSession.toplevelId); } catch (_) {}
+        }
+      } else if (!wasDesktopReady) {
+        // 首次启动：native launch 线程正在创建 explorer，不能抢跑第二个 shell。
+        desktopSession = await this.ensureDesktopSession();
+      } else {
+        const settling = await this.waitForDesktopRoot(8);
+        desktopSession = (settling && settling.toplevelId > 0) ? settling : null;
+        if (!desktopSession) {
+          const restarted = engine.restartDesktopShell();
+          if (restarted && restarted.pid > 0) desktopSession = await this.ensureDesktopSession();
+        }
+      }
       if (!desktopSession) return null;
       if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP) return desktopSession;
     }
@@ -195,6 +221,19 @@ export class AppSessionService {
     }
     this.sessions.set(session.sessionId, session);
     this.resolvePendingToplevel(session);
+    // created 事件可能早于会话入表到达；若关联仍缺失，直接从 native 会话补
+    // toplevelId，保证二次点击 resume 能唤起窗口而不是静默 no-op。
+    if (session.toplevelId <= 0) {
+      try {
+        const nativeSession = testNapi.getWineSession(session.sessionId) as NativeWineSessionInfo | null;
+        if (nativeSession && nativeSession.toplevelId > 0) {
+          session.toplevelId = nativeSession.toplevelId;
+          hilog.info(DOMAIN, '[SESS]', 'launch: native toplevel fallback sid=%{public}s tl=%{public}d',
+            session.sessionId, session.toplevelId);
+        }
+      } catch (_) {
+      }
+    }
     return session;
   }
 
@@ -208,6 +247,18 @@ export class AppSessionService {
   async resume(session: RuntimeSession): Promise<void> {
     if (!this.context) return;
     try { testNapi.activateWineSession(session.sessionId); } catch (_) {}
+    if (session.toplevelId <= 0) {
+      // ArkTS 侧关联可能因 created 事件缺 sessionId 而丢失，从 native 会话补回。
+      try {
+        const nativeSession = testNapi.getWineSession(session.sessionId) as NativeWineSessionInfo | null;
+        if (nativeSession && nativeSession.toplevelId > 0) {
+          session.toplevelId = nativeSession.toplevelId;
+          hilog.info(DOMAIN, '[SESS]', 'resume: native toplevel fallback sid=%{public}s tl=%{public}d',
+            session.sessionId, session.toplevelId);
+        }
+      } catch (_) {
+      }
+    }
     if (session.toplevelId > 0) {
       try { testNapi.raiseToplevel(session.toplevelId); } catch (_) {}
     }
@@ -361,6 +412,10 @@ export class AppSessionService {
   }
 
   associateToplevel(sessionId: string, clientPid: number, toplevelId: number): void {
+    if (!sessionId && clientPid <= 0) {
+      hilog.warn(DOMAIN, '[SESS]', 'associateToplevel with empty sessionId/clientPid tl=%{public}d (created event lacks identity)',
+        toplevelId);
+    }
     let matched: RuntimeSession | null = sessionId ? this.sessions.get(sessionId) ?? null : null;
     if (!matched && clientPid > 0) {
       this.sessions.forEach((session: RuntimeSession) => {
@@ -498,6 +553,11 @@ export class AppSessionService {
       if (session.pid > 0 && !activePids.has(session.pid)) removed.push(id);
       if (session.pid === 0 && WineEngineService.getInstance().getState() !== EngineState.READY) removed.push(id);
     });
-    removed.forEach((id: string) => this.sessions.delete(id));
+    removed.forEach((id: string) => {
+      const stale = this.sessions.get(id);
+      hilog.info(DOMAIN, '[SESS]', 'reconcile removes session=%{public}s pid=%{public}d state=%{public}s',
+        id, stale ? stale.pid : -1, stale ? stale.state : 'gone');
+      this.sessions.delete(id);
+    });
   }
 }

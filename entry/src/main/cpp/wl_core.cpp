@@ -11,6 +11,7 @@
 #include "input_manager.h"
 #include "plugin_manager.h"
 #include "pointer_extras.h"
+#include "wine_process.h"
 #include "compositor/compositor_utils.h"
 #include "compositor/compositor_constants.h"
 #include "include/viewporter-server-protocol.h"
@@ -619,7 +620,10 @@ void WaylandServer::UpdateToplevelFrameOnCommit(SurfaceData* sd, wl_resource* su
                         sd->toplevelId, fi.screenX, fi.screenY, fi.contentW, fi.contentH);
             FireToplevelEvent(sd->toplevelId, "argb_created", json);
         } else {
-            snprintf(json, sizeof(json), "{\"w\":%d,\"h\":%d}", fi.contentW, fi.contentH);
+            snprintf(json, sizeof(json),
+                     "{\"w\":%d,\"h\":%d,\"sessionId\":\"%s\",\"clientPid\":%u}",
+                     fi.contentW, fi.contentH,
+                     FindSessionIdForClientPid(sd->clientPid).c_str(), sd->clientPid);
             FireToplevelEvent(sd->toplevelId, "created", json);
         }
     }

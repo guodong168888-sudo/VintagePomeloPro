@@ -100,14 +100,16 @@ export default class DesktopAbility extends UIAbility {
           await this.applyDesktopWindowMode(mw);
           await this.waitForRequestedOrientation(mw);
 
-          if (DeviceCapabilityPolicy.usesForkNativeChildProcess()) {
-            this.windowSizeCallback = (size: window.Size): void => {
-              this.synchronizeDesktopWindow(size.width, size.height);
-            };
-            mw.on('windowSizeChange', this.windowSizeCallback);
-            const initialRect = mw.getWindowProperties().windowRect;
-            this.synchronizeDesktopWindow(initialRect.width, initialRect.height);
-          }
+          // 平板/手机统一按实际窗口内容区同步 Wine 输出：
+          // - 全屏模式 rect == 显示尺寸（与 WineWindowManager 的 display 初值一致）；
+          // - 切边安全区模式 rect 为去除系统栏的区域，Wine 桌面按该尺寸渲染，
+          //   不再被压缩/留黑边，触摸坐标也随之对齐。
+          this.windowSizeCallback = (size: window.Size): void => {
+            this.synchronizeDesktopWindow(size.width, size.height);
+          };
+          mw.on('windowSizeChange', this.windowSizeCallback);
+          const initialRect = mw.getWindowProperties().windowRect;
+          this.synchronizeDesktopWindow(initialRect.width, initialRect.height);
           mw.on('windowRectChange', () => {
             InputOverlayWindowCoordinator.getInstance().syncBounds().catch(() => {});
           });

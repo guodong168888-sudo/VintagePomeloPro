@@ -352,8 +352,14 @@ static void xs_get_toplevel(wl_client* client, wl_resource* xsRes, uint32_t id) 
             // PC 模式: created 延迟到首帧 commit (此时才知 wl_shm 格式,
             // ARGB 异型窗口需走子窗口路线而非 ability, 见 surface_commit)
             if (!WaylandServer::GetInstance()->Policy().OhosWindowPerToplevel()) {
-                WaylandServer::GetInstance()->FireToplevelEvent(sd->toplevelId, "created",
-                    "{\"w\":640,\"h\":480}");
+                // created 必须携带 sessionId/clientPid: ArkTS 的 associateToplevel
+                // 依赖它们把 toplevel 关联到卡片会话, 缺失时 session.toplevelId
+                // 恒为 0, 二次点击 resume 静默 no-op (游戏后台跑、无法再唤起)。
+                char json[192];
+                snprintf(json, sizeof(json),
+                         "{\"w\":640,\"h\":480,\"sessionId\":\"%s\",\"clientPid\":%u}",
+                         FindSessionIdForClientPid(sd->clientPid).c_str(), sd->clientPid);
+                WaylandServer::GetInstance()->FireToplevelEvent(sd->toplevelId, "created", json);
             }
         }
     }
