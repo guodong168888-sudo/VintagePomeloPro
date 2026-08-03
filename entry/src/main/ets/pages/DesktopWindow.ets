@@ -7,6 +7,7 @@ import { OH2EVDEV } from '../common/KeyMap';
 import { mapMouseButton } from '../common/MouseMap';
 import {
   DesktopWindowMode,
+  CORNER_SAFE_MARGIN_PX,
   GlobalSettings,
   InputProfile,
   createDefaultGlobalSettings,
@@ -22,8 +23,6 @@ import { InputEventGate } from '../service/InputEventGate';
 import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
 
 const DOMAIN = 0x0000;
-// 切边模式为圆角避让保留的物理像素边距 (覆盖常见平板圆角半径)。
-const CORNER_SAFE_MARGIN_PX = 80;
 
 class DesktopController extends XComponentController {
   private surfaceId: string = '';
@@ -212,7 +211,9 @@ struct DesktopPage {
     }
     try {
       const density = Math.max(1, display.getDefaultDisplaySync().densityPixels);
-      this.cornerSafeMargin = Math.max(16, Math.round(CORNER_SAFE_MARGIN_PX / density));
+      // 用浮点 vp 让物理边距精确等于 CORNER_SAFE_MARGIN_PX,
+      // 保证 XComponent surface 与预置输出尺寸一致, 避免触发桌面重排。
+      this.cornerSafeMargin = Math.max(16, CORNER_SAFE_MARGIN_PX / density);
       hilog.info(DOMAIN, 'LIFE', '[XComp] corner-safe margin=%{public}dvp (%{public}dpx @density=%{public}s)',
         this.cornerSafeMargin, CORNER_SAFE_MARGIN_PX, density.toFixed(2));
     } catch (_) {

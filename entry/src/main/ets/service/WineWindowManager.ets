@@ -2,7 +2,12 @@ import { common, Want } from '@kit.AbilityKit';
 import { window, display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import testNapi from 'libentry.so';
-import { ScreenOrientationSetting, WinePresentationMode } from '../model/AppModels';
+import {
+  CORNER_SAFE_MARGIN_PX,
+  DesktopWindowMode,
+  ScreenOrientationSetting,
+  WinePresentationMode
+} from '../model/AppModels';
 import { PopupWindowManager } from './PopupWindowManager';
 import { ArgbWindowManager } from './ArgbWindowManager';
 import { AppSettingsStore } from './AppSettingsStore';
@@ -127,7 +132,8 @@ export class WineWindowManager {
     // 获取设备显示密度 + 主窗口可用区域
     try {
       const d = display.getDefaultDisplaySync();
-      this.syncOutputSize(d.width, d.height);
+      const safe = this.desktopDisplaySafeSize(d.width, d.height);
+      this.syncOutputSize(safe.width, safe.height);
     } catch (_) {
       this.displayScale = 1.61;
       this.scaleBoost = 2.0 / 1.61;
@@ -162,7 +168,8 @@ export class WineWindowManager {
     this.outputScalePercent = Math.max(75, Math.min(150, value));
     try {
       const currentDisplay = display.getDefaultDisplaySync();
-      this.syncOutputSize(currentDisplay.width, currentDisplay.height);
+      const safe = this.desktopDisplaySafeSize(currentDisplay.width, currentDisplay.height);
+      this.syncOutputSize(safe.width, safe.height);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, '[MW] setOutputScalePercent failed: %{public}s', JSON.stringify(error));
     }
@@ -220,12 +227,29 @@ export class WineWindowManager {
         width = height;
         height = swapped;
       }
-      this.syncOutputSize(width, height);
+      const safe = this.desktopDisplaySafeSize(width, height);
+      this.syncOutputSize(safe.width, safe.height);
       hilog.info(DOMAIN, TAG, '[MW] prepared output orientation=%{public}s size=%{public}dx%{public}d',
         setting, width, height);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, '[MW] prepare output orientation failed: %{public}s', JSON.stringify(error));
     }
+  }
+
+  /**
+   * 切边模式: 显示尺寸四边各让出圆角避让边距, 使 explorer 桌面壳在
+   * 出生时就按正确分辨率布局 (任务栏位置正确); 全屏模式返回原尺寸。
+   */
+  desktopDisplaySafeSize(width: number, height: number): { width: number; height: number } {
+    const mode = AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode
+      ?? DesktopWindowMode.FULLSCREEN;
+    if (mode !== DesktopWindowMode.SAFE_AREA) {
+      return { width: width, height: height };
+    }
+    return {
+      width: Math.max(1, width - CORNER_SAFE_MARGIN_PX * 2),
+      height: Math.max(1, height - CORNER_SAFE_MARGIN_PX * 2)
+    };
   }
 
   prepareSingleAppComposition(): void {

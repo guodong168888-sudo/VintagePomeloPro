@@ -71,6 +71,9 @@ export enum DesktopWindowMode {
   SAFE_AREA = 'safe_area'
 }
 
+/** 切边模式为圆角避让保留的物理像素边距 (每侧)。 */
+export const CORNER_SAFE_MARGIN_PX = 80;
+
 /** Matches VintagePomelo's control-bar behavior contract. */
 export enum ControlBarDirection {
   HORIZONTAL = 'horizontal',
