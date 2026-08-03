@@ -4,7 +4,20 @@
 
 基线：WineHua `VintagePomeloMaster` @ `ba7218a`
 
-> **同步基线标记**：最新合并到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `0ed802c`）。下次同步先 `git log 0ed802c..origin/master --oneline`，避免重复合并。
+> **同步基线标记**：最新合并到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `8089968`）。下次同步先 `git log 8089968..origin/master --oneline`，避免重复合并。
+
+### 2026-08-03 三项修复 + 合并 Aug 3 输入提交
+
+- 分支：`feature/20260803-master-sync`（基于 `private/wine-engine-app` `b66318b`）。
+- 上游同步：合并 Aug 3 `8089968`（zwp_relative_pointer_v1 取代 warp 补偿，修红警2光标偏移/PAL2点击瞬移）→ 私有 `0e2a86e`，无冲突 cherry-pick（本地输入代码与上游父提交一致）。
+- 排除记录：合成器 Layer 重构（阶段 1-4 `76a2cd4` `d5deed7` `6df338a` `c2bd0ee`）与本地私有 compositor 架构（桌面全屏零拷贝、phone in-process VirGL 直连）冲突大、与三项修复无关，维持暂缓；Aug 1-2 输入/mono/字体提交本地已有等价实现，不重复合并。
+- 三项修复：
+  - `e837ceb` Fix 1：删除 `RunWineExe` 的残留单例复用（进程退出后登记未清 → 二次启动返回死 pid）。对齐 master，每次经 broker 新建；ArkTS `result.reused` 分支恒 false 安全。
+  - `10105b5` Fix 2：新增全局设置 `desktopWindowMode`（全屏/切边安全区）。圆角屏全屏遮挡开始菜单；平板默认切边，`DesktopAbility` 按设置应用 `setWindowLayoutFullScreen` + 系统栏显隐，并在窗口再次打开时重应用。
+  - `ab4fdab` Fix 3：停止程序改为杀死整棵 wine/box64 进程树（`KillProcessTree`，后代先杀再杀根），并立即触发 Wayland toplevel `destroyed` 事件 + `pid:exited` 状态消息，使 ArkTS 关窗与运行状态即时联动，不依赖断连异步时序。
+- 构建验证：目录/模型单测 34 项通过；Docker `winehua-dev` ARM64 Debug HAP（API 23、`com.vintage.pomelopro` 1.1.2/1001002、旧柚Pro、仅 arm64）打包+签名成功；包内 guest-gfx、图形/音频 smoke、wine-mono-11.1.0 msi、dxvk legacy x64/x86 全量 DLL 完整；`hap-sign-tool.jar verify-app` 验签通过。
+- 产物：`F:\PomeloWin\artifacts\VintagePomeloPro-1.1.2-master-sync-20260803\旧柚Pro-1.1.2-master-sync.hap`，SHA-256 `021FB252CF69D420CDFCD09CA3F5299950DAB2D95B7F043519A0946695BB8A60`。
+- 未覆盖：平板当前离线，未做真机回归（二次运行/切边显示/杀死联动三项仅代码与包级别验证）；合入 `private/wine-engine-app` 并推送 `VintagePomeloPro:main`。
 
 ## 2026-07-18 私有基线
 
