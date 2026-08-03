@@ -240,7 +240,7 @@ export class WineWindowManager {
    * 切边模式: 显示尺寸四边各让出圆角避让边距, 使 explorer 桌面壳在
    * 出生时就按正确分辨率布局 (任务栏位置正确); 全屏模式返回原尺寸。
    */
-  desktopDisplaySafeSize(width: number, height: number): { width: number; height: number } {
+  desktopDisplaySafeSize(width: number, height: number): window.Size {
     const mode = AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode
       ?? DesktopWindowMode.FULLSCREEN;
     if (mode !== DesktopWindowMode.SAFE_AREA) {
