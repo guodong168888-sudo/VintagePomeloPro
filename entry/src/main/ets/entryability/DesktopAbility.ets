@@ -132,10 +132,14 @@ export default class DesktopAbility extends UIAbility {
       ?? DesktopWindowMode.FULLSCREEN;
     this.lastAppliedWindowMode = mode;
     if (mode === DesktopWindowMode.SAFE_AREA) {
-      await target.setWindowLayoutFullScreen(false);
+      // 切边模式同样隐藏系统标题栏并让桌面铺满: 保留系统栏会把可见区
+      // 压到 2560x1430, 而 Wine 桌面按 1280x800 布局 (任务栏在 y=780),
+      // 底部 85px (start 栏) 会被切掉, 且内容整体偏移导致鼠标位置错位。
+      // 圆角裁剪如需规避, 后续可加小幅内边距 (corner inset), 不再显示系统栏。
+      await target.setWindowLayoutFullScreen(true);
       await Promise.all([
-        target.setSpecificSystemBarEnabled('status', true),
-        target.setSpecificSystemBarEnabled('navigationIndicator', true)
+        target.setSpecificSystemBarEnabled('status', false),
+        target.setSpecificSystemBarEnabled('navigationIndicator', false)
       ]);
       // 系统栏区域保持黑色，避免安全区模式出现白色边条。
       try {
