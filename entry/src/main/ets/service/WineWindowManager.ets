@@ -237,8 +237,9 @@ export class WineWindowManager {
   }
 
   /**
-   * 切边模式: 显示尺寸四边各让出圆角避让边距, 使 explorer 桌面壳在
-   * 出生时就按正确分辨率布局 (任务栏位置正确); 全屏模式返回原尺寸。
+   * 切边模式: 只缩宽度让出左右圆角避让边距, 高度保持充满。
+   * 桌面矩形 (margin..W-margin, 0..H) 完全避开四角圆角, 且上下满屏;
+   * 使 explorer 桌面壳出生时就按正确分辨率布局。全屏模式返回原尺寸。
    */
   desktopDisplaySafeSize(width: number, height: number): window.Size {
     const mode = AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode
@@ -248,7 +249,7 @@ export class WineWindowManager {
     }
     return {
       width: Math.max(1, width - CORNER_SAFE_MARGIN_PX * 2),
-      height: Math.max(1, height - CORNER_SAFE_MARGIN_PX * 2)
+      height: height
     };
   }
 

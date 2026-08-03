@@ -557,9 +557,9 @@ struct DesktopPage {
     .width('100%').height('100%').backgroundColor('#000')
     .padding({
       left: this.cornerSafeMargin,
-      top: this.cornerSafeMargin,
+      top: 0,
       right: this.cornerSafeMargin,
-      bottom: this.cornerSafeMargin
+      bottom: 0
     })
     .id('wine-desktop-input-root')
     .focusable(true)
