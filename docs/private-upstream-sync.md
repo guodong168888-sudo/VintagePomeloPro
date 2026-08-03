@@ -99,3 +99,13 @@
   - 标题栏高度：`componentUtils.getRectangleById('HdsTitleBar')` 运行时实测，替代硬编码。
 - 验证：ARM64 Debug HAP（API 23、`com.vintage.pomelopro` 1.1.2/1001002、旧柚Pro、仅 arm64、guest-gfx+dxvk+mono 载荷完整，官方签名工具验签通过）；平板上引擎 READY、桌面 100+ FPS、DXVK 立方体 84 FPS、干净安装后音频与 Wine 内 EXE 图标恢复。
 - 发布：合入 `private/wine-engine-app` 并显式推送到 `VintagePomeloPro:main`（版本 1.1.2）。
+
+### 2026-08-03/04 真机验证三项修复（平板 API 24）
+
+- 装机方式：因签名不一致先卸载再安装 debug HAP（games 目录在共享 Download，不受影响；Wine prefix 重建）。
+- Fix 1（卡片二次启动/唤起）：`created` 事件携带 `sessionId/clientPid` 后，运行中再点卡片正确唤起（`onNewWant` 指向新 toplevel）；杀死后重新启动正常，引擎全程 READY。
+- Fix 2（切边/圆角避让，最终方案）：切边=沉浸全屏（隐藏系统栏）+ **只缩左右宽度、高度充满**，边距按设备自动估算（显示短边 5%，夹 40–100px；本机 2560×1600 → 80px）；explorer 启动前预置输出 1200×800，任务栏/开始按钮出生即在正确位置；XComponent 与输入覆盖层（InputOverlay）同步左右内缩，虚拟鼠标/触摸坐标与 surface 对齐（点开始按钮成功弹出开始菜单）。
+- Fix 3（杀进程联动+桌面保活）：`KillProcessTree` 杀整树 + 立即触发 toplevel destroyed；wineserver/explorer 登记为 `@engine/` 核心进程，用户程序退出/被杀后注册表保持非空 → 引擎保持 READY、桌面不拆。
+- 构建：`scripts/vpbuild.sh` 复用常驻容器 `vp-build`（不再每次 docker run 新建容器）；Docker `winehua-dev` ARM64 Debug HAP 验签通过。
+- 产物：`F:\PomeloWin\artifacts\VintagePomeloPro-1.1.2-master-sync-20260803\旧柚Pro-1.1.2-master-sync-automargin.hap`。
+- 结论：用户真机确认“好用”，本地提交当前版本（`644f6de`），未推送。
