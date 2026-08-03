@@ -197,7 +197,10 @@ void AppendD3dBackendEnv(std::vector<std::string>& env,
          * visible through WineHua's explicit Guest/Host shadow mapping.
          * Query the real Host objects instead of polling stale Guest words. */
         "VN_PERF=no_fence_feedback,no_query_feedback",
-        "WINEDLLOVERRIDES=d3d9=n;d3d10core=n;d3d10=n;d3d10_1=n;d3d11=n;dxgi=n",
+        /* 与 master 方针一致: DXVK 只接管 D3D11。DX9/10/10.1 使用 Wine 内建
+         * WineD3D → OpenGL → VirGL, 该路径在 Venus/Maleoon 栈上对老游戏更
+         * 成熟稳定; 全 D3D 走 DXVK(Venus) 会破坏原本 VirGL 驱动的游戏。 */
+        "WINEDLLOVERRIDES=d3d11=n;dxgi=n",
         "DXVK_WINEHUA_COMMAND_QUERY_RESET=1",
         "DXVK_WINEHUA_FLUSH_DYNAMIC_MAPPED=1",
         /* Prefer the native RGBA8 SNORM render-target path. On devices such
