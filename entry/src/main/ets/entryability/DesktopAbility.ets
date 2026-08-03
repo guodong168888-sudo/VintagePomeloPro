@@ -100,16 +100,18 @@ export default class DesktopAbility extends UIAbility {
           await this.applyDesktopWindowMode(mw);
           await this.waitForRequestedOrientation(mw);
 
-          // 平板/手机统一按实际窗口内容区同步 Wine 输出：
-          // - 全屏模式 rect == 显示尺寸（与 WineWindowManager 的 display 初值一致）；
-          // - 切边安全区模式 rect 为去除系统栏的区域，Wine 桌面按该尺寸渲染，
-          //   不再被压缩/留黑边，触摸坐标也随之对齐。
-          this.windowSizeCallback = (size: window.Size): void => {
-            this.synchronizeDesktopWindow(size.width, size.height);
-          };
-          mw.on('windowSizeChange', this.windowSizeCallback);
-          const initialRect = mw.getWindowProperties().windowRect;
-          this.synchronizeDesktopWindow(initialRect.width, initialRect.height);
+          // 输出尺寸以 XComponent surface 为唯一权威 (onSurfaceChanged → 
+          // syncOutputSize/notifyToplevelResize)。窗口 rect 在非全屏布局下
+          // 仍是完整窗口尺寸, 且不包含底部手势导航区, 用来同步输出会与
+          // surface 错配 → 桌面被压缩/白边/触摸错位。
+          if (DeviceCapabilityPolicy.usesForkNativeChildProcess()) {
+            this.windowSizeCallback = (size: window.Size): void => {
+              this.synchronizeDesktopWindow(size.width, size.height);
+            };
+            mw.on('windowSizeChange', this.windowSizeCallback);
+            const initialRect = mw.getWindowProperties().windowRect;
+            this.synchronizeDesktopWindow(initialRect.width, initialRect.height);
+          }
           mw.on('windowRectChange', () => {
             InputOverlayWindowCoordinator.getInstance().syncBounds().catch(() => {});
           });
@@ -259,8 +261,7 @@ export default class DesktopAbility extends UIAbility {
 
   private synchronizeDesktopWindow(width: number, height: number): void {
     if (width <= 0 || height <= 0) return;
-    const content = this.currentContentSize(width, height);
-    WineWindowManager.getInstance().syncOutputSize(content.width, content.height);
+    WineWindowManager.getInstance().syncOutputSize(width, height);
     InputOverlayWindowCoordinator.getInstance().syncBounds().catch(() => {});
     const generation = ++this.windowResizeGeneration;
     // Rotation delivers several transient sizes. Re-sample the real window
@@ -270,38 +271,9 @@ export default class DesktopAbility extends UIAbility {
       setTimeout((): void => {
         if (generation !== this.windowResizeGeneration || !this.mainWindow) return;
         const rect = this.mainWindow.getWindowProperties().windowRect;
-        const settled = this.currentContentSize(rect.width, rect.height);
-        WineWindowManager.getInstance().syncOutputSize(settled.width, settled.height);
+        WineWindowManager.getInstance().syncOutputSize(rect.width, rect.height);
         InputOverlayWindowCoordinator.getInstance().syncBounds().catch(() => {});
       }, delay);
     });
-  }
-
-  /**
-   * 窗口布局非全屏时 windowRect 仍是完整窗口尺寸（含状态栏/导航栏区域），
-   * 必须用系统 avoid area 扣除后才与 XComponent surface 内容区一致。
-   * 全屏模式直接返回窗口尺寸。
-   */
-  private currentContentSize(width: number, height: number): window.Size {
-    const mode = AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode
-      ?? DesktopWindowMode.FULLSCREEN;
-    if (mode !== DesktopWindowMode.SAFE_AREA || !this.mainWindow) {
-      return { width: width, height: height };
-    }
-    try {
-      const avoid = this.mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
-      const left = avoid.leftRect ? avoid.leftRect.width : 0;
-      const right = avoid.rightRect ? avoid.rightRect.width : 0;
-      const top = avoid.topRect ? avoid.topRect.height : 0;
-      const bottom = avoid.bottomRect ? avoid.bottomRect.height : 0;
-      const contentW = Math.max(1, width - left - right);
-      const contentH = Math.max(1, height - top - bottom);
-      hilog.info(DOMAIN, TAG,
-        '[DWA] content rect=%{public}dx%{public}d avoid=(l%{public}d r%{public}d t%{public}d b%{public}d)',
-        contentW, contentH, left, right, top, bottom);
-      return { width: contentW, height: contentH };
-    } catch (_) {
-      return { width: width, height: height };
-    }
   }
 }
