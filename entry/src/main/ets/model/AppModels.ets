@@ -71,8 +71,15 @@ export enum DesktopWindowMode {
   SAFE_AREA = 'safe_area'
 }
 
-/** 切边模式为圆角避让保留的物理像素边距 (每侧)。 */
-export const CORNER_SAFE_MARGIN_PX = 80;
+/**
+ * 自动估算设备圆角半径 (物理像素): 取显示短边的 5%, 夹在 [40, 100]。
+ * 不同设备圆角不同, 固定值不合适; 短边比例估算对主流设备误差在
+ * ±20px 内, 且保证避让量足够又不至于像窗口边框。
+ */
+export function resolveCornerSafeMarginPx(width: number, height: number): number {
+  const short = Math.min(width, height);
+  return Math.max(40, Math.min(100, Math.round(short * 0.05)));
+}
 
 /** Matches VintagePomelo's control-bar behavior contract. */
 export enum ControlBarDirection {

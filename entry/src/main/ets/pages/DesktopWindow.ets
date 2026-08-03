@@ -7,11 +7,11 @@ import { OH2EVDEV } from '../common/KeyMap';
 import { mapMouseButton } from '../common/MouseMap';
 import {
   DesktopWindowMode,
-  CORNER_SAFE_MARGIN_PX,
   GlobalSettings,
   InputProfile,
   createDefaultGlobalSettings,
-  createDefaultInputProfile
+  createDefaultInputProfile,
+  resolveCornerSafeMarginPx
 } from '../model/AppModels';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { InputRouter } from '../service/InputRouter';
@@ -211,11 +211,13 @@ struct DesktopPage {
     }
     try {
       const density = Math.max(1, display.getDefaultDisplaySync().densityPixels);
-      // 用浮点 vp 让物理边距精确等于 CORNER_SAFE_MARGIN_PX,
+      const d = display.getDefaultDisplaySync();
+      const marginPx = resolveCornerSafeMarginPx(d.width, d.height);
+      // 用浮点 vp 让物理边距精确等于自动估算值,
       // 保证 XComponent surface 与预置输出尺寸一致, 避免触发桌面重排。
-      this.cornerSafeMargin = Math.max(16, CORNER_SAFE_MARGIN_PX / density);
+      this.cornerSafeMargin = Math.max(16, marginPx / density);
       hilog.info(DOMAIN, 'LIFE', '[XComp] corner-safe margin=%{public}dvp (%{public}dpx @density=%{public}s)',
-        this.cornerSafeMargin, CORNER_SAFE_MARGIN_PX, density.toFixed(2));
+        this.cornerSafeMargin, marginPx, density.toFixed(2));
     } catch (_) {
       this.cornerSafeMargin = 48;
     }

@@ -1,7 +1,13 @@
 import { window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { DisplayMode, WineInputSession } from '../model/AppModels';
+import {
+  DesktopWindowMode,
+  DisplayMode,
+  WineInputSession,
+  resolveCornerSafeMarginPx
+} from '../model/AppModels';
 import { InputDispatcher } from './InputDispatcher';
+import { AppSettingsStore } from './AppSettingsStore';
 
 export interface InputOverlaySnapshot {
   session: WineInputSession;
@@ -125,10 +131,17 @@ export class InputOverlayWindowCoordinator {
       // showWindow 后忽略对零尺寸子窗口的层级调整，导致 Wine 的直连
       // Surface 完全盖住 ArkTS 控件。
       const initialRect = parentWindow.getWindowProperties().windowRect;
+      let initLeft = initialRect.left;
+      let initWidth = initialRect.width;
+      if (AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode === DesktopWindowMode.SAFE_AREA) {
+        const margin = resolveCornerSafeMarginPx(initialRect.width, initialRect.height);
+        initLeft += margin;
+        initWidth = Math.max(1, initWidth - margin * 2);
+      }
       hilog.info(OVERLAY_DOMAIN, OVERLAY_TAG,
         'attach session=%{public}s visible=%{public}s rect=%{public}d,%{public}d %{public}dx%{public}d',
-        sessionId, controlsVisible ? 'true' : 'false', initialRect.left, initialRect.top,
-        initialRect.width, initialRect.height);
+        sessionId, controlsVisible ? 'true' : 'false', initLeft, initialRect.top,
+        initWidth, initialRect.height);
       let overlay: window.Window | null = null;
       let configuredCreateError: string = '';
       try {
@@ -136,8 +149,8 @@ export class InputOverlayWindowCoordinator {
           title: '', decorEnabled: false, isModal: false, zLevel: 9000,
           maximizeSupported: true,
           windowRect: {
-            left: Math.round(initialRect.left), top: Math.round(initialRect.top),
-            width: Math.max(1, Math.round(initialRect.width)),
+            left: Math.round(initLeft), top: Math.round(initialRect.top),
+            width: Math.max(1, Math.round(initWidth)),
             height: Math.max(1, Math.round(initialRect.height))
           }
         });
@@ -300,8 +313,17 @@ export class InputOverlayWindowCoordinator {
     if (!this.overlayWindow || !this.parentWindow) return;
     try {
       const rect = this.parentWindow.getWindowProperties().windowRect;
-      await this.overlayWindow.resize(Math.max(1, Math.round(rect.width)), Math.max(1, Math.round(rect.height)));
-      await this.overlayWindow.moveWindowToGlobal(Math.round(rect.left), Math.round(rect.top));
+      // 切边模式: 输入覆盖层与桌面 XComponent 同步左右内缩, 使覆盖层
+      // 局部坐标 == XComponent surface 坐标, 虚拟鼠标/触摸点击不再偏移。
+      let left = rect.left;
+      let width = rect.width;
+      if (AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode === DesktopWindowMode.SAFE_AREA) {
+        const margin = resolveCornerSafeMarginPx(rect.width, rect.height);
+        left += margin;
+        width = Math.max(1, width - margin * 2);
+      }
+      await this.overlayWindow.resize(Math.max(1, Math.round(width)), Math.max(1, Math.round(rect.height)));
+      await this.overlayWindow.moveWindowToGlobal(Math.round(left), Math.round(rect.top));
     } catch (error) {
       this.snapshot.lastError = 'syncBounds: ' + JSON.stringify(error);
       this.publish();

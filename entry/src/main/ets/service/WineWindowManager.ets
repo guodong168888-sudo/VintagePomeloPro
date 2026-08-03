@@ -3,9 +3,9 @@ import { window, display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import testNapi from 'libentry.so';
 import {
-  CORNER_SAFE_MARGIN_PX,
   DesktopWindowMode,
   ScreenOrientationSetting,
+  resolveCornerSafeMarginPx,
   WinePresentationMode
 } from '../model/AppModels';
 import { PopupWindowManager } from './PopupWindowManager';
@@ -247,8 +247,9 @@ export class WineWindowManager {
     if (mode !== DesktopWindowMode.SAFE_AREA) {
       return { width: width, height: height };
     }
+    const margin = resolveCornerSafeMarginPx(width, height);
     return {
-      width: Math.max(1, width - CORNER_SAFE_MARGIN_PX * 2),
+      width: Math.max(1, width - margin * 2),
       height: height
     };
   }
