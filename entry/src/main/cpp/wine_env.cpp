@@ -178,7 +178,10 @@ void AppendD3dBackendEnv(std::vector<std::string>& env,
         "WINEHUA_VULKAN_RUNTIME=1",
         "WINEHUA_VULKAN_LOADER_ARCH=x86_64",
         "WINEHUA_VENUS_ICD_ARCH=x86_64",
+#ifdef __aarch64__
         "USE_LIBBOX64=1",
+#endif
+#ifdef __aarch64__
         "BOX64_LD_LIBRARY_PATH=" + box64LibraryPath,
         "BOX64_EMULATED_LIBS=libvulkan.so:libvulkan.so.1:"
             "libEGL.so:libEGL.so.1:libGLESv2.so:libGLESv2.so.2:"
@@ -186,6 +189,7 @@ void AppendD3dBackendEnv(std::vector<std::string>& env,
             "libwayland-client.so:libwayland-client.so.0:libwayland-server.so:"
             "libwayland-server.so.0:libwayland-egl.so:libwayland-egl.so.1:"
             "libdrm.so:libdrm.so.2:libffi.so:libffi.so.8",
+#endif
         "VK_DRIVER_FILES=" + guestVulkanIcd,
         "VK_ICD_FILENAMES=" + guestVulkanIcd,
         "VN_DEBUG=vtest",
@@ -227,12 +231,15 @@ void AppendProductDxvkEnv(std::vector<std::string>& env,
         // directory with the informational startup stream.
         "DXVK_LOG_LEVEL=warn",
         "DXVK_LOG_PATH=C:\\windows\\temp",
-        "BOX64_DYNAREC_WEAKBARRIER=0",
         "WINEHUA_PERF_PROFILE=" + selectedProfile,
         "DXVK_WINEHUA_PRECISE_SHADOW=1",
         "VN_WINEHUA_STRONG_RING_BARRIER=1",
     };
     for (const std::string& line : managed) UpsertEnvLine(env, line);
+#ifdef __aarch64__
+    // BOX64 变量仅在 ARM64 生效; x86_64 主机设置它会破坏 broker entryParams。
+    UpsertEnvLine(env, "BOX64_DYNAREC_WEAKBARRIER=0");
+#endif
     if (selectedProfile ==
         "shadow-precise-dirty-ring-inline-upload-descriptor-serialized")
         UpsertEnvLine(env, "VKR_WINEHUA_DESCRIPTOR_UPDATE_SERIALIZE=1");

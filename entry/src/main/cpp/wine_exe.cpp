@@ -374,6 +374,7 @@ static pid_t SpawnGuestProgram(const GuestProgramOptions& options)
 #else
     UpsertEnv(&envStrs, "LD_LIBRARY_PATH=" + libraryPath);
 #endif
+#ifdef __aarch64__
     UpsertEnv(&envStrs, "BOX64_LD_LIBRARY_PATH=" + libraryPath);
     UpsertEnv(&envStrs,
         "BOX64_EMULATED_LIBS=libvulkan.so:libvulkan.so.1:"
@@ -387,6 +388,7 @@ static pid_t SpawnGuestProgram(const GuestProgramOptions& options)
     // otherwise grow the shared stderr log by gigabytes before the watchdog.
     UpsertEnv(&envStrs, "BOX64_LOG=1");
     UpsertEnv(&envStrs, "BOX64_NOBANNER=1");
+#endif
     UpsertEnv(&envStrs, "VK_DRIVER_FILES=" + icd);
     UpsertEnv(&envStrs, "VK_ICD_FILENAMES=" + icd);
     UpsertEnv(&envStrs, "VN_DEBUG=vtest,result");
