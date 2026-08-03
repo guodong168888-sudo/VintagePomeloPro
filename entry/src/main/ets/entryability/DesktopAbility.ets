@@ -206,6 +206,7 @@ export default class DesktopAbility extends UIAbility {
     // still reach the window; re-apply only when the mode actually differs.
     const currentMode = AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode
       ?? DesktopWindowMode.FULLSCREEN;
+    AppStorage.setOrCreate('desktopWindowMode', currentMode);
     if (currentMode !== this.lastAppliedWindowMode && this.mainWindow) {
       this.applyDesktopWindowMode(this.mainWindow).catch((error: Error) => {
         hilog.warn(DOMAIN, TAG, '[DWA] re-apply window mode failed: %{public}s', JSON.stringify(error));

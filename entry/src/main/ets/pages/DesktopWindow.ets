@@ -1,10 +1,17 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { common } from '@kit.AbilityKit';
+import { display } from '@kit.ArkUI';
 import testNapi from 'libentry.so';
 import { WineWindowManager } from '../service/WineWindowManager';
 import { OH2EVDEV } from '../common/KeyMap';
 import { mapMouseButton } from '../common/MouseMap';
-import { GlobalSettings, InputProfile, createDefaultGlobalSettings, createDefaultInputProfile } from '../model/AppModels';
+import {
+  DesktopWindowMode,
+  GlobalSettings,
+  InputProfile,
+  createDefaultGlobalSettings,
+  createDefaultInputProfile
+} from '../model/AppModels';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { InputRouter } from '../service/InputRouter';
 import { InputDispatcher } from '../service/InputDispatcher';
@@ -15,6 +22,8 @@ import { InputEventGate } from '../service/InputEventGate';
 import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
 
 const DOMAIN = 0x0000;
+// 切边模式为圆角避让保留的物理像素边距 (覆盖常见平板圆角半径)。
+const CORNER_SAFE_MARGIN_PX = 80;
 
 class DesktopController extends XComponentController {
   private surfaceId: string = '';
@@ -91,6 +100,8 @@ class DesktopController extends XComponentController {
 @Component
 struct DesktopPage {
   @StorageLink('desktopToplevelId') @Watch('onDesktopToplevelChanged') private desktopToplevelId: number = 0;
+  @StorageLink('desktopWindowMode') @Watch('onDesktopWindowModeChanged') private desktopWindowMode: string = '';
+  @State private cornerSafeMargin: number = 0;
   controller: DesktopController = new DesktopController();
   @State private settings: GlobalSettings = createDefaultGlobalSettings();
   @State private inputProfile: InputProfile = createDefaultInputProfile();
@@ -145,6 +156,7 @@ struct DesktopPage {
 
   aboutToAppear(): void {
     this.settings = AppSettingsStore.getInstance().getGlobalSettings();
+    this.applyCornerSafeMargin();
     InputProfileService.getInstance().initialize(getContext(this) as common.UIAbilityContext).then(() => {
       const profile = InputProfileService.getInstance().getProfile(this.settings.desktopInputProfileId || 'default');
       this.inputProfile = profile;
@@ -183,6 +195,28 @@ struct DesktopPage {
     const rootId = this.desktopToplevelId || WineWindowManager.getInstance().getDesktopRootId();
     if (this.controller.switchDesktopRoot(rootId)) {
       InputOverlayWindowCoordinator.getInstance().setActiveToplevel(rootId);
+    }
+  }
+
+  private onDesktopWindowModeChanged(): void {
+    this.applyCornerSafeMargin();
+  }
+
+  /** 切边模式: XComponent 四周让出圆角避让边距 (黑色), 全屏模式无内缩。 */
+  private applyCornerSafeMargin(): void {
+    const mode = (this.desktopWindowMode ||
+      AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode) as DesktopWindowMode;
+    if (mode !== DesktopWindowMode.SAFE_AREA) {
+      this.cornerSafeMargin = 0;
+      return;
+    }
+    try {
+      const density = Math.max(1, display.getDefaultDisplaySync().densityPixels);
+      this.cornerSafeMargin = Math.max(16, Math.round(CORNER_SAFE_MARGIN_PX / density));
+      hilog.info(DOMAIN, 'LIFE', '[XComp] corner-safe margin=%{public}dvp (%{public}dpx @density=%{public}s)',
+        this.cornerSafeMargin, CORNER_SAFE_MARGIN_PX, density.toFixed(2));
+    } catch (_) {
+      this.cornerSafeMargin = 48;
     }
   }
 
@@ -520,6 +554,12 @@ struct DesktopPage {
       WineEngineBlockingOverlay()
     }
     .width('100%').height('100%').backgroundColor('#000')
+    .padding({
+      left: this.cornerSafeMargin,
+      top: this.cornerSafeMargin,
+      right: this.cornerSafeMargin,
+      bottom: this.cornerSafeMargin
+    })
     .id('wine-desktop-input-root')
     .focusable(true)
     .defaultFocus(true)
