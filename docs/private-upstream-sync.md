@@ -4,7 +4,15 @@
 
 基线：WineHua `VintagePomeloMaster` @ `ba7218a`
 
-> **同步基线标记**：最新合并到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `8089968`）。下次同步先 `git log 8089968..origin/master --oneline`，避免重复合并。
+> **同步基线标记**：最新合并到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `996aabb`）。下次同步先 `git log 996aabb..origin/master --oneline`，避免重复合并。
+
+### 2026-08-03 二次合并：warm-prefix explorer 恢复修复
+
+- 上游 `996aabb` → 私有 `f2f9cfe`（cherry-pick -x，仅 CI workflow 冲突且保留私有侧）：
+  - 温前缀（prefix 已初始化）时显式用干净 NCP 环境跑 `wineboot --init`，播种 boot 事件，避免 explorer 首客户端触发的 wineboot 卡死导致后续所有 Wine 进程阻塞在 boot-event 等待（与私有线"二次启动无窗口/所有卡片失效"现象同源）；
+  - 非桌面模式自动 explorer 改为走 `SpawnWineProgram`（broker 通道），与手动启动路径一致；
+  - `scripts/build_deps.sh`：BUILD_WINE_MONO 默认启用（`BUILD_WINE_MONO=0` 跳过），与私有打包约定一致。
+- 暂缓/跳过：`13cc583` `8ab97c3`（合成器重构延续，私有 compositor 冲突）、`82ee3f3`（docs）、`c5263a3`（.gitignore）。
 
 ### 2026-08-03 三项修复 + 合并 Aug 3 输入提交
 
