@@ -135,13 +135,25 @@ export default class DesktopAbility extends UIAbility {
         target.setSpecificSystemBarEnabled('status', true),
         target.setSpecificSystemBarEnabled('navigationIndicator', true)
       ]);
-      hilog.info(DOMAIN, TAG, '[DWA] desktop window safe-area layout applied');
+      // 系统栏区域保持黑色，避免安全区模式出现白色边条。
+      try {
+        await target.setWindowBackgroundColor('#000000');
+      } catch (_) {
+      }
+      const rect = target.getWindowProperties().windowRect;
+      hilog.info(DOMAIN, TAG,
+        '[DWA] safe-area layout applied rect=%{public}dx%{public}d@(%{public}d,%{public}d)',
+        rect.width, rect.height, rect.left, rect.top);
     } else {
       await target.setWindowLayoutFullScreen(true);
       await Promise.all([
         target.setSpecificSystemBarEnabled('status', false),
         target.setSpecificSystemBarEnabled('navigationIndicator', false)
       ]);
+      try {
+        await target.setWindowBackgroundColor('#000000');
+      } catch (_) {
+      }
       hilog.info(DOMAIN, TAG, '[DWA] desktop window fullscreen layout applied');
     }
   }

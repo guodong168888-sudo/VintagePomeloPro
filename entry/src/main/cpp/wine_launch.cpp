@@ -416,6 +416,9 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
             return false;
         }
         OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver pid=%{public}d (via appspawn)", wsChildPid);
+        // 登记引擎核心进程: 用户应用全部退出/被杀后注册表仍非空,
+        // 避免 handleNativeState('exited') 误判引擎 STOPPED 而拆掉桌面连接。
+        AddProcess(wsChildPid, "@engine/wineserver", -1, "@engine/wineserver");
         if (!WaitFor("wineserver socket", [p]() { return IsWineserverSocketReady(p->prefixDir); }, 5000, 100)) {
             OH_LOG_WARN(LOG_APP, "[Launch-Async] wineserver socket not detected, "
                         "wineboot will recover via server_connect retry+start_server");
@@ -551,6 +554,11 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
             "libwine_child.so:Main", exArgs, exOpts, &exPid);
         OH_LOG_INFO(LOG_APP, "[Launch-Async] explorer desktop pid=%{public}d ret=%{public}d",
                     exPid, (int)exRet);
+        if (exPid > 0) {
+            // 桌面壳进程登记为引擎核心进程: 保证用户程序停止后桌面保持存活,
+            // 且"关闭运行中的程序"不会把桌面一起带走。
+            AddProcess(exPid, "@engine/explorer", -1, "@engine/explorer");
+        }
         ws->PromotePendingDesktopRoot();
         /* StartNativeChildProcess returning only means that appspawn accepted
          * the Explorer request. On a warm prefix the child can still need
