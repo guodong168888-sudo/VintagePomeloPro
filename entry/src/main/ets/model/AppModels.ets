@@ -95,6 +95,116 @@ export enum D3DRendererPreference {
   VIRGL = 'virgl'
 }
 
+/** Box64 兼容性预设：默认档不注入任何覆盖（沿用系统当前已验证的配置）。 */
+export const BOX64_PRESET_DEFAULT = 'default';
+export const BOX64_PRESET_STABILITY = 'stability';
+export const BOX64_PRESET_CONSERVATIVE = 'conservative';
+export const BOX64_PRESET_INTERMEDIATE = 'intermediate';
+export const BOX64_PRESET_PERFORMANCE = 'performance';
+
+export const BOX64_PRESET_IDS: string[] = [
+  BOX64_PRESET_DEFAULT,
+  BOX64_PRESET_STABILITY,
+  BOX64_PRESET_CONSERVATIVE,
+  BOX64_PRESET_INTERMEDIATE,
+  BOX64_PRESET_PERFORMANCE
+];
+
+export function box64PresetLabel(presetId: string): string {
+  switch (presetId) {
+    case BOX64_PRESET_STABILITY:
+      return '稳定模式';
+    case BOX64_PRESET_CONSERVATIVE:
+      return '兼容模式';
+    case BOX64_PRESET_INTERMEDIATE:
+      return '均衡模式';
+    case BOX64_PRESET_PERFORMANCE:
+      return '性能模式';
+    default:
+      return '默认（当前配置）';
+  }
+}
+
+export function box64PresetDescription(presetId: string): string {
+  switch (presetId) {
+    case BOX64_PRESET_STABILITY:
+      return '优先保证兼容与稳定，适合新引擎、Unity 或频繁崩溃的程序。';
+    case BOX64_PRESET_CONSERVATIVE:
+      return '兼容与性能之间偏保守，适合大部分老游戏。';
+    case BOX64_PRESET_INTERMEDIATE:
+      return '兼顾兼容性与速度，是多数程序的均衡选择。';
+    case BOX64_PRESET_PERFORMANCE:
+      return '追求最高帧率，部分程序可能因此变慢或崩溃。';
+    default:
+      return '不注入额外参数，使用系统已验证的默认兼容配置。';
+  }
+}
+
+/**
+ * 把预设展开为 KEY=VALUE 环境变量列表；默认档返回空数组，
+ * 即完全不覆盖 C++ 侧的当前生产配置。
+ * 弱内存屏障(WEAKBARRIER)与易失元数据(VOLATILE_METADATA)是私有保护项，
+ * 不随预设下发，避免破坏已验证的渲染与文件访问路径。
+ */
+export function resolveBox64PresetEnv(presetId: string): string[] {
+  switch (presetId) {
+    case BOX64_PRESET_STABILITY:
+      return [
+        'BOX64_DYNAREC_SAFEFLAGS=2',
+        'BOX64_DYNAREC_FASTNAN=0',
+        'BOX64_DYNAREC_FASTROUND=0',
+        'BOX64_DYNAREC_X87DOUBLE=1',
+        'BOX64_DYNAREC_BIGBLOCK=0',
+        'BOX64_DYNAREC_STRONGMEM=2',
+        'BOX64_DYNAREC_FORWARD=128',
+        'BOX64_DYNAREC_CALLRET=0',
+        'BOX64_DYNAREC_WAIT=0',
+        'BOX64_DYNAREC_NATIVEFLAGS=0'
+      ];
+    case BOX64_PRESET_CONSERVATIVE:
+      return [
+        'BOX64_DYNAREC_SAFEFLAGS=2',
+        'BOX64_DYNAREC_FASTNAN=0',
+        'BOX64_DYNAREC_FASTROUND=0',
+        'BOX64_DYNAREC_X87DOUBLE=1',
+        'BOX64_DYNAREC_BIGBLOCK=1',
+        'BOX64_DYNAREC_STRONGMEM=1',
+        'BOX64_DYNAREC_FORWARD=128',
+        'BOX64_DYNAREC_CALLRET=0',
+        'BOX64_DYNAREC_WAIT=1',
+        'BOX64_DYNAREC_NATIVEFLAGS=0'
+      ];
+    case BOX64_PRESET_INTERMEDIATE:
+      return [
+        'BOX64_DYNAREC_SAFEFLAGS=2',
+        'BOX64_DYNAREC_FASTNAN=1',
+        'BOX64_DYNAREC_FASTROUND=0',
+        'BOX64_DYNAREC_X87DOUBLE=1',
+        'BOX64_DYNAREC_BIGBLOCK=2',
+        'BOX64_DYNAREC_STRONGMEM=0',
+        'BOX64_DYNAREC_FORWARD=128',
+        'BOX64_DYNAREC_CALLRET=0',
+        'BOX64_DYNAREC_WAIT=1',
+        'BOX64_DYNAREC_NATIVEFLAGS=0'
+      ];
+    case BOX64_PRESET_PERFORMANCE:
+      return [
+        'BOX64_DYNAREC_SAFEFLAGS=1',
+        'BOX64_DYNAREC_FASTNAN=1',
+        'BOX64_DYNAREC_FASTROUND=1',
+        'BOX64_DYNAREC_X87DOUBLE=0',
+        'BOX64_DYNAREC_BIGBLOCK=3',
+        'BOX64_DYNAREC_STRONGMEM=0',
+        'BOX64_DYNAREC_FORWARD=512',
+        'BOX64_DYNAREC_CALLRET=1',
+        'BOX64_DYNAREC_WAIT=1',
+        'BOX64_DYNAREC_NATIVEFLAGS=1'
+      ];
+    default:
+      return [];
+  }
+}
+
 export interface VirtualMouseConfig {
   mouseSensitivity: number;
   doubleClickInterval: number;
@@ -140,6 +250,8 @@ export interface AppSettings {
   customCover: string;
   /** Kept separately from catalog discovery so a moved game can stay starred. */
   favorite: boolean;
+  /** Box64 兼容性预设；'default' 表示跟随全局设置。 */
+  box64Preset: string;
   executable: string;
   arguments: string[];
   workingDirectory: string;
@@ -153,6 +265,8 @@ export interface GlobalSettings {
   desktopOrientation: ScreenOrientationSetting;
   /** Desktop host window layout: immersive fullscreen or safe-area inset. */
   desktopWindowMode: DesktopWindowMode;
+  /** Box64 兼容性预设；'default' 表示使用系统当前配置。 */
+  box64Preset: string;
   /** Desktop mode always uses this global profile; single-app may override it. */
   desktopInputProfileId: string;
   viewMode: ViewMode;
@@ -613,6 +727,7 @@ export function createDefaultGlobalSettings(): GlobalSettings {
     defaultDisplayMode: DisplayMode.DESKTOP,
     desktopOrientation: ScreenOrientationSetting.SENSOR_LANDSCAPE,
     desktopWindowMode: DesktopWindowMode.FULLSCREEN,
+    box64Preset: BOX64_PRESET_DEFAULT,
     desktopInputProfileId: 'default',
     viewMode: ViewMode.GRID,
     themeMode: ThemeMode.SYSTEM,
@@ -650,6 +765,7 @@ export function createDefaultAppSettings(appId: string): AppSettings {
     customTitle: '',
     customCover: '',
     favorite: false,
+    box64Preset: BOX64_PRESET_DEFAULT,
     executable: '',
     arguments: [],
     workingDirectory: '',

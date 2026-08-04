@@ -291,6 +291,7 @@ struct AdvancedKeyMappingPage {
         customTitle: current.customTitle,
         customCover: current.customCover,
         favorite: current.favorite,
+        box64Preset: current.box64Preset,
         executable: current.executable,
         arguments: current.arguments,
         workingDirectory: current.workingDirectory,

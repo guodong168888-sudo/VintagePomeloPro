@@ -3,10 +3,14 @@ import promptAction from '@ohos.promptAction';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { fileUri, picker } from '@kit.CoreFileKit';
 import {
+  BOX64_PRESET_DEFAULT,
+  BOX64_PRESET_IDS,
   AppDescriptor,
   AppSettings as StoredAppSettings,
   AppSource,
   DisplayMode,
+  box64PresetDescription,
+  box64PresetLabel,
   createDefaultAppSettings
 } from '../model/AppModels';
 import { AppCatalogService } from '../service/AppCatalogService';
@@ -210,6 +214,7 @@ struct AppSettingsPage {
         customTitle: this.value.customTitle || this.app.title,
         customCover: this.value.customCover,
         favorite: this.value.favorite,
+        box64Preset: this.value.box64Preset,
         executable: this.value.executable || this.app.launchTarget.executable,
         arguments: this.value.arguments,
         workingDirectory: this.value.workingDirectory || this.app.launchTarget.workingDirectory,
@@ -274,6 +279,7 @@ struct AppSettingsPage {
       customTitle: title,
       customCover: cover,
       favorite: this.value.favorite,
+      box64Preset: this.value.box64Preset,
       executable: executable,
       arguments: this.value.arguments,
       workingDirectory: workingDirectory,
@@ -375,6 +381,7 @@ struct AppSettingsPage {
       customTitle: this.value.customTitle,
       customCover: this.value.customCover,
       favorite: this.value.favorite,
+      box64Preset: this.value.box64Preset,
       executable: this.value.executable,
       arguments: this.value.arguments,
       workingDirectory: this.value.workingDirectory,
@@ -404,6 +411,7 @@ struct AppSettingsPage {
       customTitle: this.value.customTitle,
       customCover: this.value.customCover,
       favorite: this.value.favorite,
+      box64Preset: this.value.box64Preset,
       executable: this.value.executable,
       arguments: this.value.arguments,
       workingDirectory: this.value.workingDirectory,
@@ -429,6 +437,7 @@ struct AppSettingsPage {
       customTitle: this.value.customTitle,
       customCover: this.value.customCover,
       favorite: this.value.favorite,
+      box64Preset: this.value.box64Preset,
       executable: this.value.executable,
       arguments: this.value.arguments,
       workingDirectory: this.value.workingDirectory,
@@ -446,6 +455,24 @@ struct AppSettingsPage {
       customTitle: this.value.customTitle,
       customCover: this.value.customCover,
       favorite: value,
+      box64Preset: this.value.box64Preset,
+      executable: this.value.executable,
+      arguments: this.value.arguments,
+      workingDirectory: this.value.workingDirectory,
+      displayModeOverride: this.value.displayModeOverride,
+      inputProfileId: this.value.inputProfileId,
+      prefixId: this.value.prefixId
+    };
+  }
+
+  private setBox64Preset(preset: string): void {
+    if (preset === this.value.box64Preset) return;
+    this.value = {
+      appId: this.value.appId,
+      customTitle: this.value.customTitle,
+      customCover: this.value.customCover,
+      favorite: this.value.favorite,
+      box64Preset: preset,
       executable: this.value.executable,
       arguments: this.value.arguments,
       workingDirectory: this.value.workingDirectory,
@@ -523,6 +550,32 @@ struct AppSettingsPage {
                 .id('app-settings-mode-single')
                 .onClick(() => this.replace(this.value.customTitle, this.value.customCover, this.value.executable, this.value.workingDirectory, DisplayMode.SINGLE_APP))
             }.width('100%')
+          }.width('100%').padding(this.cardPadding()).backgroundColor($r('app.color.card_background')).borderRadius(16)
+
+          Column({ space: 12 }) {
+            Text('兼容性').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
+            Text('Box64 兼容性预设').fontSize(13).fontColor($r('app.color.text_secondary')).width('100%')
+            Text('影响程序在兼容模拟层上的稳定性与性能；跟随全局表示使用系统设置中的预设。')
+              .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+            Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+              ForEach(BOX64_PRESET_IDS, (preset: string) => {
+                Button(box64PresetLabel(preset))
+                  .height(42)
+                  .padding({ left: 12, right: 12 })
+                  .margin({ right: 8, bottom: 8 })
+                  .borderRadius(14)
+                  .fontSize(12)
+                  .fontColor(this.value.box64Preset === preset ?
+                    '#FFFFFFFF' : $r('app.color.text_primary'))
+                  .backgroundColor(this.value.box64Preset === preset ?
+                    $r('app.color.accent') : $r('app.color.search_background'))
+                  .id('app-settings-box64-' + preset)
+                  .onClick(() => this.setBox64Preset(preset))
+              }, (preset: string): string => preset)
+            }.width('100%')
+            Text(this.value.box64Preset === BOX64_PRESET_DEFAULT ?
+              '此应用跟随全局兼容性预设。' : '此应用使用「' + box64PresetLabel(this.value.box64Preset) + '」。')
+              .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
           }.width('100%').padding(this.cardPadding()).backgroundColor($r('app.color.card_background')).borderRadius(16)
 
           Column({ space: 12 }) {

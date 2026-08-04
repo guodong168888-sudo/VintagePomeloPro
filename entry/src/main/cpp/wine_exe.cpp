@@ -670,8 +670,8 @@ static napi_value MakeLaunchResult(napi_env env, int32_t pid,
 
 napi_value RunWineExe(napi_env env, napi_callback_info info)
 {
-    size_t argc = 9;
-    napi_value args[9] = {};
+    size_t argc = 10;
+    napi_value args[10] = {};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     if (argc < 4) return MakeLaunchResult(env, -1, "", false);
 
@@ -715,6 +715,23 @@ napi_value RunWineExe(napi_env env, napi_callback_info info)
             !strncmp(requestedBackend, "dxvk_", 5))
             strncpy(d3dBackend, requestedBackend, sizeof(d3dBackend) - 1);
     }
+    std::vector<std::string> envOverrides;
+    bool envArray = false;
+    if (argc >= 10) napi_is_array(env, args[9], &envArray);
+    if (envArray) {
+        uint32_t length = 0;
+        napi_get_array_length(env, args[9], &length);
+        for (uint32_t index = 0; index < length; index++) {
+            napi_value item;
+            napi_get_element(env, args[9], index, &item);
+            size_t size = 0;
+            napi_get_value_string_utf8(env, item, nullptr, 0, &size);
+            std::string value(size + 1, '\0');
+            napi_get_value_string_utf8(env, item, value.data(), value.size(), &size);
+            value.resize(size);
+            if (!value.empty()) envOverrides.push_back(value);
+        }
+    }
 
     std::string homeDir(homePath);
     if (homeDir.empty()) homeDir = gBrokerHomeDir;
@@ -749,6 +766,19 @@ napi_value RunWineExe(napi_env env, napi_callback_info info)
     if (workingDirectoryPath[0])
         UpsertEnv(&wineEnv, "WINEHUA_WORKING_DIRECTORY=" +
                   std::string(workingDirectoryPath));
+    // Per-launch Box64/VirGL compatibility overrides.  The child applies
+    // these after the hardcoded defaults, so they win without touching the
+    // production defaults.  VOLATILE_METADATA stays locked to the private
+    // safe value (DOS MZ executables crash box64's PE metadata parser).
+    for (const std::string& overrideLine : envOverrides)
+    {
+        if (overrideLine.rfind("BOX64_DYNAREC_VOLATILE_METADATA=", 0) == 0) {
+            OH_LOG_WARN(LOG_APP,
+                        "[Wine] ignoring protected BOX64_DYNAREC_VOLATILE_METADATA override");
+            continue;
+        }
+        UpsertEnv(&wineEnv, overrideLine);
+    }
     OH_LOG_INFO(LOG_APP,
                 "[Wine] product D3D backend=%{public}s cwd=%{public}s",
                 d3dBackend,

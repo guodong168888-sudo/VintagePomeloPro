@@ -252,7 +252,7 @@ export class WineEngineService {
   }
 
   launchExecutable(executable: string, argumentsValue: string[] = [],
-    workingDirectory: string = ''): NativeLaunchResult {
+    workingDirectory: string = '', envOverrides: string[] = []): NativeLaunchResult {
     if (this.state !== EngineState.READY) {
       return { pid: -1, sessionId: '', reused: false };
     }
@@ -278,7 +278,8 @@ export class WineEngineService {
       launchArguments,
       singleAppRoot,
       workingDirectory,
-      this.d3dBackend
+      this.d3dBackend,
+      envOverrides
     ) as NativeLaunchResult;
   }
 

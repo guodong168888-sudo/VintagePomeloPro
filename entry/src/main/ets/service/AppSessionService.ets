@@ -2,6 +2,7 @@ import { common, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import testNapi from 'libentry.so';
 import {
+  BOX64_PRESET_DEFAULT,
   AppDescriptor,
   DisplayMode,
   EngineState,
@@ -15,6 +16,7 @@ import {
   WinePresentationMode,
   normalizeCatalogLaunchIdentity,
   normalizeLaunchPath,
+  resolveBox64PresetEnv,
   resolveLaunchDisplayMode,
   resolveWinePresentationMode
 } from '../model/AppModels';
@@ -199,9 +201,14 @@ export class AppSessionService {
       if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP) return desktopSession;
     }
 
+    // 每游戏兼容性预设优先于全局预设；'default' 表示跟随全局。
+    const appSettings = AppSettingsStore.getInstance().getAppSettings(app.id);
+    const presetId = appSettings.box64Preset !== BOX64_PRESET_DEFAULT
+      ? appSettings.box64Preset : settings.box64Preset;
+    const envOverrides = resolveBox64PresetEnv(presetId);
     const result = WineEngineService.getInstance().launchExecutable(
       app.launchTarget.executable, app.launchTarget.arguments,
-      app.launchTarget.workingDirectory) as NativeLaunchResult;
+      app.launchTarget.workingDirectory, envOverrides) as NativeLaunchResult;
     if (!result || result.pid <= 0) return null;
     const session: RuntimeSession = {
       sessionId: result.sessionId || 'wine-' + result.pid,

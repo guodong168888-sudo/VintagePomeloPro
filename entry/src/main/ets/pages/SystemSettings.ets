@@ -6,6 +6,7 @@ import { picker } from '@kit.CoreFileKit';
 import { zlib } from '@kit.BasicServicesKit';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import {
+  BOX64_PRESET_IDS,
   ControlBarDirection,
   D3DRendererPreference,
   DesktopWindowMode,
@@ -18,6 +19,8 @@ import {
   VirtualMouseConfig,
   VirtualKeyColorScheme,
   ScreenOrientationSetting,
+  box64PresetDescription,
+  box64PresetLabel,
   cloneVirtualMouseConfig,
   createDefaultGlobalSettings
 } from '../model/AppModels';
@@ -313,6 +316,7 @@ struct SystemSettingsPage {
       defaultDisplayMode: mode,
        desktopOrientation: desktopOrientation,
       desktopWindowMode: desktopWindowMode,
+      box64Preset: this.settings.box64Preset,
       desktopInputProfileId: desktopInputProfileId || 'default',
       viewMode: view,
       themeMode: theme,
@@ -591,6 +595,35 @@ struct SystemSettingsPage {
       this.settings.virtualInputEnabled, this.settings.desktopOrientation,
       this.settings.controlBarPositionX, this.settings.controlBarPositionY, preference);
     promptAction.showToast({ message: '渲染策略已保存；重启 Wine 引擎后生效' });
+  }
+
+  private updateBox64Preset(preset: string): void {
+    if (preset === this.settings.box64Preset) return;
+    this.settings = {
+      defaultDisplayMode: this.settings.defaultDisplayMode,
+      desktopOrientation: this.settings.desktopOrientation,
+      desktopWindowMode: this.settings.desktopWindowMode,
+      box64Preset: preset,
+      desktopInputProfileId: this.settings.desktopInputProfileId,
+      viewMode: this.settings.viewMode,
+      themeMode: this.settings.themeMode,
+      useGlassEffect: this.settings.useGlassEffect,
+      usePageBackground: this.settings.usePageBackground,
+      pageBackgroundUri: this.settings.pageBackgroundUri,
+      virtualInputEnabled: this.settings.virtualInputEnabled,
+      showVirtualControls: this.settings.showVirtualControls,
+      autoHideVirtualControls: this.settings.autoHideVirtualControls,
+      controlBarDirection: this.settings.controlBarDirection,
+      controlBarPositionX: this.settings.controlBarPositionX,
+      controlBarPositionY: this.settings.controlBarPositionY,
+      virtualMouseConfig: cloneVirtualMouseConfig(this.settings.virtualMouseConfig),
+      controlOpacity: this.settings.controlOpacity,
+      gamepadDeadzone: this.settings.gamepadDeadzone,
+      outputScale: this.settings.outputScale,
+      d3dRendererPreference: this.settings.d3dRendererPreference
+    };
+    void ThemeSettingsService.getInstance().update(this.settings);
+    promptAction.showToast({ message: '兼容性预设已保存，新启动的程序生效' });
   }
 
   private updateDesktopWindowMode(mode: DesktopWindowMode): void {
@@ -1176,6 +1209,29 @@ struct SystemSettingsPage {
             'Direct3D 8–11 强制使用 WineD3D/OpenGL/VirGL，适合 DXVK 不兼容的旧游戏。')
             .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
           Text('更改后需要重启 Wine 引擎；运行中的游戏不会被立即中断。')
+            .fontSize(11).fontColor('#C47A20').width('100%')
+
+          Text('Box64 兼容性预设').fontSize(12).fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_secondary')).width('100%')
+          Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+            ForEach(BOX64_PRESET_IDS, (preset: string) => {
+              Button(box64PresetLabel(preset))
+                .height(42)
+                .padding({ left: 14, right: 14 })
+                .margin({ right: 8, bottom: 8 })
+                .borderRadius(14)
+                .fontSize(13)
+                .fontColor(this.settings.box64Preset === preset ?
+                  '#FFFFFFFF' : $r('app.color.text_primary'))
+                .backgroundColor(this.settings.box64Preset === preset ?
+                  $r('app.color.accent') : $r('app.color.search_background'))
+                .id('box64-preset-' + preset)
+                .onClick((): void => this.updateBox64Preset(preset))
+            }, (preset: string): string => preset)
+          }.width('100%')
+          Text(box64PresetDescription(this.settings.box64Preset))
+            .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+          Text('预设会应用于之后启动的 Windows 程序；默认档使用系统当前已验证的兼容配置。')
             .fontSize(11).fontColor('#C47A20').width('100%')
 
           Text('会话维护').fontSize(12).fontWeight(FontWeight.Medium)
