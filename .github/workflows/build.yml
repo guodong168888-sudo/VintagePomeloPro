@@ -164,8 +164,12 @@ jobs:
       - name: Build HAP
         env:
           NATIVE_ARCH: arm64-v8a
-          BUILD_GUEST_GFX: '0'
-          BUILD_WINE_MONO: '0'
+          # 与上游一致: guest gfx 负责自动构建 host-tools/wayland-scanner
+          # (build_native.sh 硬性依赖), 并产出完整 guest Mesa/VirGL 载荷;
+          # wine-mono 必须与 appwiz.cpl 同包, 否则 assemble.sh 直接失败。
+          BUILD_GUEST_GFX: '1'
+          BUILD_GUEST_VULKAN: '1'
+          BUILD_WINE_MONO: '1'
         run: |
           set -euxo pipefail
           make NATIVE_ARCH=arm64-v8a hap
