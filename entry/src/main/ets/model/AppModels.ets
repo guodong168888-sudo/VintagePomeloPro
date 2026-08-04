@@ -12,16 +12,15 @@ export enum LaunchKind {
   OTHER_ENGINE = 'other-engine'
 }
 
+/** 用户可见显示模式：单应用全屏已移除，统一使用桌面模式。 */
 export enum DisplayMode {
-  DESKTOP = 'desktop',
-  SINGLE_APP = 'single-app'
+  DESKTOP = 'desktop'
 }
 
-/** Internal host topology; kept separate from the user's two display modes. */
+/** Internal host topology. */
 export enum WinePresentationMode {
   DESKTOP = 'desktop',
-  MANAGED_WINDOWS = 'managed-windows',
-  SINGLE_APP = 'single-app'
+  MANAGED_WINDOWS = 'managed-windows'
 }
 
 export enum EngineState {
@@ -827,6 +826,7 @@ export function createDefaultInputProfile(): InputProfile {
 }
 
 export function resolveDisplayMode(override: DisplayMode | null, defaultMode: DisplayMode): DisplayMode {
+  // 单应用全屏模式已移除，override 仅保留存储兼容，恒不生效。
   return override ?? defaultMode;
 }
 
@@ -836,14 +836,13 @@ export function resolveDisplayMode(override: DisplayMode | null, defaultMode: Di
  */
 export function resolveLaunchDisplayMode(kind: LaunchKind, override: DisplayMode | null,
   defaultMode: DisplayMode): DisplayMode {
-  if (kind === LaunchKind.WINE_DESKTOP) return DisplayMode.DESKTOP;
-  return resolveDisplayMode(override, defaultMode);
+  // 单应用全屏模式已移除：统一使用桌面模式，让游戏在 Wine 内自行全屏。
+  return DisplayMode.DESKTOP;
 }
 
 export function resolveWinePresentationMode(kind: LaunchKind, displayMode: DisplayMode,
   managedWindowsHost: boolean): WinePresentationMode {
   if (kind === LaunchKind.WINE_DESKTOP) return WinePresentationMode.DESKTOP;
-  if (displayMode === DisplayMode.SINGLE_APP) return WinePresentationMode.SINGLE_APP;
   return managedWindowsHost ? WinePresentationMode.MANAGED_WINDOWS : WinePresentationMode.DESKTOP;
 }
 

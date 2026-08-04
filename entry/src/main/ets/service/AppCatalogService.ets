@@ -516,11 +516,6 @@ export class AppCatalogService {
       // while keeping File Explorer and every other system tool available.
       if (kind === LaunchKind.WINE_DESKTOP &&
         AppSettingsStore.getInstance().usesManagedWineWindows()) return;
-      // A built-in manifest may request single-app explicitly. Otherwise it
-      // follows the global desktop default. PC/2-in-1 hosts present that mode
-      // as independent managed Wine windows rather than a singleton window.
-      const mode: DisplayMode | null = item.displayMode === DisplayMode.SINGLE_APP ?
-        DisplayMode.SINGLE_APP : null;
       const id = item.id || stableAppId(AppSource.BUILTIN, item.launchParams.executable);
       const settings = AppSettingsStore.getInstance().getAppSettings(id);
       // Built-ins are part of the Wine runtime.  Their executable and working
@@ -540,7 +535,7 @@ export class AppCatalogService {
         coverPath: settings.customCover || item.cover,
         available: target.executable.length > 0,
         launchTarget: target,
-        displayModeOverride: settings.displayModeOverride ?? mode
+        displayModeOverride: settings.displayModeOverride
       });
     });
     return result;

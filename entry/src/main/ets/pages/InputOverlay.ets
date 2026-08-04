@@ -585,8 +585,7 @@ struct InputOverlayPage {
         profileName: this.profile.name || '默认键鼠手柄',
         appId: session?.appId ?? '',
         baseProfileId: this.settings.desktopInputProfileId || 'default',
-        returnAbilityName: this.snapshot.session.displayMode === DisplayMode.SINGLE_APP ?
-          'SingleAppAbility' : 'DesktopAbility',
+        returnAbilityName: 'DesktopAbility',
         returnSessionId: this.snapshot.session.sessionId,
         returnToplevelId: this.snapshot.session.toplevelId.toString()
       }
@@ -600,8 +599,8 @@ struct InputOverlayPage {
       await this.context.startAbility(want);
     } catch (_) {
       // A failed navigation must not leave the active Wine session without
-      // controls. DesktopAbility/SingleAppAbility will normally restore the
-      // overlay from onForeground after the editor returns.
+      // controls. DesktopAbility will normally restore the overlay from
+      // onForeground after the editor returns.
       await coordinator.setVisible(true).catch((): void => {});
     }
   }

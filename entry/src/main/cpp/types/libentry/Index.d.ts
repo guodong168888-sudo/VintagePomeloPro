@@ -19,8 +19,7 @@ export interface WineSessionInfo {
   toplevelId: number;
 }
 export const runWineExe: (binDir: string, sockPath: string, libPath: string, exePath: string,
-  homeDir: string, argumentsValue?: string[], singleAppRoot?: boolean,
-  workingDirectory?: string, d3dBackend?: string,
+  homeDir: string, argumentsValue?: string[], workingDirectory?: string, d3dBackend?: string,
   envOverrides?: string[]) => WineLaunchResult;
 export const runWineExeLegacy: (binDir: string, sockPath: string, libPath: string,
   exePath: string, homeDir: string) => number;

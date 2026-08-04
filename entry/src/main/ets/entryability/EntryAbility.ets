@@ -43,8 +43,8 @@ export default class EntryAbility extends UIAbility {
     this.ensureDownloadGamesDirectory('onNewWant');
     const parameters = want.parameters ?? {};
     if (parameters.overlayRoute === 'input-layout' || parameters.overlayRoute === 'key-mapping') {
-      // 覆盖层属于 Desktop/SingleApp Ability，不能直接把它的子窗口替换为
-      // 编辑器。回到应用库主窗口再进入编辑页，Wine 会话则保持后台可恢复。
+      // 覆盖层属于 Desktop Ability，不能直接把它的子窗口替换为编辑器。
+      // 回到应用库主窗口再进入编辑页，Wine 会话则保持后台可恢复。
       AppStorage.setOrCreate('overlayEditorRequest', JSON.stringify({
         route: String(parameters.overlayRoute),
         profileId: String(parameters.profileId ?? 'default'),

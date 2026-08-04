@@ -44,8 +44,6 @@ export class WineWindowManager {
   private desktopAbilityForeground: boolean = false;
   private desktopAbilityRootId: number = 0;
   private desktopAbilityCtx: common.UIAbilityContext | null = null;
-  private singleAppRootId: number = 0;
-  private singleAppAbilityRunning: boolean = false;
   // 主窗口 windowStage (ARGB 异型子窗口/popup 回退宿主)
   private mainWindowStage: window.WindowStage | null = null;
 
@@ -157,7 +155,6 @@ export class WineWindowManager {
     this.desktopAbilityRunning = false;
     this.desktopAbilityForeground = false;
     this.desktopAbilityRootId = 0;
-    this.singleAppRootId = 0;
     this.destroyed.clear();
     testNapi.setDesktopMode(this.isDesktopMode);
     hilog.info(DOMAIN, TAG, '[MW] setPresentationMode=%{public}s nativeDesktop=%{public}s',
@@ -252,12 +249,6 @@ export class WineWindowManager {
       width: Math.max(1, width - margin * 2),
       height: height
     };
-  }
-
-  prepareSingleAppComposition(): void {
-    if (this.presentationMode !== WinePresentationMode.SINGLE_APP) return;
-    testNapi.setDesktopMode(true);
-    hilog.info(DOMAIN, TAG, '[MW] single-app compositor enabled before root launch');
   }
 
   // -- WineWindowAbility 调用: 注册 / 注销 --
@@ -425,21 +416,13 @@ export class WineWindowManager {
           const initial = JSON.parse(data) as Record<string, string | number>;
           if (this.sessionAssociationCallback &&
             (this.presentationMode === WinePresentationMode.MANAGED_WINDOWS ||
-              this.isDesktopMode || this.singleAppRootId === 0)) {
+              this.isDesktopMode)) {
             this.sessionAssociationCallback(initial.sessionId as string ?? '', initial.clientPid as number ?? 0, id);
           }
         } catch (_) {
         }
         if (this.isDesktopMode) {
           hilog.info(DOMAIN, TAG, '[MW] Desktop mode: toplevel #%{public}d created, skipping Ability', id);
-        } else if (this.presentationMode === WinePresentationMode.SINGLE_APP) {
-          if (this.singleAppRootId === 0) {
-            this.singleAppRootId = id;
-            hilog.info(DOMAIN, TAG, '[MW] -> startSingleAppAbility(#%{public}d)', id);
-            this.startSingleAppAbility(id, data);
-          } else {
-            hilog.info(DOMAIN, TAG, '[MW] single-app child toplevel #%{public}d composed into root #%{public}d', id, this.singleAppRootId);
-          }
         } else {
           hilog.info(DOMAIN, TAG, '[MW] managed windows -> startWineWindowAbility(#%{public}d)', id);
           this.startWineWindowAbility(id, data);
@@ -451,10 +434,6 @@ export class WineWindowManager {
           if (this.sessionAssociationCallback) this.sessionAssociationCallback(DESKTOP_SESSION_ID, 0, id);
           this.desktopRootId = id;
           this.startDesktopAbility(id);
-        } else if (this.presentationMode === WinePresentationMode.SINGLE_APP && this.singleAppRootId !== id) {
-          hilog.info(DOMAIN, TAG, '[MW] desktop_root #%{public}d -> start SingleAppAbility', id);
-          this.singleAppRootId = id;
-          this.startSingleAppAbility(id, data);
         } else {
           // A stale explorer root may arrive while changing from an older PC
           // desktop session. Managed-window hosts expose only actual program
@@ -807,19 +786,6 @@ export class WineWindowManager {
       return;
     }
 
-    if (this.presentationMode === WinePresentationMode.SINGLE_APP) {
-      if (id !== this.singleAppRootId) {
-        this.unregisterAbility(id);
-        return;
-      }
-      const ctx = this.abilityContexts.get(id);
-      if (ctx) ctx.terminateSelf().catch((_err: Error) => {});
-      this.unregisterAbility(id);
-      this.singleAppRootId = 0;
-      this.singleAppAbilityRunning = false;
-      return;
-    }
-
     // PC: ARGB 异型子窗口销毁 (级联销毁其 popup)
     if (ArgbWindowManager.getInstance().has(id)) {
       hilog.info(DOMAIN, TAG, '[MW] onToplevelDestroyed #%{public}d: destroy ARGB subwindow', id);
@@ -917,28 +883,6 @@ export class WineWindowManager {
     hilog.info(DOMAIN, TAG, '[MW] DesktopAbility stopped for root #%{public}d', rootId);
   }
 
-  private startSingleAppAbility(rootId: number, data: string): void {
-    if (!this.uiAbilityContext) return;
-    let sessionId = '';
-    let clientPid = 0;
-    try {
-      const value = JSON.parse(data) as Record<string, string | number>;
-      sessionId = value.sessionId as string ?? '';
-      clientPid = value.clientPid as number ?? 0;
-    } catch (_) {
-    }
-    this.singleAppAbilityRunning = true;
-    const want: Want = {
-      bundleName: 'com.vintage.pomelopro',
-      abilityName: 'SingleAppAbility',
-      parameters: { toplevelId: rootId, sessionId: sessionId, clientPid: clientPid }
-    };
-    this.uiAbilityContext.startAbility(want).catch((err: Error) => {
-      this.singleAppAbilityRunning = false;
-      hilog.error(DOMAIN, TAG, '[MW] startAbility(SingleAppAbility) failed: %{public}s', JSON.stringify(err));
-    });
-  }
-
   getDesktopRootId(): number { return this.desktopRootId; }
 
   registerDesktopAbility(ctx: common.UIAbilityContext): void {
@@ -950,8 +894,6 @@ export class WineWindowManager {
     hilog.info(DOMAIN, TAG, '[MW] unregisterDesktopAbility');
     this.desktopAbilityCtx = null;
   }
-  getSingleAppRootId(): number { return this.singleAppRootId; }
-
   /** 与 native 启动路径相同的 Wine 逻辑尺寸，用于重建 explorer desktop shell。 */
   getDesktopShellArgument(): string {
     try {

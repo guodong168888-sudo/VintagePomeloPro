@@ -8,7 +8,6 @@
     "pages/HelpCenter",
     "pages/InputLayoutEditor",
     "pages/InputOverlay",
-    "pages/SingleAppWindow",
     "pages/WineWindow",
     "pages/DesktopWindow",
     "pages/WinePopup"

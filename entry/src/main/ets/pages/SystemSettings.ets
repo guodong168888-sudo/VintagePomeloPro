@@ -893,7 +893,7 @@ struct SystemSettingsPage {
   private DesktopInputProfiles() {
     Column({ space: 9 }) {
       Text('桌面模式输入方案').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
-      Text('桌面模式可同时运行多个程序，因此统一使用这里选择的全局方案；单应用模式可以在应用设置中使用专用方案。')
+      Text('桌面模式可同时运行多个程序，因此统一使用这里选择的全局方案；单个程序可在应用设置中使用专用方案。')
         .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
       ForEach(this.inputProfiles, (profile: InputProfile): void => {
         this.InputProfileChoice(profile)
@@ -967,20 +967,8 @@ struct SystemSettingsPage {
       if (section === 'display') {
         Column({ space: 16 }) {
           Text('Windows 显示').fontSize(20).fontWeight(FontWeight.Bold).width('100%')
-          Text('全局默认模式').fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
-          Row({ space: 8 }) {
-            Button('桌面模式').layoutWeight(1).height(48).borderRadius(14)
-              .fontSize(this.isNarrowPhone() ? 12 : 14)
-              .backgroundColor(this.settings.defaultDisplayMode === DisplayMode.DESKTOP ? $r('app.color.accent') : $r('app.color.search_background'))
-              .fontColor(this.settings.defaultDisplayMode === DisplayMode.DESKTOP ? '#FFFFFFFF' : $r('app.color.text_primary'))
-              .onClick(() => this.update(DisplayMode.DESKTOP))
-            Button('单应用全屏').layoutWeight(1).height(48).borderRadius(14)
-              .fontSize(this.isNarrowPhone() ? 12 : 14)
-              .backgroundColor(this.settings.defaultDisplayMode === DisplayMode.SINGLE_APP ? $r('app.color.accent') : $r('app.color.search_background'))
-              .fontColor(this.settings.defaultDisplayMode === DisplayMode.SINGLE_APP ? '#FFFFFFFF' : $r('app.color.text_primary'))
-              .onClick(() => this.update(DisplayMode.SINGLE_APP))
-          }.width('100%')
-           Text('应用可单独覆盖该设置；切换活动模式时会重建 Wayland 会话，但不会重置 Wine prefix。').fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
+          Text('程序统一在 Wine 桌面中运行，由游戏自行切换到全屏，无需单独适配画面拉伸。')
+            .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
            Text('桌面屏幕方向').fontSize(14).fontWeight(FontWeight.Medium)
              .fontColor($r('app.color.text_primary')).width('100%')
            Row({ space: 8 }) {
@@ -1093,12 +1081,12 @@ struct SystemSettingsPage {
             Column({ space: 6 }) {
               Text('PC 桌面默认使用实体键盘鼠标')
                 .fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
-              Text('桌面和多窗口模式不会创建屏幕控制层；以下开关仅为未来明确启用的单应用全屏模式保留。')
+              Text('桌面模式不会创建屏幕控制层，虚拟输入主要面向平板触屏与手柄使用。')
                 .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
             }
             .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
           }
-          this.SwitchRow(this.isManagedWindowsHost() ? '单应用全屏启用虚拟输入' : '启用屏幕虚拟输入',
+          this.SwitchRow('启用屏幕虚拟输入',
             '关闭后不显示虚拟按键、全屏鼠标和右上角控制栏；实体外设仍可使用',
             this.settings.virtualInputEnabled, (value: boolean): void => this.updateVirtualInputEnabled(value),
             'virtual-input-enabled')
@@ -1108,7 +1096,7 @@ struct SystemSettingsPage {
             Column({ space: 10 }) {
               Text('虚拟按键配色').fontSize(14).fontWeight(FontWeight.Medium)
                 .fontColor($r('app.color.text_primary')).width('100%')
-              Text('应用到当前桌面输入方案，单应用专用方案可在对应应用设置中单独调整。')
+              Text('应用到当前桌面输入方案；单个程序也可在应用设置中使用专用方案。')
                 .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
               Row({ space: 8 }) {
                 this.InputColorSchemeChoice('经典蓝色', VirtualKeyColorScheme.DEFAULT)

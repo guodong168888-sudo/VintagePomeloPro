@@ -260,8 +260,6 @@ export class WineEngineService {
       !this.syncManagedSmokePayload('managed-smoke-launch')) {
       return { pid: -1, sessionId: '', reused: false };
     }
-    const singleAppRoot = this.presentationMode === WinePresentationMode.SINGLE_APP;
-    if (singleAppRoot) WineWindowManager.getInstance().prepareSingleAppComposition();
     // Batch files need Wine's command interpreter. This still uses the exact
     // same runWineExe -> process broker -> BuildWineEnv path as explorer.exe;
     // only Wine's program argument changes, so GL/VirGL and runtime variables
@@ -276,7 +274,6 @@ export class WineEngineService {
       program,
       this.homeDirectory,
       launchArguments,
-      singleAppRoot,
       workingDirectory,
       this.d3dBackend,
       envOverrides

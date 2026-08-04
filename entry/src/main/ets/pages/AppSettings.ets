@@ -528,30 +528,6 @@ struct AppSettingsPage {
               .fontColor($r('app.color.text_primary')).id('app-settings-select-cover').onClick(() => this.selectCover())
           }.width('100%').padding(this.cardPadding()).backgroundColor($r('app.color.card_background')).borderRadius(16)
 
-          Column({ space: 13 }) {
-            Text('显示模式').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
-            Row({ space: 8 }) {
-              Button('跟随全局').layoutWeight(1).height(48).borderRadius(14)
-                .fontSize(this.isCompact() ? 11 : 14)
-                .backgroundColor(this.value.displayModeOverride === null ? $r('app.color.accent') : $r('app.color.search_background'))
-                .fontColor(this.value.displayModeOverride === null ? '#FFFFFFFF' : $r('app.color.text_primary'))
-                .id('app-settings-mode-inherit')
-                .onClick(() => this.replace(this.value.customTitle, this.value.customCover, this.value.executable, this.value.workingDirectory, null))
-              Button('桌面模式').layoutWeight(1).height(48).borderRadius(14)
-                .fontSize(this.isCompact() ? 11 : 14)
-                .backgroundColor(this.value.displayModeOverride === DisplayMode.DESKTOP ? $r('app.color.accent') : $r('app.color.search_background'))
-                .fontColor(this.value.displayModeOverride === DisplayMode.DESKTOP ? '#FFFFFFFF' : $r('app.color.text_primary'))
-                .id('app-settings-mode-desktop')
-                .onClick(() => this.replace(this.value.customTitle, this.value.customCover, this.value.executable, this.value.workingDirectory, DisplayMode.DESKTOP))
-              Button('单应用').layoutWeight(1).height(48).borderRadius(14)
-                .fontSize(this.isCompact() ? 11 : 14)
-                .backgroundColor(this.value.displayModeOverride === DisplayMode.SINGLE_APP ? $r('app.color.accent') : $r('app.color.search_background'))
-                .fontColor(this.value.displayModeOverride === DisplayMode.SINGLE_APP ? '#FFFFFFFF' : $r('app.color.text_primary'))
-                .id('app-settings-mode-single')
-                .onClick(() => this.replace(this.value.customTitle, this.value.customCover, this.value.executable, this.value.workingDirectory, DisplayMode.SINGLE_APP))
-            }.width('100%')
-          }.width('100%').padding(this.cardPadding()).backgroundColor($r('app.color.card_background')).borderRadius(16)
-
           Column({ space: 12 }) {
             Text('兼容性').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
             Text('Box64 兼容性预设').fontSize(13).fontColor($r('app.color.text_secondary')).width('100%')
@@ -580,7 +556,7 @@ struct AppSettingsPage {
 
           Column({ space: 12 }) {
             Text('输入映射').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
-            Text('桌面模式始终使用系统设置中的桌面全局方案；这里的应用专用方案只在单应用模式启动时生效。')
+            Text('桌面模式始终使用系统设置中的桌面全局方案；这里的应用专用方案在启动单个程序时生效。')
               .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
             Text(this.currentProfileId() === 'default' ? '当前跟随桌面全局输入方案' : '当前使用应用专用键鼠手柄布局')
               .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')

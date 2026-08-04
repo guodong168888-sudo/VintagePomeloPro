@@ -232,7 +232,7 @@ struct AdvancedKeyMappingPage {
 
   private resumeWineAbility(): void {
     if (this.returnScheduled) return;
-    if (this.returnAbilityName !== 'DesktopAbility' && this.returnAbilityName !== 'SingleAppAbility') return;
+    if (this.returnAbilityName !== 'DesktopAbility') return;
     this.returnScheduled = true;
     const want: Want = {
       bundleName: 'com.vintage.pomelopro',

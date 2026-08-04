@@ -93,8 +93,8 @@ struct HelpCenter {
     },
     {
       id: 'desktop-single', category: 'runtime', icon: $r('sys.symbol.arrow_clockwise'),
-      title: '桌面模式与单应用模式', description: '同一 Wine 会话可按应用选择显示方式。',
-      details: '桌面模式保留完整 Explorer 桌面和多窗口；单应用模式一次只运行一个 Windows 程序。切换模式时会重建显示会话，但不会重置 Wine prefix。'
+      title: '程序如何全屏运行', description: '程序统一在 Wine 桌面中运行，游戏内自行切换全屏。',
+      details: '旧柚Pro 使用桌面模式运行所有 Windows 程序：保留完整 Explorer 桌面和多窗口，游戏可在自身设置中切换全屏，无需额外画面拉伸适配。'
     },
     {
       id: 'troubleshooting', category: 'runtime', icon: $r('sys.symbol.gearshape'),

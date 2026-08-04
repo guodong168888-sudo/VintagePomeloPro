@@ -29,8 +29,7 @@ const DOMAIN = 0x0000;
 
 export enum LaunchConflictKind {
   NONE = 'none',
-  DISPLAY_MODE = 'display-mode',
-  SINGLE_APP = 'single-app'
+  DISPLAY_MODE = 'display-mode'
 }
 
 interface PendingToplevelAssociation {
@@ -93,15 +92,6 @@ export class AppSessionService {
     if ((currentMode !== requestedMode || currentPresentation !== requestedPresentation) &&
       engine.getState() !== EngineState.STOPPED) {
       return LaunchConflictKind.DISPLAY_MODE;
-    }
-    if (requestedPresentation === WinePresentationMode.SINGLE_APP && engine.isReady()) {
-      const requestedPath = normalizeLaunchPath(app.launchTarget.executable);
-      const running = this.getRunningPaths();
-      let hasDifferentPath = false;
-      running.forEach((path: string) => {
-        if (path !== requestedPath) hasDifferentPath = true;
-      });
-      if (hasDifferentPath) return LaunchConflictKind.SINGLE_APP;
     }
     return LaunchConflictKind.NONE;
   }
@@ -290,14 +280,6 @@ export class AppSessionService {
         parameters: { toplevelId: session.toplevelId }
       };
       await this.context.startAbility(want);
-    } else {
-      if (session.toplevelId <= 0) return;
-      const want: Want = {
-        bundleName: 'com.vintage.pomelopro',
-        abilityName: 'SingleAppAbility',
-        parameters: { toplevelId: session.toplevelId, sessionId: session.sessionId }
-      };
-      await this.context.startAbility(want);
     }
   }
 
@@ -434,14 +416,9 @@ export class AppSessionService {
       matched = this.upsertDesktopSession(toplevelId, clientPid);
     }
     if (matched) {
-      const shouldResumeSingleApp = matched.toplevelId === 0 && toplevelId > 0 &&
-        matched.displayMode === DisplayMode.SINGLE_APP;
       if (matched.pid <= 0 && clientPid > 0) matched.pid = clientPid;
       if (sessionId === DESKTOP_SESSION_ID || matched.toplevelId === 0) matched.toplevelId = toplevelId;
       matched.state = SessionState.RUNNING;
-      if (shouldResumeSingleApp) {
-        this.resume(matched).catch((_error: Error): void => {});
-      }
     } else if (toplevelId > 0) {
       this.pendingToplevels.push({ sessionId: sessionId, clientPid: clientPid, toplevelId: toplevelId });
       if (this.pendingToplevels.length > 16) this.pendingToplevels.shift();

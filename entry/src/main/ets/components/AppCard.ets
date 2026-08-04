@@ -6,7 +6,6 @@ export struct AppCard {
   @Prop viewMode: ViewMode = ViewMode.GRID;
   @Prop running: boolean = false;
   @Prop useGlassEffect: boolean = true;
-  @Prop resolvedDisplayMode: DisplayMode = DisplayMode.DESKTOP;
   @Prop narrowPhone: boolean = false;
   @State private pressed: boolean = false;
   onLaunch: (app: AppDescriptor) => void = (_app: AppDescriptor): void => {};
@@ -17,10 +16,6 @@ export struct AppCard {
     return this.app.coverPath.startsWith('file://') ? this.app.coverPath : 'file://' + this.app.coverPath;
   }
 
-  private modeText(): string {
-    return this.resolvedDisplayMode === DisplayMode.SINGLE_APP ? '单应用' : '桌面';
-  }
-
   private coverHeight(): number {
     if (this.viewMode === ViewMode.COMPACT) return 104;
     // VintagePomelo's large-cover mode is a full-width showcase card, not a
@@ -28,12 +23,6 @@ export struct AppCard {
     // taller now that LARGE is rendered as a single-column list.
     if (this.narrowPhone) return this.viewMode === ViewMode.LARGE ? 196 : 120;
     return this.viewMode === ViewMode.LARGE ? 246 : 220;
-  }
-
-  private showModeBadge(): boolean {
-    // Desktop is the library default and does not need to be repeated on every
-    // card. Keep the badge only for the exceptional single-app launch mode.
-    return this.resolvedDisplayMode === DisplayMode.SINGLE_APP;
   }
 
   private fallbackMonogram(): string {
@@ -187,9 +176,6 @@ export struct AppCard {
         Row({ space: 4 }) {
           this.CompactBadge(this.app.source === AppSource.BUILTIN ? '内建' : 'Download',
             this.app.source === AppSource.BUILTIN ? '#E02979B8' : '#E02C7666')
-          if (this.showModeBadge()) {
-            this.CompactBadge(this.modeText(), '#E0525EC8')
-          }
         }
         .padding({ left: 8, right: 8, top: 8 })
         if (this.running) {
@@ -202,9 +188,6 @@ export struct AppCard {
         Row({ space: 5 }) {
           this.Badge(this.app.source === AppSource.BUILTIN ? '内建' : 'Download',
             this.app.source === AppSource.BUILTIN ? '#DE2979B8' : '#DE2C7B64')
-          if (this.showModeBadge()) {
-            this.Badge(this.modeText(), '#D6525EC8')
-          }
           if (this.running) {
             this.Badge('运行中', '#CC22A06B')
           }

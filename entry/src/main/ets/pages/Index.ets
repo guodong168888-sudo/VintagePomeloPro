@@ -506,10 +506,8 @@ struct Index {
     const conflict = AppSessionService.getInstance().getLaunchConflict(app, this.settings);
     if (conflict !== LaunchConflictKind.NONE) {
       AlertDialog.show({
-        title: conflict === LaunchConflictKind.DISPLAY_MODE ? '切换显示模式' : '启动另一个应用',
-        message: conflict === LaunchConflictKind.DISPLAY_MODE ?
-          '当前 Windows 会话使用另一种显示模式。继续将关闭当前会话并重建 Wayland 显示，Wine prefix 不会重置。' :
-          '单应用模式同时只运行一个 Windows 程序。继续将关闭当前程序并启动所选应用。',
+        title: '切换显示模式',
+        message: '当前 Windows 会话使用另一种显示模式。继续将关闭当前会话并重建 Wayland 显示，Wine prefix 不会重置。',
         primaryButton: { value: '取消', action: (): void => {} },
         secondaryButton: {
           value: '关闭并切换',
@@ -885,7 +883,6 @@ struct Index {
       viewMode: this.settings.viewMode,
       running: this.runningAppIds.has(app.id),
       useGlassEffect: this.settings.useGlassEffect,
-      resolvedDisplayMode: AppSessionService.getInstance().resolveMode(app, this.settings),
       narrowPhone: this.isPhone(),
       onLaunch: (target: AppDescriptor): void => { this.launch(target); },
       onSettings: (target: AppDescriptor): void => { this.openAppSettings(target); },

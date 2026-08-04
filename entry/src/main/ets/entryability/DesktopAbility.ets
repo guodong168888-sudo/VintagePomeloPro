@@ -249,7 +249,7 @@ export default class DesktopAbility extends UIAbility {
   private attachInputOverlay(): void {
     // PC/2-in-1 desktop mode is a multiton collection of native Harmony
     // windows. It relies on physical input and must not create a screen
-    // overlay for every Wine window. SingleAppAbility remains opt-in capable.
+    // overlay for every Wine window.
     if (AppSettingsStore.getInstance().usesManagedWineWindows()) {
       InputOverlayWindowCoordinator.getInstance().detach('pc-desktop-uses-physical-input').catch(() => {});
       return;
