@@ -137,6 +137,21 @@ else
                 if [ -n "$wl_scanner" ]; then
                     mkdir -p "$BUILD_DIR/host-tools/bin"
                     cp "$wl_scanner" "$BUILD_DIR/host-tools/bin/wayland-scanner"
+                    # 生成 pkg-config 元数据: wayland/wayland-protocols 的
+                    # meson 依赖查找 "wayland-scanner" 需要 wayland-scanner.pc。
+                    mkdir -p "$BUILD_DIR/host-tools/lib/pkgconfig"
+                    cat > "$BUILD_DIR/host-tools/lib/pkgconfig/wayland-scanner.pc" << EOF
+prefix=$BUILD_DIR/host-tools
+exec_prefix=\${prefix}
+bindir=\${exec_prefix}/bin
+datarootdir=\${prefix}/share
+pkgdatadir=\${datarootdir}/wayland
+wayland_scanner=\${bindir}/wayland-scanner
+
+Name: Wayland Scanner
+Description: Wayland scanner
+Version: 1.22.0
+EOF
                     export WAYLAND_SCANNER="$BUILD_DIR/host-tools/bin/wayland-scanner"
                 fi
             fi
