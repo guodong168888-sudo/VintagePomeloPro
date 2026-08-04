@@ -72,6 +72,8 @@ struct InputLayoutEditor {
   private hasOriginalWindowLayout: boolean = false;
   private orientationRestored: boolean = false;
   private returnScheduled: boolean = false;
+  private editorWindowRef: window.Window | null = null;
+  private avoidAreaCallback: (data: window.AvoidAreaOptions) => void = (): void => {};
   private dragStartX: number = 0;
   private dragStartY: number = 0;
   private panelDragStartX: number = 0;
@@ -106,6 +108,13 @@ struct InputLayoutEditor {
   }
 
   aboutToDisappear(): void {
+    if (this.editorWindowRef) {
+      try {
+        this.editorWindowRef.off('avoidAreaChange', this.avoidAreaCallback);
+      } catch (_) {
+      }
+      this.editorWindowRef = null;
+    }
     if (!this.orientationRestored) this.restoreEditorWindow();
     this.resumeWineAbility();
   }
@@ -131,6 +140,16 @@ struct InputLayoutEditor {
         });
       }
       this.refreshSafeAreas(editorWindow);
+      // 旋转/布局落定后安全区会变化; 只测一次会让顶部按钮落入挖孔区
+      // 点不到。监听 avoidAreaChange 持续刷新, 离开时在 aboutToDisappear 摘除。
+      this.editorWindowRef = editorWindow;
+      this.avoidAreaCallback = (): void => {
+        this.refreshSafeAreas(editorWindow);
+      };
+      try {
+        editorWindow.on('avoidAreaChange', this.avoidAreaCallback);
+      } catch (_) {
+      }
       // Preferred-orientation completion can precede the final avoid-area
       // transaction. Refresh once more after the landscape frame settles.
       setTimeout((): void => { this.refreshSafeAreas(editorWindow); }, 180);

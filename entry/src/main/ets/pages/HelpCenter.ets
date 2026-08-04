@@ -7,6 +7,7 @@ import deviceInfo from '@ohos.deviceInfo';
 import {
   applyStatusOnlyImmersiveShell,
   getMiniTitleContentTopInset,
+  getStatusOnlyWindowInsets,
   observeStatusOnlyWindowInsets
 } from '../common/StatusOnlyImmersiveShell';
 import {
@@ -59,6 +60,7 @@ struct HelpCenter {
   @State private viewportWidth: number = 0;
   @State private viewportHeight: number = 0;
   @State private titleContentTopInsetVp: number = 40;
+  @State private navBarInsetVp: number = 0;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private breakpointCallback: ((value: BreakpointType) => void) | null = null;
   private helpScroller: Scroller = new Scroller();
@@ -147,6 +149,7 @@ struct HelpCenter {
 
   private refreshTitleContentInset(pageWindow: window.Window): void {
     this.titleContentTopInsetVp = getMiniTitleContentTopInset(pageWindow);
+    this.navBarInsetVp = getStatusOnlyWindowInsets(pageWindow).bottom;
   }
 
   private startWindowInsetObserver(pageWindow: window.Window): void {
@@ -349,7 +352,8 @@ struct HelpCenter {
         .width('100%').constraintSize({ minHeight: '100%' }).justifyContent(FlexAlign.Start)
         .padding({
           left: this.helpSidePadding(), right: this.helpSidePadding(),
-          top: this.helpTopInset(), bottom: this.isNarrowPhone() ? 32 : 52
+          top: this.helpTopInset(),
+          bottom: Math.max(this.isNarrowPhone() ? 32 : 52, this.navBarInsetVp)
         })
         .constraintSize({ maxWidth: this.helpContentMaxWidth() })
         .alignSelf(this.isLargeLayout() ? ItemAlign.Center : ItemAlign.Start)

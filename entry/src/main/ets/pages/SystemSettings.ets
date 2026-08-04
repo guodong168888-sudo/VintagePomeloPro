@@ -72,6 +72,7 @@ struct SystemSettingsPage {
   @State private inputProfiles: InputProfile[] = [];
   @State private statusBarHeightVp: number = 0;
   @State private titleContentTopInsetVp: number = 40;
+  @State private navBarInsetVp: number = 0;
   @State private appVersion: string = '版本信息读取中…';
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private settingsScroller: Scroller = new Scroller();
@@ -203,7 +204,9 @@ struct SystemSettingsPage {
 
   private refreshStatusBarInset(pageWindow: window.Window): void {
     this.titleContentTopInsetVp = getMiniTitleContentTopInset(pageWindow);
-    this.statusBarHeightVp = getStatusOnlyWindowInsets(pageWindow).top;
+    const insets = getStatusOnlyWindowInsets(pageWindow);
+    this.statusBarHeightVp = insets.top;
+    this.navBarInsetVp = insets.bottom;
   }
 
   private startWindowInsetObserver(pageWindow: window.Window): void {
@@ -1110,7 +1113,7 @@ struct SystemSettingsPage {
     .constraintSize({ maxWidth: maxWidth })
     .padding({
       right: this.isNarrowPhone() ? 0 : 10,
-      bottom: this.isNarrowPhone() ? 28 : 16
+      bottom: Math.max(this.isNarrowPhone() ? 28 : 16, this.navBarInsetVp)
     })
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
@@ -1161,7 +1164,7 @@ struct SystemSettingsPage {
           .alignItems(HorizontalAlign.Start)
           .padding({
             left: this.settingsSidePadding(), right: this.settingsSidePadding(),
-            top: 0, bottom: this.isNarrowPhone() ? 8 : 16
+            top: 0, bottom: Math.max(this.isNarrowPhone() ? 8 : 16, this.navBarInsetVp)
           })
         }
       }

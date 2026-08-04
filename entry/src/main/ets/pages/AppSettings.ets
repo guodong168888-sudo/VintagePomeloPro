@@ -18,6 +18,7 @@ import deviceInfo from '@ohos.deviceInfo';
 import {
   applyStatusOnlyImmersiveShell,
   getMiniTitleContentTopInset,
+  getStatusOnlyWindowInsets,
   observeStatusOnlyWindowInsets
 } from '../common/StatusOnlyImmersiveShell';
 import {
@@ -115,6 +116,7 @@ struct AppSettingsPage {
   @State private value: StoredAppSettings = createDefaultAppSettings('');
   @State private breakpoint: BreakpointType = 'lg';
   @State private titleContentTopInsetVp: number = 40;
+  @State private navBarInsetVp: number = 0;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private breakpointCallback: ((value: BreakpointType) => void) | null = null;
   private appSettingsScroller: Scroller = new Scroller();
@@ -248,6 +250,7 @@ struct AppSettingsPage {
 
   private refreshTitleContentInset(pageWindow: window.Window): void {
     this.titleContentTopInsetVp = getMiniTitleContentTopInset(pageWindow);
+    this.navBarInsetVp = getStatusOnlyWindowInsets(pageWindow).bottom;
   }
 
   private startWindowInsetObserver(pageWindow: window.Window): void {
@@ -561,7 +564,8 @@ struct AppSettingsPage {
         .constraintSize({ minHeight: '100%', maxWidth: this.contentMaxWidth() })
         .padding({
           left: this.contentSidePadding(), right: this.contentSidePadding(),
-          top: this.contentTopInset(), bottom: this.isCompact() ? 32 : 44
+          top: this.contentTopInset(),
+          bottom: Math.max(this.isCompact() ? 32 : 44, this.navBarInsetVp)
         })
         .alignSelf(ItemAlign.Start)
       }

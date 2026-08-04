@@ -92,10 +92,14 @@ export function getStatusOnlyWindowInsets(pageWindow: window.Window): StatusOnly
     const density = Math.max(1, display.getDefaultDisplaySync().densityPixels);
     const systemAvoid = pageWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
     const cutoutAvoid = pageWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_CUTOUT);
+    // 沉浸布局下系统导航指示条走独立的 TYPE_NAVIGATION_INDICATOR, 不并入
+    // TYPE_SYSTEM; 漏掉它会让底部内容贴近手势条, 造成误触和导航图标不居中。
+    const navigationAvoid = pageWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
     insets.top = Math.ceil(Math.max(systemAvoid.topRect.height, cutoutAvoid.topRect.height) / density);
     insets.left = Math.ceil(Math.max(systemAvoid.leftRect.width, cutoutAvoid.leftRect.width) / density);
     insets.right = Math.ceil(Math.max(systemAvoid.rightRect.width, cutoutAvoid.rightRect.width) / density);
-    insets.bottom = Math.ceil(Math.max(systemAvoid.bottomRect.height, cutoutAvoid.bottomRect.height) / density);
+    insets.bottom = Math.ceil(Math.max(systemAvoid.bottomRect.height, cutoutAvoid.bottomRect.height,
+      navigationAvoid.bottomRect.height) / density);
   } catch (_) {
   }
   return insets;

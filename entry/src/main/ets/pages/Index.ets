@@ -86,6 +86,7 @@ struct Index {
   @State private viewportHeight: number = 0;
   @State private titleContentTopInsetVp: number = 40;
   @State private statusBarHeightVp: number = 0;
+  @State private navBarInsetVp: number = 0;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private phoneNavController: HdsTabsController = new HdsTabsController();
   private builtinScroller: Scroller = new Scroller();
@@ -204,7 +205,9 @@ struct Index {
     this.titleContentTopInsetVp = getMiniTitleContentTopInset(pageWindow);
     // Wide layouts do not render HDS MINI. Offset them by the physical status
     // inset only, independently from the narrow-layout title height.
-    this.statusBarHeightVp = getStatusOnlyWindowInsets(pageWindow).top;
+    const insets = getStatusOnlyWindowInsets(pageWindow);
+    this.statusBarHeightVp = insets.top;
+    this.navBarInsetVp = insets.bottom;
   }
 
   private startWindowInsetObserver(pageWindow: window.Window): void {
@@ -786,7 +789,7 @@ struct Index {
       left: this.isNarrowPhone() ? 10 : 16,
       right: this.isNarrowPhone() ? 10 : 16,
       top: this.isNarrowPhone() ? 10 : 16,
-      bottom: this.isNarrowPhone() ? 10 : 16
+      bottom: Math.max(this.isNarrowPhone() ? 10 : 16, this.navBarInsetVp)
     })
     .backgroundColor($r('app.color.sidebar_background'))
     .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
@@ -908,7 +911,7 @@ struct Index {
       // overlaid bottom bar. The extra inset is harmless on tablet layouts.
       .padding({
         top: this.isPhone() ? this.phoneTitleBarScrollInset() : 2,
-        bottom: this.isPhone() ? this.phoneBottomInset() : 36
+        bottom: this.isPhone() ? this.phoneBottomInset() : Math.max(36, this.navBarInsetVp)
       })
     }
     .layoutWeight(1)
@@ -935,7 +938,7 @@ struct Index {
     .layoutWeight(1)
     .justifyContent(this.isPhone() ? FlexAlign.Start : FlexAlign.Center)
     .padding({ top: this.isNarrowPhone() ? 18 : (this.breakpoint === 'sm' ? 30 : 0),
-      bottom: this.isNarrowPhone() ? 72 : (this.breakpoint === 'sm' ? 96 : 0) })
+      bottom: Math.max(this.isNarrowPhone() ? 72 : (this.breakpoint === 'sm' ? 96 : 0), this.navBarInsetVp) })
   }
 
   @Builder
@@ -948,7 +951,7 @@ struct Index {
       .constraintSize({ minHeight: '100%' })
       .padding({
         top: this.isPhone() ? this.phoneTitleBarScrollInset() : 2,
-        bottom: this.isPhone() ? this.phoneBottomInset() : 36
+        bottom: this.isPhone() ? this.phoneBottomInset() : Math.max(36, this.navBarInsetVp)
       })
     }
     .layoutWeight(1)
@@ -1059,7 +1062,7 @@ struct Index {
     .divider({ mode: DividerMode.FOLLOW_SCROLL })
     .barBackgroundBlurStyle(BlurStyle.COMPONENT_THICK)
     .barFloatingStyle({
-      barBottomMargin: this.isPhoneLandscape() ? 10 : 14,
+      barBottomMargin: Math.max(this.isPhoneLandscape() ? 10 : 14, this.navBarInsetVp),
       barSideMargin: this.isPhoneLandscape() ? 24 : 20,
       gradientMask: { maskColor: $r('app.color.page_background') },
       systemMaterialEffect: {
