@@ -4,7 +4,17 @@
 
 基线：WineHua `VintagePomeloMaster` @ `ba7218a`
 
-> **同步基线标记**：最新合并到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `996aabb`）。下次同步先 `git log 996aabb..origin/master --oneline`，避免重复合并。
+> **同步基线标记**：最新合并到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `d9c667e`）。下次同步先 `git log d9c667e..origin/master --oneline`，避免重复合并。
+
+### 2026-08-05 增量同步（996aabb..d9c667e）
+
+- 分支：`feature/20260803-master-sync`（基于 1.1.4 `acaf19e`）。
+- 上游增量 11 个提交，采纳 3 项（手动移植）：
+  - `8fb8488` → broker.cpp 对全部 SPAWN 请求统一 `AddProcess`（explorer 内双击的 exe 进入任务列表），`ParseProcessName` 兼容 homeDir/binDir/`__winehua_*` 标记段；wine_process.cpp basename 兼容 `\` 反斜杠路径。私有 Index 已有 1.5s 轮询刷新，未做 process-updated 推送节流（后续可加）。
+  - `e5cd7fa` → 私有 `input_resolver.cpp` 全屏独占分支前加入前置命中：遍历 z-order 中高于全屏窗口的 toplevel 及其 subsurface（跳过连带 fullscreen 的旧窗口，与渲染侧对齐），修复"全屏游戏时新窗口/菜单显示在上方但点击回到游戏"。
+  - `bb617a4` 部分 → `wine_env.cpp` 的 `UpsertEnvLine` 改为"删除全部同 key 再追加"，避免 AppendProductDxvkEnv 覆盖 WEAKBARRIER 等产生重复 key。
+- 跳过并记录：`7ed8ad2`（dinput_click_probe 私有 wine 子模块已含）、`faf98af`（私有 CI 已装 curl，mono 下载成功）、`d3688e1`（BOX64 守卫私有已有）、`d9c667e`（私有 `@engine/explorer` 登记体系语义不同）、docs/版本号（`c5263a3` `82ee3f3` `1dc0283` `70abb0b`）。
+- 验证：`make hap`（winehua-dev 容器）构建成功，1.1.4/1001004 arm64 HAP 签名完成。
 
 ### 2026-08-03 二次合并：warm-prefix explorer 恢复修复
 
