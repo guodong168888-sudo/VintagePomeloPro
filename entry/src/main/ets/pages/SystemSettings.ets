@@ -1,7 +1,9 @@
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
+import fs from '@ohos.file.fs';
 import { bundleManager, common, ConfigurationConstant } from '@kit.AbilityKit';
 import { picker } from '@kit.CoreFileKit';
+import { zlib } from '@kit.BasicServicesKit';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import {
   ControlBarDirection,
@@ -395,6 +397,170 @@ struct SystemSettingsPage {
 
   private clearPageBackground(): void {
     this.updatePageBackground('', false);
+  }
+
+  // ── 字体导入 (ZIP → C:\windows\Fonts) ──
+  private static readonly FONT_EXTENSIONS: string[] = ['ttf', 'otf', 'ttc', 'otc', 'fon', 'fnt'];
+  private static readonly WINE_WINDOWS_DIR: string =
+    '/data/storage/el2/base/files/.wine/drive_c/windows/';
+
+  private wineFontsDir(): string {
+    try {
+      if (fs.accessSync(SystemSettingsPage.WINE_WINDOWS_DIR + 'Fonts')) {
+        return SystemSettingsPage.WINE_WINDOWS_DIR + 'Fonts';
+      }
+      if (fs.accessSync(SystemSettingsPage.WINE_WINDOWS_DIR + 'fonts')) {
+        return SystemSettingsPage.WINE_WINDOWS_DIR + 'fonts';
+      }
+    } catch (_) {
+    }
+    return SystemSettingsPage.WINE_WINDOWS_DIR + 'Fonts';
+  }
+
+  private async importFontZip(): Promise<void> {
+    let selected: string[] = [];
+    try {
+      const documentPicker = new picker.DocumentViewPicker(this.context);
+      const options = new picker.DocumentSelectOptions();
+      options.fileSuffixFilters = ['字体包|.zip'];
+      options.maxSelectNumber = 1;
+      selected = await documentPicker.select(options);
+    } catch (_) {
+      promptAction.showToast({ message: '未选择字体压缩包' });
+      return;
+    }
+    if (!selected || selected.length === 0) return;
+    const stamp = Date.now();
+    const cacheZip = this.context.cacheDir + '/font_import_' + stamp + '.zip';
+    const tmpDir = this.context.cacheDir + '/font_import_' + stamp;
+    try {
+      // picker 返回 file:// URI, 先经 fs 打开再复制到应用缓存, 解压用真实路径。
+      const srcFile = fs.openSync(selected[0], fs.OpenMode.READ_ONLY);
+      fs.copyFileSync(srcFile.fd, cacheZip);
+      fs.closeSync(srcFile);
+      fs.mkdirSync(tmpDir, true);
+      try {
+        await zlib.decompressFile(cacheZip, tmpDir, { level: zlib.CompressLevel.COMPRESS_LEVEL_DEFAULT_COMPRESSION });
+      } catch (_) {
+        promptAction.showDialog({
+          title: '解压失败',
+          message: '无法解压所选文件，请确认是有效的 ZIP 压缩包。',
+          buttons: [{ text: '确定', color: '#5569D8' }]
+        });
+        await this.removeDirRecursive(tmpDir);
+        try { fs.unlinkSync(cacheZip); } catch (_) {}
+        return;
+      }
+      // 校验压缩包内是否全部为字体文件
+      const entries = fs.listFileSync(tmpDir);
+      const fonts: string[] = [];
+      const bad: string[] = [];
+      for (const entry of entries) {
+        if (this.isFontFile(tmpDir + '/' + entry)) fonts.push(entry);
+        else bad.push(entry);
+      }
+      if (fonts.length === 0 || bad.length > 0) {
+        promptAction.showDialog({
+          title: '字体包无效',
+          message: fonts.length === 0 ? '压缩包中没有字体文件。' :
+            '压缩包包含非字体文件，已取消导入：' + bad[0],
+          buttons: [{ text: '确定', color: '#5569D8' }]
+        });
+        await this.removeDirRecursive(tmpDir);
+        try { fs.unlinkSync(cacheZip); } catch (_) {}
+        return;
+      }
+      // 确认将删除旧字体
+      AlertDialog.show({
+        title: '导入字体',
+        message: '将导入 ' + fonts.length + ' 个字体，并删除 C:\\windows\\Fonts 下所有旧字体文件。是否继续？',
+        primaryButton: {
+          value: '取消',
+          action: (): void => {
+            this.removeDirRecursive(tmpDir);
+            try { fs.unlinkSync(cacheZip); } catch (_) {}
+          }
+        },
+        secondaryButton: {
+          value: '导入',
+          fontColor: '#D94848',
+          action: (): void => {
+            this.applyFontImport(tmpDir, cacheZip, fonts);
+          }
+        }
+      });
+    } catch (_) {
+      promptAction.showToast({ message: '导入失败，请稍后重试' });
+      await this.removeDirRecursive(tmpDir);
+      try { fs.unlinkSync(cacheZip); } catch (_) {}
+    }
+  }
+
+  private async applyFontImport(tmpDir: string, cacheZip: string, fonts: string[]): Promise<void> {
+    try {
+      const fontsDir = this.wineFontsDir();
+      await this.removeDirRecursive(fontsDir);
+      fs.mkdirSync(fontsDir, true);
+      for (const font of fonts) {
+        fs.copyFileSync(tmpDir + '/' + font, fontsDir + '/' + font);
+      }
+      await this.removeDirRecursive(tmpDir);
+      try { fs.unlinkSync(cacheZip); } catch (_) {}
+      AlertDialog.show({
+        title: '字体导入完成',
+        message: '已导入 ' + fonts.length + ' 个字体到 C:\\windows\\Fonts。请重启应用后生效。',
+        primaryButton: { value: '知道了', action: (): void => {} }
+      });
+    } catch (_) {
+      promptAction.showToast({ message: '字体写入失败' });
+      await this.removeDirRecursive(tmpDir);
+      try { fs.unlinkSync(cacheZip); } catch (_) {}
+    }
+  }
+
+  /** 扩展名 + 魔数双重校验, 确保压缩包内都是真正的字体文件。 */
+  private isFontFile(path: string): boolean {
+    const lower = path.toLowerCase();
+    const dot = lower.lastIndexOf('.');
+    const ext = dot >= 0 ? lower.substring(dot + 1) : '';
+    if (SystemSettingsPage.FONT_EXTENSIONS.indexOf(ext) < 0) return false;
+    if (ext === 'fnt') return true; // 位图字体没有统一魔数, 仅按扩展名
+    try {
+      const file = fs.openSync(path, fs.OpenMode.READ_ONLY);
+      const buf = new ArrayBuffer(4);
+      fs.readSync(file.fd, buf);
+      fs.closeSync(file);
+      const view = new Uint8Array(buf);
+      if (view[0] === 0x4D && view[1] === 0x5A) return true;                            // FON (NE/PE)
+      if (view[0] === 0x00 && view[1] === 0x01 && view[2] === 0x00 && view[3] === 0x00) return true; // TTF
+      if (view[0] === 0x4F && view[1] === 0x54 && view[2] === 0x54 && view[3] === 0x4F) return true; // OTTO
+      if (view[0] === 0x74 && view[1] === 0x72 && view[2] === 0x75 && view[3] === 0x65) return true; // true
+      if (view[0] === 0x74 && view[1] === 0x74 && view[2] === 0x63 && view[3] === 0x66) return true; // ttcf
+      if (view[0] === 0x74 && view[1] === 0x79 && view[2] === 0x70 && view[3] === 0x31) return true; // typ1
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  private async removeDirRecursive(path: string): Promise<void> {
+    try {
+      if (!fs.accessSync(path)) return;
+      const entries = fs.listFileSync(path);
+      for (const entry of entries) {
+        const full = path + '/' + entry;
+        try {
+          if (fs.statSync(full).isDirectory()) {
+            await this.removeDirRecursive(full);
+          } else {
+            fs.unlinkSync(full);
+          }
+        } catch (_) {
+        }
+      }
+      fs.rmdirSync(path);
+    } catch (_) {
+    }
   }
 
   private updateTheme(theme: ThemeMode): void {
@@ -869,6 +1035,17 @@ struct SystemSettingsPage {
             this.settings.usePageBackground, (value: boolean): void => this.togglePageBackground(value),
             'page-background-enabled')
           this.PageBackgroundChooser()
+          Column({ space: 10 }) {
+            Text('字体').fontSize(14).fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.text_primary')).width('100%')
+            Text('从 ZIP 压缩包导入字体到 Wine 的 C:\\windows\\Fonts。导入前会删除该目录下所有旧字体，导入后请重启应用生效。')
+              .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+            Button('导入字体包 (ZIP)').width('100%').height(44).borderRadius(12)
+              .backgroundColor($r('app.color.accent')).fontColor('#FFFFFFFF')
+              .id('font-import-button')
+              .onClick((): void => { this.importFontZip(); })
+          }
+          .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
         }
         .width('100%')
         .padding(this.cardPadding())
