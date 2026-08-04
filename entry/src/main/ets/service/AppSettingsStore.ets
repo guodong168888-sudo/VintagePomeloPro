@@ -103,7 +103,13 @@ export class AppSettingsStore {
   private loadGlobal(): void {
     if (!this.store) return;
     const raw = this.store.getSync(GLOBAL_KEY, '') as string;
-    if (!raw) return;
+    if (!raw) {
+      // 全新安装: 无任何存储值时也要应用设备默认 —— 平板默认切边
+      // (圆角屏避让), 否则桌面会以全屏出生, 圆角遮挡开始菜单。
+      this.globalSettings.desktopWindowMode =
+        this.resolveDesktopWindowModeDefault(this.globalSettings.desktopWindowMode);
+      return;
+    }
     try {
       const stored = JSON.parse(raw) as GlobalSettings;
       const defaults = createDefaultGlobalSettings();
