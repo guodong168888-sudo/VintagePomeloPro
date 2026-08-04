@@ -145,6 +145,9 @@ jobs:
           if ! command -v glslangValidator >/dev/null 2>&1; then
             packages+=(glslang-tools)
           fi
+          if ! command -v curl >/dev/null 2>&1; then
+            packages+=(curl)
+          fi
           if [ "${#packages[@]}" -gt 0 ]; then
             echo "Installing missing CI packages: ${packages[*]}"
             apt-get update
