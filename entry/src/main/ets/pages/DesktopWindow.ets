@@ -1,6 +1,6 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { common } from '@kit.AbilityKit';
-import { display } from '@kit.ArkUI';
+import { display, window } from '@kit.ArkUI';
 import testNapi from 'libentry.so';
 import { WineWindowManager } from '../service/WineWindowManager';
 import { OH2EVDEV } from '../common/KeyMap';
@@ -213,8 +213,8 @@ struct DesktopPage {
       const density = Math.max(1, display.getDefaultDisplaySync().densityPixels);
       const d = display.getDefaultDisplaySync();
       const marginPx = resolveCornerSafeMarginPx(d.width, d.height);
-      // 用浮点 vp 让物理边距精确等于自动估算值,
-      // 保证 XComponent surface 与预置输出尺寸一致, 避免触发桌面重排。
+      // 只做圆角避让; 挖孔不做窗口级避让 (整窗内缩很难看), 按钮级避让由
+      // 各页控件按 TYPE_CUTOUT 单独处理。
       this.cornerSafeMargin = Math.max(16, marginPx / density);
       hilog.info(DOMAIN, 'LIFE', '[XComp] corner-safe margin=%{public}dvp (%{public}dpx @density=%{public}s)',
         this.cornerSafeMargin, marginPx, density.toFixed(2));
