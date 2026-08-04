@@ -109,3 +109,13 @@
 - 构建：`scripts/vpbuild.sh` 复用常驻容器 `vp-build`（不再每次 docker run 新建容器）；Docker `winehua-dev` ARM64 Debug HAP 验签通过。
 - 产物：`F:\PomeloWin\artifacts\VintagePomeloPro-1.1.2-master-sync-20260803\旧柚Pro-1.1.2-master-sync-automargin.hap`。
 - 结论：用户真机确认“好用”，本地提交当前版本（`644f6de`），未推送。
+
+### 2026-08-04 二次 master 更新 + DXVK 方针对齐 + 版本 1.1.3
+
+- 上游合并（996aabb..origin/master 共 6 提交，选 2 合 4 跳过）：
+  - `d3688e1` → `fd98cbb`：所有 BOX64 环境变量加 `__aarch64__` 守卫（修复 x86_64 USE_LIBBOX64 导致 broker entryParams 错乱）；私有 `AppendProductDxvkEnv` 内的 BOX64 变量同步加守卫；
+  - `7ed8ad2` → `5afcaaf`：dinput_click_probe 迁移到 wine 子模块，wine gitlink `3a69dcad` → `11e59500210`（线性后代，仅新增探针）；已重建 wine；
+  - 跳过：`70abb0b`（上游版本号）、`1dc0283`（LGPL 文档）、`82ee3f3`/`c5263a3`（docs/.gitignore）。
+- DXVK/VirGL 方针对齐（`1dbed33`）：DXVK override 从全 D3D native 改回 master 的 `d3d11=n;dxgi=n`。原因：Venus/Maleoon 栈上 DXVK 对 DX9/10 兼容性弱于 WineD3D→GL→VirGL，全 D3D 走 DXVK 会破坏 VirGL 驱动游戏；上游评估文档亦确认 Maleoon 910/920 达不到 DXVK 2.x 基线，Modern 仅作独立 profile 待能力门禁。真机回归：D3D11 立方体 dxvk_legacy 80+ FPS 正常。
+- 版本：1.1.3（1001003）。
+- 产物：`F:\PomeloWin\artifacts\VintagePomeloPro-1.1.3-20260804\`（debug HAP `74F18840…`、release APP `02A6599A…`、release entry HAP `EB159976…`，均验签 Verify success）。
