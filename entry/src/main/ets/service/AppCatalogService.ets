@@ -621,11 +621,19 @@ export class AppCatalogService {
     executableExists?: boolean): AppDescriptor {
     const id = providedId ?? stableAppId(AppSource.DOWNLOAD, executable);
     const settings = provided ?? AppSettingsStore.getInstance().getAppSettings(id);
+    const resolvedExecutable = settings.executable || executable;
+    // 默认工作目录取主程序所在目录（与“选择主程序”时的行为一致），
+    // 而非游戏根目录：Wine/Explorer 双击 exe 时也以 exe 目录为工作目录，
+    // 嵌套目录游戏（如 games/pal2/pal2/Pal2.exe）相对资源加载才能成功。
+    const lastSeparator = Math.max(resolvedExecutable.lastIndexOf('/'),
+      resolvedExecutable.lastIndexOf('\\'));
+    const defaultWorkingDirectory = lastSeparator > 0
+      ? resolvedExecutable.substring(0, lastSeparator) : directory;
     const target: LaunchTarget = {
       kind: LaunchKind.WINE_EXE,
-      executable: settings.executable || executable,
+      executable: resolvedExecutable,
       arguments: settings.arguments,
-      workingDirectory: settings.workingDirectory || directory
+      workingDirectory: settings.workingDirectory || defaultWorkingDirectory
     };
     return {
       id: id,
