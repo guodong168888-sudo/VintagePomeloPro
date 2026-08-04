@@ -83,7 +83,8 @@ WineProcessEntry* AddProcess(pid_t pid, const std::string& exeFullPath, int stdo
                              const std::string& requestedSessionId) {
     std::lock_guard<std::mutex> lock(gProcMutex);
     std::string basename = exeFullPath;
-    auto slash = basename.find_last_of('/');
+    // 兼容 Windows 反斜杠路径 (C:\game\game.exe), 否则完整路径会显示为进程名
+    auto slash = basename.find_last_of("/\\");
     if (slash != std::string::npos) basename = basename.substr(slash + 1);
     gProcRegistry.erase(std::remove_if(gProcRegistry.begin(), gProcRegistry.end(),
         [pid](const WineProcessEntry& entry) { return entry.pid == pid; }), gProcRegistry.end());

@@ -82,6 +82,69 @@ bool InputResolver::FindInputTargetAt(int x, int y, InputTarget& out)
                     compositor_.HasZeroCopyLayerForToplevelLocked(fullscreenId) ? 1 : 0,
                     zst->preFsW, zst->preFsH, zst->w, zst->h, contentW, contentH);
             }
+            // 前置命中: 盖在游戏之上的层优先 — 修复"全屏时弹出新窗口显示在上方、
+            // 点击却回到游戏"。渲染在游戏上方 (zIndex 更高) 的窗口在 z-order
+            // (与渲染同源) 里排在游戏层之后, 先参与坐标命中, 命中即返回; 游戏
+            // 自身及其 subsurface 由下方 fit 分支处理。无更高层窗口时范围为空,
+            // 等价旧行为。
+            {
+                size_t fsIdx = 0;
+                bool fsFound = false;
+                const auto& zorder = tmgr_.toplevelZOrder();
+                for (size_t li = 0; li < zorder.size(); ++li) {
+                    if (zorder[li] == fullscreenId) { fsIdx = li; fsFound = true; break; }
+                }
+                if (fsFound) {
+                    // 高于全屏窗口的 toplevel (z-order 中排在后面)
+                    for (size_t li = fsIdx + 1; li < zorder.size(); ++li) {
+                        uint32_t id = zorder[li];
+                        if (!tmgr_.IsToplevelVisibleLocked(id, desktopRootToplevelId_)) continue;
+                        const auto* st = tmgr_.FindToplevelLocked(id);
+                        if (!st) continue;
+                        // 与渲染侧 blitToplevel 对齐: 连带 fullscreen 的非主窗口
+                        // 渲染时被跳过, 命中同样下放 (防点到看不见的窗口)
+                        if (st->fullscreen) continue;
+                        if (x >= st->x && x < st->x + st->w && y >= st->y && y < st->y + st->h) {
+                            wl_resource* surf = tmgr_.GetSurfaceForToplevel(id);
+                            if (surf) {
+                                auto* sd = static_cast<SurfaceData*>(wl_resource_get_user_data(surf));
+                                if (sd && sd->inputRegionEmpty) continue;
+                            }
+                            out.toplevelId = id;
+                            out.surface = surf;
+                            out.originX = st->x;
+                            out.originY = st->y;
+                            return out.surface != nullptr;
+                        }
+                    }
+                    // 高于全屏窗口的层上的 subsurface (新窗口的菜单/内容)
+                    for (auto it = compositor_.subsurfaceLayers().rbegin();
+                         it != compositor_.subsurfaceLayers().rend(); ++it) {
+                        if (compositor_.zeroCopySurfaceKeys().count(it->surfaceKey)) continue;
+                        if (it->parentToplevel == fullscreenId) continue;  // 游戏 subsurface 走 fit 分支
+                        const auto* parent = tmgr_.FindToplevelLocked(it->parentToplevel);
+                        if (!parent || parent->fullscreen) continue;  // 连带 fullscreen 旧窗口的 subsurface 渲染被跳过
+                        if (!tmgr_.IsToplevelVisibleLocked(it->parentToplevel, desktopRootToplevelId_)) continue;
+                        if (it->w <= 0 || it->h <= 0) continue;
+                        int layerX = 0, layerY = 0;
+                        compositor_.ResolveSubsurfaceLayerPositionLocked(*it, layerX, layerY);
+                        if (x >= layerX && x < layerX + it->w && y >= layerY && y < layerY + it->h) {
+                            if (it->isExternal) {
+                                out.toplevelId = rootId;
+                                out.surface = tmgr_.GetSurfaceForToplevel(rootId);
+                                out.originX = 0;
+                                out.originY = 0;
+                            } else {
+                                out.toplevelId = it->parentToplevel;
+                                out.surface = it->surface;
+                                out.originX = layerX;
+                                out.originY = layerY;
+                            }
+                            return out.surface != nullptr;
+                        }
+                    }
+                }
+            }
             // 该窗口的 subsurface 层绘制在窗口内容之上, 先命中 (同一变换)
             for (auto it = compositor_.subsurfaceLayers().rbegin(); it != compositor_.subsurfaceLayers().rend(); ++it) {
                 if (compositor_.zeroCopySurfaceKeys().count(it->surfaceKey)) continue;

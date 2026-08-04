@@ -126,13 +126,13 @@ static void UpsertEnvLine(std::vector<std::string>& env, const std::string& line
     const size_t sep = line.find('=');
     if (sep == std::string::npos || sep == 0) return;
     const std::string key = line.substr(0, sep);
-    for (std::string& existing : env) {
-        if (existing.compare(0, key.size(), key) == 0 &&
-            existing.size() > key.size() && existing[key.size()] == '=') {
-            existing = line;
-            return;
-        }
-    }
+    // 清理所有同 key 的旧条目, 然后追加新值 — 避免预填充 vector 上
+    // push_back 路径 (如 AppendProductDxvkEnv 覆盖 WEAKBARRIER) 产生重复 key。
+    // (与上游 bb617a4 收敛语义一致)
+    env.erase(std::remove_if(env.begin(), env.end(), [&](const std::string& existing) {
+        return existing.compare(0, key.size(), key) == 0 &&
+               existing.size() > key.size() && existing[key.size()] == '=';
+    }), env.end());
     env.push_back(line);
 }
 
