@@ -117,8 +117,33 @@ else
         elif [ -x /usr/bin/wayland-scanner ]; then
             export WAYLAND_SCANNER=/usr/bin/wayland-scanner
         else
-            echo "ERROR: wayland-scanner not found; install libwayland-bin or set WAYLAND_SCANNER." >&2
-            return 1 2>/dev/null || exit 1
+            # 自举: CI/新检出没有 wayland-scanner 时从 thirdparty/wayland 构建,
+            # 消除"从旧 worktree 复制 host-tools"的手工步骤。与
+            # build_ohos_guest_gfx.sh 的兜底一致, 但这里是顶层被 source 的脚本,
+            # 不能用 local。
+            wayland_src="$ROOT/thirdparty/wayland"
+            if [ -f "$wayland_src/meson.build" ]; then
+                echo "wayland-scanner not found, building from thirdparty/wayland..." >&2
+                wl_build="$BUILD_DIR/wayland-scanner-build"
+                rm -rf "$wl_build"
+                meson setup "$wl_build" "$wayland_src" -Ddocumentation=false -Dtests=false
+                meson compile -C "$wl_build"
+                wl_scanner=""
+                if [ -x "$wl_build/wayland-scanner" ]; then
+                    wl_scanner="$wl_build/wayland-scanner"
+                elif [ -x "$wl_build/src/wayland-scanner" ]; then
+                    wl_scanner="$wl_build/src/wayland-scanner"
+                fi
+                if [ -n "$wl_scanner" ]; then
+                    mkdir -p "$BUILD_DIR/host-tools/bin"
+                    cp "$wl_scanner" "$BUILD_DIR/host-tools/bin/wayland-scanner"
+                    export WAYLAND_SCANNER="$BUILD_DIR/host-tools/bin/wayland-scanner"
+                fi
+            fi
+            if [ -z "${WAYLAND_SCANNER:-}" ]; then
+                echo "ERROR: wayland-scanner not found; install libwayland-bin or set WAYLAND_SCANNER." >&2
+                return 1 2>/dev/null || exit 1
+            fi
         fi
     fi
     [ -n "${WAYLAND_SCANNER:-}" ] || err "wayland-scanner not found in PATH; install libwayland-bin or set WAYLAND_SCANNER"
