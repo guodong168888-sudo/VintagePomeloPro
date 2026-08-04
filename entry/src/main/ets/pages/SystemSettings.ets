@@ -1242,9 +1242,6 @@ struct SystemSettingsPage {
       avoidLayoutSafeArea: true
       })
     .titleMode(HdsNavigationTitleMode.MINI)
-    // 设定页内容自带导航与标题, 且平板右上角可能有挖孔, HDS MINI 胶囊
-    // 会与之重叠; 进入设定页时隐藏标题栏, 需要时再通过系统手势唤出。
-    .hideTitleBar(true)
     .hideToolBar(true)
     .systemBarStyle(
       { statusBarContentColor: this.navigationTitleColor() },
