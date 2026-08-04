@@ -7,6 +7,7 @@ import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import { common, Want } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
+import display from '@ohos.display';
 import { KeyboardLayout } from '../components/KeyboardLayout';
 import { VirtualInputOverlay } from '../components/VirtualInputOverlay';
 import {
@@ -18,11 +19,17 @@ import {
   VirtualKeyMapping,
   cloneFreeButtonsConfig,
   createDefaultInputProfile,
-  generateFreeButtonId
+  generateFreeButtonId,
+  resolveCornerSafeMarginPx
 } from '../model/AppModels';
 import { InputProfileService } from '../service/InputProfileService';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
+import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
+import {
+  getStatusOnlyWindowInsets,
+  observeStatusOnlyWindowInsets
+} from '../common/StatusOnlyImmersiveShell';
 
 interface VirtualKeyInfo {
   key: VirtualKey;
@@ -65,6 +72,8 @@ struct AdvancedKeyMappingPage {
   @State private editingFreeIndex: number = -1;
   @State private showKeyPicker: boolean = false;
   @State private previewRevision: number = 0;
+  /** 沉浸布局下右侧挖孔/安全区避让宽度 (vp)，用于标题栏操作按钮防遮挡。 */
+  @State private cutoutRightInsetVp: number = 0;
   @State private returnAbilityName: string = '';
   @State private returnSessionId: string = '';
   @State private returnToplevelId: string = '0';
@@ -72,6 +81,7 @@ struct AdvancedKeyMappingPage {
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private returnScheduled: boolean = false;
   private breakpointCallback: ((value: BreakpointType) => void) | null = null;
+  private disposeWindowInsetObserver: (() => void) | null = null;
   private originalLayoutFullScreen: boolean = false;
   private hasOriginalWindowLayout: boolean = false;
   private windowRestored: boolean = false;
@@ -86,6 +96,27 @@ struct AdvancedKeyMappingPage {
 
   private titleButtonMargin(): number {
     return this.titleButtonInsetVp > 0 ? this.titleButtonInsetVp + 44 : 0;
+  }
+
+  /**
+   * 标题栏右侧操作按钮（恢复/保存）的整体右避让。
+   * MatePad Mini 等平板不向 TYPE_CUTOUT 报告相机孔，系统避让为 0，
+   * 因此平板按圆角安全边距估算保底避让，避免保存按钮落入右上角挖孔。
+   */
+  private headerRightInset(): number {
+    let tabletMargin = 0;
+    if (DeviceCapabilityPolicy.isTabletDevice()) {
+      try {
+        const defaultDisplay = display.getDefaultDisplaySync();
+        const density = Math.max(1, defaultDisplay.densityPixels);
+        const cornerMarginPx = resolveCornerSafeMarginPx(defaultDisplay.width, defaultDisplay.height);
+        tabletMargin = Math.ceil(cornerMarginPx / density) + 12;
+      } catch (_) {
+        tabletMargin = 0;
+      }
+    }
+    const cutoutMargin = this.cutoutRightInsetVp > 0 ? this.cutoutRightInsetVp + 12 : 0;
+    return Math.max(this.titleButtonMargin(), cutoutMargin, tabletMargin);
   }
 
   aboutToAppear(): void {
@@ -110,6 +141,10 @@ struct AdvancedKeyMappingPage {
 
   aboutToDisappear(): void {
     if (this.breakpointCallback) BreakpointSystem.unsubscribe(this.breakpointCallback);
+    if (this.disposeWindowInsetObserver) {
+      this.disposeWindowInsetObserver();
+      this.disposeWindowInsetObserver = null;
+    }
     this.restoreEditorWindow();
     this.resumeWineAbility();
   }
@@ -124,6 +159,10 @@ struct AdvancedKeyMappingPage {
       this.originalLayoutFullScreen = w.getWindowProperties().isLayoutFullScreen;
       this.hasOriginalWindowLayout = true;
       await w.setWindowLayoutFullScreen(true);
+      this.disposeWindowInsetObserver = observeStatusOnlyWindowInsets(w, (insets): void => {
+        // 平板横屏下相机孔位于右侧标题栏高度范围，按钮组需整体左移避让。
+        this.cutoutRightInsetVp = insets.right;
+      });
       try {
         await w.setSpecificSystemBarEnabled('status', false);
         await w.setSpecificSystemBarEnabled('navigationIndicator', false);
@@ -475,23 +514,23 @@ struct AdvancedKeyMappingPage {
   private MappingHeader() {
     if (this.isNarrowPhone() && this.titleButtonInsetVp > 0) {
       Column({ space: 4 }) {
-        Row({ space: 6 }) {
-          this.MappingBackButton()
-          this.MappingTitle(false)
-        }.width('100%').height(52).padding({ right: this.titleButtonMargin() })
-        Row() {
-          Blank()
-          this.MappingActions()
-        }.width('100%').height(44)
-      }.width('100%').height(100)
-    } else {
-      Row() {
+      Row({ space: 6 }) {
         this.MappingBackButton()
-        this.MappingTitle(!this.isCompact())
+        this.MappingTitle(false)
+      }.width('100%').height(52).padding({ right: this.headerRightInset() })
+      Row() {
+        Blank()
         this.MappingActions()
-      }.width('100%').padding({ right: this.titleButtonMargin() })
-    }
+      }.width('100%').height(44).padding({ right: this.headerRightInset() })
+    }.width('100%').height(100)
+  } else {
+    Row() {
+      this.MappingBackButton()
+      this.MappingTitle(!this.isCompact())
+      this.MappingActions()
+    }.width('100%').padding({ right: this.headerRightInset() })
   }
+}
 
   build() {
     Column({ space: this.isCompact() ? 10 : 16 }) {
