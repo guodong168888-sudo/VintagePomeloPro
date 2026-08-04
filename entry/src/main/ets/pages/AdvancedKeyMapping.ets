@@ -6,6 +6,7 @@
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import { common, Want } from '@kit.AbilityKit';
+import { window } from '@kit.ArkUI';
 import { KeyboardLayout } from '../components/KeyboardLayout';
 import { VirtualInputOverlay } from '../components/VirtualInputOverlay';
 import {
@@ -71,6 +72,9 @@ struct AdvancedKeyMappingPage {
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private returnScheduled: boolean = false;
   private breakpointCallback: ((value: BreakpointType) => void) | null = null;
+  private originalLayoutFullScreen: boolean = false;
+  private hasOriginalWindowLayout: boolean = false;
+  private windowRestored: boolean = false;
 
   private isCompact(): boolean {
     return this.breakpoint === 'xs' || this.breakpoint === 'sm';
@@ -88,6 +92,7 @@ struct AdvancedKeyMappingPage {
     BreakpointSystem.initialize();
     this.breakpointCallback = (value: BreakpointType): void => { this.breakpoint = value; };
     BreakpointSystem.subscribe(this.breakpointCallback);
+    this.enterImmersive();
     const params = (router.getParams() ?? {}) as Record<string, string>;
     this.profileId = params.profileId ?? 'default';
     this.profileName = params.profileName ?? (this.profileId === 'default' ? 'Vintage 默认手柄布局' : '应用专用按键映射');
@@ -105,7 +110,55 @@ struct AdvancedKeyMappingPage {
 
   aboutToDisappear(): void {
     if (this.breakpointCallback) BreakpointSystem.unsubscribe(this.breakpointCallback);
+    this.restoreEditorWindow();
     this.resumeWineAbility();
+  }
+
+  /**
+   * 编辑页隐藏系统栏 (沉浸), 内容滚动到顶部不再与系统标题重叠;
+   * 下拉唤出时系统栏图标反色, 保证在浅色页面下可见。
+   */
+  private async enterImmersive(): Promise<void> {
+    try {
+      const w = await window.getLastWindow(this.context);
+      this.originalLayoutFullScreen = w.getWindowProperties().isLayoutFullScreen;
+      this.hasOriginalWindowLayout = true;
+      await w.setWindowLayoutFullScreen(true);
+      try {
+        await w.setSpecificSystemBarEnabled('status', false);
+        await w.setSpecificSystemBarEnabled('navigationIndicator', false);
+      } catch (_) {
+        await w.setWindowSystemBarProperties({
+          statusBarColor: '#00000000',
+          navigationBarColor: '#00000000',
+          isStatusBarLightIcon: false,
+          isNavigationBarLightIcon: false
+        });
+      }
+    } catch (_) {
+    }
+  }
+
+  private async restoreEditorWindow(): Promise<void> {
+    if (this.windowRestored) return;
+    this.windowRestored = true;
+    try {
+      const w = await window.getLastWindow(this.context);
+      if (this.hasOriginalWindowLayout) {
+        await w.setWindowLayoutFullScreen(this.originalLayoutFullScreen);
+      }
+      try {
+        await w.setSpecificSystemBarEnabled('status', true);
+      } catch (_) {
+      }
+      await w.setWindowSystemBarProperties({
+        statusBarColor: '#00000000',
+        navigationBarColor: '#00000000',
+        isStatusBarLightIcon: false,
+        isNavigationBarLightIcon: false
+      });
+    } catch (_) {
+    }
   }
 
   private mappingFor(key: VirtualKey): VirtualKeyMapping | undefined {
