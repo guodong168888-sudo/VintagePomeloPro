@@ -4,7 +4,33 @@
 
 基线：WineHua `VintagePomeloMaster` @ `ba7218a`
 
-> **同步基线标记**：最新合并到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `d9c667e`）。下次同步先 `git log d9c667e..origin/master --oneline`，避免重复合并。
+> **同步基线标记**：最新合并到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `1036ada`）。下次同步先 `git log 1036ada..origin/master --oneline`，避免重复合并。
+
+### 2026-08-06 合成器 Layer 重构全链合并（d9c667e..1036ada + 先前暂缓链）
+
+- 分支：`feature/20260803-master-sync`（基于 1.1.5 前 `ac788e0`）。
+- 背景：`d9c667e` 之后的 5 个提交（`94077be` 方案B 单一 Z 序命中、`2386c5f` 几何收敛、`7a59c00`/`c35ac03` 层序/blit 收敛、`1036ada` 文档）依赖此前两轮「暂缓」的合成器重构链，故本次把整条链按序 cherry-pick -x 合入：
+
+  | 上游 SHA | 私有 SHA | 说明 |
+  | --- | --- | --- |
+  | `76a2cd4` | `810e632` | 阶段1 Layer 容器（合成/输入同源层序） |
+  | `d5deed7` | `2024706` | 阶段2 ZC 入层（GL 画面可被遮挡） |
+  | `6df338a` | `9b3a8ed` | 阶段3 PC 窗口内 Layer 收敛 + ZC 状态单一化 |
+  | `c2bd0ee` | `ad12797` | 阶段4 全屏目标单一化（fs-pick 纯函数） |
+  | `8ab97c3` | `fdf4c5e` | 层序跳过规则与全屏几何收敛到对象方法 |
+  | `13cc583` | `fbe84d2` | ToplevelState 完整封装（字段私有 + 语义方法） |
+  | `94077be` | `d63e63d` | 方案B 单一 Z 序命中循环统一输入命中 |
+  | `2386c5f` | `a1218fe` | 几何收敛 FitMapLayerRect + ResolveRootSize |
+  | `7a59c00` | `0443ea0` | ShouldSkipFullscreenCascade 谓词统一连带跳过 |
+  | `c35ac03` | `88ff56b` | 像素 blit 收敛 BlitClipAlpha（阶段3a） |
+  | `1036ada` | `6fdb30d` | 文档：固化全屏判定两套语义 |
+
+- 冲突处理（2 处）：
+  - `94077be`：私有线 2026-08-05 手移的 `e5cd7fa`「前置命中」分支被上游方案B 取代 → `input_resolver.cpp/.h` 直接采用上游版本（校验与上游逐字节一致），删除前置命中块。
+  - `7a59c00`：`desktop_compositor.cpp` blitSubsurface 的连带 fullscreen 跳过条件改为统一的 `ShouldSkipFullscreenCascade` 谓词（与输入命中同源）。
+- 跳过：链内 docs/checkpoint 提交（`c5e487e` `eaaeaeb` `6aaf6fd` `ea614cd` `4b82709` 及链外纯文档）不重复引入；`996aabb..d9c667e` 段已由上一轮同步覆盖。
+- 私有保留：桌面全屏零拷贝、phone in-process VirGL、`@engine/` 核心进程登记、`desktop_root_manager` 语义均未受影响（本链只改合成/输入层内部）。
+- 验证：`make hap`（winehua-dev 容器）构建成功，1.1.5/1001005 arm64 HAP 签名完成；`git diff --check` 通过；子模块 gitlink 无变化。
 
 ### 2026-08-05 增量同步（996aabb..d9c667e）
 

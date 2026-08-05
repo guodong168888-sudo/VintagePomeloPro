@@ -7,11 +7,16 @@
 | --- | --- |
 | 上游仓库 | `https://github.com/winehua/WineHua` |
 | 上游分支 | `master` |
-| **最后合并的上游 SHA** | `d9c667e4bdbc4792b83e6cd3d108a196efbf5bf8`（2026-08-05，explorer 桌面模式进程登记名） |
+| **最后合并的上游 SHA** | `1036ada`（2026-08-06，文档：固化全屏判定两套语义；其后无新提交） |
 | 合并方式 | 选择性 cherry-pick / 手动移植 + 等价内容人工核对 |
 | 本地对应分支 | `sync/master-dxvk-1103` → `private/wine-engine-app` |
-| 本地对应提交 | `acaf19e`（feature/20260803-master-sync，1.1.4 / 1001004） |
-| 核对日期 | 2026-08-05 |
+| 本地对应提交 | `6fdb30d`（feature/20260803-master-sync，1.1.5 / 1001005） |
+| 核对日期 | 2026-08-06 |
+
+## 已核对的上游增量（d9c667e..1036ada，共 5 个提交）
+
+连同先前暂缓的合成器 Layer 重构链（`76a2cd4`→`13cc583`）一并合入，明细见
+`docs/private-upstream-sync.md`「2026-08-06 合成器 Layer 重构全链合并」。
 
 ## 已核对的上游增量（996aabb..d9c667e，共 11 个提交）
 
