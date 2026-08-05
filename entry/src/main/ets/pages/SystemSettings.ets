@@ -1,9 +1,9 @@
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import fs from '@ohos.file.fs';
-import { bundleManager, common, ConfigurationConstant } from '@kit.AbilityKit';
+import { bundleManager, common, ConfigurationConstant, Want } from '@kit.AbilityKit';
 import { picker } from '@kit.CoreFileKit';
-import { zlib } from '@kit.BasicServicesKit';
+import testNapi from 'libentry.so';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import {
   BOX64_PRESET_IDS,
@@ -52,6 +52,15 @@ import {
 
 type SettingsSection = 'display' | 'appearance' | 'input' | 'engine' | 'about';
 
+/** native extractFontZip 的返回结构 (与 libentry Index.d.ts 保持一致)。 */
+interface FontZipExtractResult {
+  ok: boolean;
+  fonts: number;
+  bad: number;
+  firstBadExt: string;
+  error: string;
+}
+
 const DEVICE_SDK_API_VERSION: number = (() => {
   try {
     return deviceInfo.sdkApiVersion as number;
@@ -79,6 +88,9 @@ struct SystemSettingsPage {
   @State private titleContentTopInsetVp: number = 40;
   @State private navBarInsetVp: number = 0;
   @State private appVersion: string = '版本信息读取中…';
+  @State private fontImporting: boolean = false;
+  @State private fontImportStage: string = '';
+  @State private fontImportProgress: number = 0;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private settingsScroller: Scroller = new Scroller();
   private callback: ((value: BreakpointType) => void) | null = null;
@@ -310,12 +322,14 @@ struct SystemSettingsPage {
       controlBarPositionX: number = this.settings.controlBarPositionX,
       controlBarPositionY: number = this.settings.controlBarPositionY,
       d3dRendererPreference: D3DRendererPreference = this.settings.d3dRendererPreference,
-      desktopWindowMode: DesktopWindowMode = this.settings.desktopWindowMode): void {
+      desktopWindowMode: DesktopWindowMode = this.settings.desktopWindowMode,
+      keepScreenOn: boolean = this.settings.keepScreenOn): void {
     const virtualInputChanged = this.settings.virtualInputEnabled !== virtualInputEnabled;
     this.settings = {
       defaultDisplayMode: mode,
        desktopOrientation: desktopOrientation,
       desktopWindowMode: desktopWindowMode,
+      keepScreenOn: keepScreenOn,
       box64Preset: this.settings.box64Preset,
       desktopInputProfileId: desktopInputProfileId || 'default',
       viewMode: view,
@@ -376,6 +390,20 @@ struct SystemSettingsPage {
       this.settings.virtualInputEnabled, orientation);
   }
 
+  private updateKeepScreenOn(enabled: boolean): void {
+    this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
+      this.settings.useGlassEffect, this.settings.usePageBackground,
+      this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
+      this.settings.controlOpacity, this.settings.gamepadDeadzone,
+      this.settings.outputScale, this.settings.themeMode,
+      this.settings.controlBarDirection, this.settings.virtualMouseConfig,
+      this.settings.desktopInputProfileId, this.settings.pageBackgroundUri,
+      this.settings.virtualInputEnabled, this.settings.desktopOrientation,
+      this.settings.controlBarPositionX, this.settings.controlBarPositionY,
+      this.settings.d3dRendererPreference, this.settings.desktopWindowMode,
+      enabled);
+  }
+
   private togglePageBackground(enabled: boolean): void {
     if (enabled && this.settings.pageBackgroundUri.length === 0) {
       this.selectPageBackground();
@@ -404,7 +432,6 @@ struct SystemSettingsPage {
   }
 
   // ── 字体导入 (ZIP → C:\windows\Fonts) ──
-  private static readonly FONT_EXTENSIONS: string[] = ['ttf', 'otf', 'ttc', 'otc', 'fon', 'fnt'];
   private static readonly WINE_WINDOWS_DIR: string =
     '/data/storage/el2/base/files/.wine/drive_c/windows/';
 
@@ -437,14 +464,23 @@ struct SystemSettingsPage {
     const stamp = Date.now();
     const cacheZip = this.context.cacheDir + '/font_import_' + stamp + '.zip';
     const tmpDir = this.context.cacheDir + '/font_import_' + stamp;
+    this.fontImporting = true;
+    this.fontImportProgress = 0;
     try {
+      this.fontImportStage = '正在复制字体包…';
+      await new Promise<void>((resolve: () => void) => setTimeout(resolve, 30));
       // picker 返回 file:// URI, 先经 fs 打开再复制到应用缓存, 解压用真实路径。
       const srcFile = fs.openSync(selected[0], fs.OpenMode.READ_ONLY);
       fs.copyFileSync(srcFile.fd, cacheZip);
       fs.closeSync(srcFile);
       fs.mkdirSync(tmpDir, true);
+      this.fontImportStage = '正在解压字体包…';
+      await new Promise<void>((resolve: () => void) => setTimeout(resolve, 30));
+      // native 解压: 原始条目名只参与扩展名/魔数判断, 落盘一律用
+      // ASCII 安全名 (font-NNN.ext), 彻底规避中文/GBK 文件名编码问题。
+      let result: FontZipExtractResult;
       try {
-        await zlib.decompressFile(cacheZip, tmpDir, { level: zlib.CompressLevel.COMPRESS_LEVEL_DEFAULT_COMPRESSION });
+        result = testNapi.extractFontZip(cacheZip, tmpDir) as FontZipExtractResult;
       } catch (_) {
         promptAction.showDialog({
           title: '解压失败',
@@ -453,36 +489,63 @@ struct SystemSettingsPage {
         });
         await this.removeDirRecursive(tmpDir);
         try { fs.unlinkSync(cacheZip); } catch (_) {}
+        this.fontImporting = false;
         return;
       }
-      // 校验压缩包内是否全部为字体文件
-      const entries = fs.listFileSync(tmpDir);
-      const fonts: string[] = [];
-      const bad: string[] = [];
-      for (const entry of entries) {
-        if (this.isFontFile(tmpDir + '/' + entry)) fonts.push(entry);
-        else bad.push(entry);
-      }
-      if (fonts.length === 0 || bad.length > 0) {
+      if (!result.ok) {
         promptAction.showDialog({
-          title: '字体包无效',
-          message: fonts.length === 0 ? '压缩包中没有字体文件。' :
-            '压缩包包含非字体文件，已取消导入：' + bad[0],
+          title: '解压失败',
+          message: result.error || '无法解压所选文件，请确认是有效的 ZIP 压缩包。',
           buttons: [{ text: '确定', color: '#5569D8' }]
         });
         await this.removeDirRecursive(tmpDir);
         try { fs.unlinkSync(cacheZip); } catch (_) {}
+        this.fontImporting = false;
         return;
       }
+      if (result.bad > 0) {
+        const badInfo = result.firstBadExt && result.firstBadExt !== '(无扩展名)'
+          ? '如 .' + result.firstBadExt : result.firstBadExt;
+        promptAction.showDialog({
+          title: '字体包无效',
+          message: '压缩包包含非字体文件' +
+            (badInfo ? '（' + badInfo + '）' : '') +
+            '，已取消导入，共 ' + result.bad + ' 个。',
+          buttons: [{ text: '确定', color: '#5569D8' }]
+        });
+        await this.removeDirRecursive(tmpDir);
+        try { fs.unlinkSync(cacheZip); } catch (_) {}
+        this.fontImporting = false;
+        return;
+      }
+      // native 落盘的 font-NNN.ext 均为合法字体, 直接列目录即可。
+      const fonts: string[] = fs.listFileSync(tmpDir);
+      if (fonts.length === 0) {
+        promptAction.showDialog({
+          title: '字体包无效',
+          message: '压缩包中没有字体文件。',
+          buttons: [{ text: '确定', color: '#5569D8' }]
+        });
+        await this.removeDirRecursive(tmpDir);
+        try { fs.unlinkSync(cacheZip); } catch (_) {}
+        this.fontImporting = false;
+        return;
+      }
+      this.fontImportStage = '';
+      this.fontImportProgress = 0;
+      // 确认对话框由系统管理, 先撤掉阻塞遮罩, 避免用户点外部关闭后遮罩残留。
+      this.fontImporting = false;
       // 确认将删除旧字体
       AlertDialog.show({
         title: '导入字体',
-        message: '将导入 ' + fonts.length + ' 个字体，并删除 C:\\windows\\Fonts 下所有旧字体文件。是否继续？',
+        message: '将导入 ' + fonts.length + ' 个字体（含子目录），并删除 C:\\windows\\Fonts 下所有旧字体文件。' +
+          '将保留原始字体文件名（中文文件名会自动转码为 UTF-8）。是否继续？',
         primaryButton: {
           value: '取消',
           action: (): void => {
             this.removeDirRecursive(tmpDir);
             try { fs.unlinkSync(cacheZip); } catch (_) {}
+            this.fontImporting = false;
           }
         },
         secondaryButton: {
@@ -497,53 +560,63 @@ struct SystemSettingsPage {
       promptAction.showToast({ message: '导入失败，请稍后重试' });
       await this.removeDirRecursive(tmpDir);
       try { fs.unlinkSync(cacheZip); } catch (_) {}
+      this.fontImporting = false;
     }
   }
 
+  /** 把 native 已改名 (font-NNN.ext) 的字体复制到 C:\windows\Fonts。 */
   private async applyFontImport(tmpDir: string, cacheZip: string, fonts: string[]): Promise<void> {
     try {
       const fontsDir = this.wineFontsDir();
+      this.fontImporting = true;
+      this.fontImportProgress = 0;
+      this.fontImportStage = '正在清除旧字体…';
+      await new Promise<void>((resolve: () => void) => setTimeout(resolve, 30));
       await this.removeDirRecursive(fontsDir);
       fs.mkdirSync(fontsDir, true);
-      for (const font of fonts) {
-        fs.copyFileSync(tmpDir + '/' + font, fontsDir + '/' + font);
+      for (let index = 0; index < fonts.length; index++) {
+        fs.copyFileSync(tmpDir + '/' + fonts[index], fontsDir + '/' + fonts[index]);
+        this.fontImportProgress = Math.round((index + 1) / fonts.length * 100);
+        this.fontImportStage = '正在写入字体 ' + (index + 1) + '/' + fonts.length;
+        // 让出主线程, 进度 UI 才能逐项刷新。
+        await new Promise<void>((resolve: () => void) => setTimeout(resolve, 16));
       }
       await this.removeDirRecursive(tmpDir);
       try { fs.unlinkSync(cacheZip); } catch (_) {}
+      this.fontImporting = false;
+      this.fontImportProgress = 100;
       AlertDialog.show({
         title: '字体导入完成',
-        message: '已导入 ' + fonts.length + ' 个字体到 C:\\windows\\Fonts。请重启应用后生效。',
-        primaryButton: { value: '知道了', action: (): void => {} }
+        message: '已导入 ' + fonts.length + ' 个字体到 C:\\windows\\Fonts。' +
+          '字体需要重启应用（结束 App 进程）后才会生效，是否立即重启？',
+        primaryButton: {
+          value: '稍后',
+          action: (): void => {}
+        },
+        secondaryButton: {
+          value: '重启应用',
+          fontColor: '#D94848',
+          action: (): void => { this.restartAppAfterImport(); }
+        }
       });
     } catch (_) {
       promptAction.showToast({ message: '字体写入失败' });
       await this.removeDirRecursive(tmpDir);
       try { fs.unlinkSync(cacheZip); } catch (_) {}
+      this.fontImporting = false;
     }
   }
 
-  /** 扩展名 + 魔数双重校验, 确保压缩包内都是真正的字体文件。 */
-  private isFontFile(path: string): boolean {
-    const lower = path.toLowerCase();
-    const dot = lower.lastIndexOf('.');
-    const ext = dot >= 0 ? lower.substring(dot + 1) : '';
-    if (SystemSettingsPage.FONT_EXTENSIONS.indexOf(ext) < 0) return false;
-    if (ext === 'fnt') return true; // 位图字体没有统一魔数, 仅按扩展名
+  /** 导入字体后辅助用户做 App 级重启, 让 Wine 重新扫描 C:\windows\Fonts。 */
+  private async restartAppAfterImport(): Promise<void> {
     try {
-      const file = fs.openSync(path, fs.OpenMode.READ_ONLY);
-      const buf = new ArrayBuffer(4);
-      fs.readSync(file.fd, buf);
-      fs.closeSync(file);
-      const view = new Uint8Array(buf);
-      if (view[0] === 0x4D && view[1] === 0x5A) return true;                            // FON (NE/PE)
-      if (view[0] === 0x00 && view[1] === 0x01 && view[2] === 0x00 && view[3] === 0x00) return true; // TTF
-      if (view[0] === 0x4F && view[1] === 0x54 && view[2] === 0x54 && view[3] === 0x4F) return true; // OTTO
-      if (view[0] === 0x74 && view[1] === 0x72 && view[2] === 0x75 && view[3] === 0x65) return true; // true
-      if (view[0] === 0x74 && view[1] === 0x74 && view[2] === 0x63 && view[3] === 0x66) return true; // ttcf
-      if (view[0] === 0x74 && view[1] === 0x79 && view[2] === 0x70 && view[3] === 0x31) return true; // typ1
-      return false;
+      const want: Want = {
+        bundleName: 'com.vintage.pomelopro',
+        abilityName: 'EntryAbility'
+      };
+      await this.context.restartApp(want);
     } catch (_) {
-      return false;
+      promptAction.showToast({ message: '自动重启失败，请手动关闭应用后重新打开' });
     }
   }
 
@@ -603,6 +676,7 @@ struct SystemSettingsPage {
       defaultDisplayMode: this.settings.defaultDisplayMode,
       desktopOrientation: this.settings.desktopOrientation,
       desktopWindowMode: this.settings.desktopWindowMode,
+      keepScreenOn: this.settings.keepScreenOn,
       box64Preset: preset,
       desktopInputProfileId: this.settings.desktopInputProfileId,
       viewMode: this.settings.viewMode,
@@ -1009,6 +1083,10 @@ struct SystemSettingsPage {
            }.width('100%')
            Text('圆角屏全屏可能遮挡开始菜单；切边模式保留状态栏与圆角安全区。').fontSize(12)
              .fontColor($r('app.color.text_secondary')).width('100%')
+          this.SwitchRow('桌面打开时保持亮屏',
+            '游玩中自动锁屏会中断操作；关闭后恢复系统默认的自动锁屏策略',
+            this.settings.keepScreenOn, (value: boolean): void => this.updateKeepScreenOn(value),
+            'keep-screen-on')
           Text('输出缩放 ' + this.settings.outputScale + '%').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
            Slider({ value: this.settings.outputScale, min: 75, max: 150, step: 5 })
              // Match VintagePomelo: a press on the track must not immediately
@@ -1059,11 +1137,12 @@ struct SystemSettingsPage {
           Column({ space: 10 }) {
             Text('字体').fontSize(14).fontWeight(FontWeight.Medium)
               .fontColor($r('app.color.text_primary')).width('100%')
-            Text('从 ZIP 压缩包导入字体到 Wine 的 C:\\windows\\Fonts。导入前会删除该目录下所有旧字体，导入后请重启应用生效。')
+            Text('从 ZIP 压缩包导入字体到 Wine 的 C:\\windows\\Fonts。导入前会删除该目录下所有旧字体，导入完成后可一键重启应用生效。')
               .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
             Button('导入字体包 (ZIP)').width('100%').height(44).borderRadius(12)
               .backgroundColor($r('app.color.accent')).fontColor('#FFFFFFFF')
               .id('font-import-button')
+              .enabled(!this.fontImporting)
               .onClick((): void => { this.importFontZip(); })
           }
           .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
@@ -1473,21 +1552,70 @@ struct SystemSettingsPage {
       .backgroundColor('#00FFFFFF')
 
       if (this.engineBusy) {
-        Column({ space: 14 }) {
-          LoadingProgress().width(52).height(52).color('#FFFFFFFF')
-          Text('Wine 引擎维护中').fontSize(20).fontWeight(FontWeight.Bold).fontColor('#FFFFFFFF')
-          Text(this.engineOperationMessage).fontSize(13).fontColor('#DDE8F2FF').textAlign(TextAlign.Center).maxLines(3)
-          Text('请保持应用在前台，完成前所有操作已锁定。').fontSize(11).fontColor('#AFC2D4FF')
+        Stack() {
+          Column()
+            .width('100%').height('100%')
+            .backgroundColor('#E80B1220')
+            .hitTestBehavior(HitTestMode.Block)
+          Column({ space: 16 }) {
+            LoadingProgress().width(56).height(56).color('#2F6BFF')
+            Text('Wine 引擎维护中').fontSize(22).fontWeight(FontWeight.Bold)
+              .fontColor('#101828').textAlign(TextAlign.Center)
+            Text(this.engineOperationMessage).fontSize(15).fontColor('#344054')
+              .textAlign(TextAlign.Center).constraintSize({ maxWidth: 420 })
+            Text('请保持应用在前台，完成前所有操作已锁定。').fontSize(13).fontColor('#667085')
+              .textAlign(TextAlign.Center).constraintSize({ maxWidth: 420 })
+          }
+          .width('86%').constraintSize({ maxWidth: 480 })
+          .padding({ left: 24, right: 24, top: 28, bottom: 28 })
+          .backgroundColor('#FFFFFFFF')
+          .border({ width: 2, color: '#FFB8C7E8' })
+          .borderRadius(20)
+          .shadow({ radius: 24, color: '#66000000', offsetX: 0, offsetY: 10 })
+          .hitTestBehavior(HitTestMode.Block)
+          .id('wine-engine-progress-panel')
         }
         .width('100%').height('100%')
-        .justifyContent(FlexAlign.Center)
-        .padding(this.isNarrowPhone() ? 18 : 32)
-        .backgroundColor('#EE111827')
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .alignContent(Alignment.Center)
         .hitTestBehavior(HitTestMode.Block)
-        .focusable(true)
         .zIndex(10000)
         .id('wine-engine-operation-blocker')
+      }
+
+      if (this.fontImporting) {
+        Stack() {
+          Column()
+            .width('100%').height('100%')
+            .backgroundColor('#E80B1220')
+            .hitTestBehavior(HitTestMode.Block)
+          Column({ space: 16 }) {
+            if (this.fontImportStage.startsWith('正在解压') || this.fontImportProgress === 0) {
+              LoadingProgress().width(56).height(56).color('#2F6BFF')
+            } else {
+              Progress({ value: this.fontImportProgress, total: 100, type: ProgressType.Linear })
+                .width('100%').color('#2F6BFF')
+            }
+            Text('正在导入字体').fontSize(22).fontWeight(FontWeight.Bold)
+              .fontColor('#101828').textAlign(TextAlign.Center)
+            Text(this.fontImportStage).fontSize(15).fontColor('#344054')
+              .textAlign(TextAlign.Center).constraintSize({ maxWidth: 420 })
+            Text('请保持应用在前台，完成前请勿退出。').fontSize(13).fontColor('#667085')
+              .textAlign(TextAlign.Center).constraintSize({ maxWidth: 420 })
+          }
+          .width('86%').constraintSize({ maxWidth: 480 })
+          .padding({ left: 24, right: 24, top: 28, bottom: 28 })
+          .backgroundColor('#FFFFFFFF')
+          .border({ width: 2, color: '#FFB8C7E8' })
+          .borderRadius(20)
+          .shadow({ radius: 24, color: '#66000000', offsetX: 0, offsetY: 10 })
+          .hitTestBehavior(HitTestMode.Block)
+          .id('font-import-progress-panel')
+        }
+        .width('100%').height('100%')
+        .alignContent(Alignment.Center)
+        .hitTestBehavior(HitTestMode.Block)
+        .zIndex(10000)
+        .id('font-import-blocker')
       }
     }
     .width('100%').height('100%').backgroundColor($r('app.color.page_background'))

@@ -13,6 +13,7 @@
 #include "wine_launch.h"
 #include "wine_exe.h"
 #include "wine_mmap_test.h"
+#include "font_zip.h"
 #include "host_vulkan_probe.h"
 #include "game_controller_bridge.h"
 #include "phone_adapter/phone_adapter.h"
@@ -998,6 +999,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"stopWineSession", nullptr, StopWineSession, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"activateWineSession", nullptr, ActivateWineSession, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runWineProgram", nullptr, RunWineProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"extractFontZip", nullptr, ExtractFontZip, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runGuestProgram", nullptr, RunGuestProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runHostProgram", nullptr, RunHostProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runHostReplay", nullptr, RunHostReplay, nullptr, nullptr, nullptr, napi_default, nullptr},

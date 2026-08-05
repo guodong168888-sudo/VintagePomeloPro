@@ -31,6 +31,7 @@ add_library(entry SHARED
     wine_env.cpp
     wine_launch.cpp
     wine_exe.cpp
+    font_zip.cpp
     wine_mmap_test.cpp
     host_vulkan_probe.cpp
     broker.cpp
@@ -78,6 +79,7 @@ target_link_libraries(entry PUBLIC
     libchild_process.so
     libipc_capi.so
     libohaudio.so
+    libz.so
     ${WAYLAND_LIBS_DIR}/libwayland-server.so.0
 )
 

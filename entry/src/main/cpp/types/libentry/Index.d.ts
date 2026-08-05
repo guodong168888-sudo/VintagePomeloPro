@@ -46,6 +46,15 @@ export interface WineProcessHandle {
   exitCodeSource: string;
 }
 export const runWineProgram: (options: WineProgramOptions) => WineProcessHandle;
+export interface FontZipExtractResult {
+  ok: boolean;
+  fonts: number;
+  bad: number;
+  firstBadExt: string;
+  error: string;
+}
+/** 解压字体 ZIP 到 outDir, 落盘一律使用 ASCII 安全名 (font-NNN.ext)。 */
+export const extractFontZip: (zipPath: string, outDir: string) => FontZipExtractResult;
 export interface GuestProgramOptions {
   executablePath: string;
   argv: string[];

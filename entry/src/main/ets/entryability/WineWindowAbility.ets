@@ -4,6 +4,7 @@ import { window } from '@kit.ArkUI';
 import testNapi from 'libentry.so';
 import { WineWindowManager } from '../service/WineWindowManager';
 import { PopupWindowManager } from '../service/PopupWindowManager';
+import { AppSettingsStore } from '../service/AppSettingsStore';
 
 const DOMAIN = 0x0000;
 const TAG = 'WWA';
@@ -11,6 +12,7 @@ const TAG = 'WWA';
 export default class WineWindowAbility extends UIAbility {
   private toplevelId: number = 0;
   private cleanedUp: boolean = false;
+  private mainWindow: window.Window | null = null;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
@@ -69,6 +71,8 @@ export default class WineWindowAbility extends UIAbility {
 
       // 注册 Window 引用
       WineWindowManager.getInstance().registerWindow(this.toplevelId, mainWindow);
+      this.mainWindow = mainWindow;
+      this.applyKeepScreenOn(mainWindow);
       // 注册 WindowStage 引用 (popup 子窗口创建入口)
       WineWindowManager.getInstance().registerWindowStage(this.toplevelId, windowStage);
 
@@ -169,6 +173,9 @@ export default class WineWindowAbility extends UIAbility {
     hilog.info(DOMAIN, TAG, '[WWA]  cleanup tl=%{public}d START: sendToplevelClose -> destroyToplevel -> unregisterAbility',
       this.toplevelId);
     try {
+      if (this.mainWindow) {
+        this.mainWindow.setWindowKeepScreenOn(false).catch(() => {});
+      }
       testNapi.sendToplevelClose(this.toplevelId);
       hilog.info(DOMAIN, TAG, '[WWA] cleanup tl=%{public}d: sendToplevelClose done', this.toplevelId);
     } catch (e) {
@@ -189,5 +196,18 @@ export default class WineWindowAbility extends UIAbility {
         this.toplevelId, JSON.stringify(e));
     }
     hilog.info(DOMAIN, TAG, '[WWA] cleanup tl=%{public}d DONE', this.toplevelId);
+  }
+
+  /** 游戏窗口打开期间按全局设置保持屏幕常亮。 */
+  private applyKeepScreenOn(target: window.Window): void {
+    try {
+      const keepScreenOn = AppSettingsStore.getInstance().getGlobalSettings().keepScreenOn;
+      target.setWindowKeepScreenOn(keepScreenOn).catch((error: Error) => {
+        hilog.warn(DOMAIN, TAG, '[WWA] setWindowKeepScreenOn(%{public}s) failed: %{public}s',
+          keepScreenOn ? 'on' : 'off', JSON.stringify(error));
+      });
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, '[WWA] applyKeepScreenOn ERR: %{public}s', JSON.stringify(e));
+    }
   }
 }

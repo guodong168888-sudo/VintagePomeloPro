@@ -264,6 +264,8 @@ export interface GlobalSettings {
   desktopOrientation: ScreenOrientationSetting;
   /** Desktop host window layout: immersive fullscreen or safe-area inset. */
   desktopWindowMode: DesktopWindowMode;
+  /** 桌面/游戏窗口打开时保持屏幕常亮，避免游玩中自动锁屏。默认开启。 */
+  keepScreenOn: boolean;
   /** Box64 兼容性预设；'default' 表示使用系统当前配置。 */
   box64Preset: string;
   /** Desktop mode always uses this global profile; single-app may override it. */
@@ -726,6 +728,7 @@ export function createDefaultGlobalSettings(): GlobalSettings {
     defaultDisplayMode: DisplayMode.DESKTOP,
     desktopOrientation: ScreenOrientationSetting.SENSOR_LANDSCAPE,
     desktopWindowMode: DesktopWindowMode.FULLSCREEN,
+    keepScreenOn: true,
     box64Preset: BOX64_PRESET_DEFAULT,
     desktopInputProfileId: 'default',
     viewMode: ViewMode.GRID,

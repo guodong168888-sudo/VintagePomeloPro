@@ -99,6 +99,7 @@ export default class DesktopAbility extends UIAbility {
           // the final rectangle before the first compositor resize.
           await this.applyDesktopWindowMode(mw);
           await this.waitForRequestedOrientation(mw);
+          this.applyKeepScreenOn(mw);
 
           // 输出尺寸以 XComponent surface 为唯一权威 (onSurfaceChanged → 
           // syncOutputSize/notifyToplevelResize)。窗口 rect 在非全屏布局下
@@ -192,6 +193,9 @@ export default class DesktopAbility extends UIAbility {
     WineWindowManager.getInstance().markDesktopAbilityForeground(this.toplevelId);
     InputRouter.getInstance().setActiveToplevel(WineWindowManager.getInstance().getDesktopRootId());
     this.attachInputOverlay();
+    if (this.mainWindow) {
+      this.applyKeepScreenOn(this.mainWindow);
+    }
   }
 
   onNewWant(want: Want): void {
@@ -211,6 +215,9 @@ export default class DesktopAbility extends UIAbility {
       this.applyDesktopWindowMode(this.mainWindow).catch((error: Error) => {
         hilog.warn(DOMAIN, TAG, '[DWA] re-apply window mode failed: %{public}s', JSON.stringify(error));
       });
+    }
+    if (this.mainWindow) {
+      this.applyKeepScreenOn(this.mainWindow);
     }
     this.attachInputOverlay();
   }
@@ -241,8 +248,24 @@ export default class DesktopAbility extends UIAbility {
       // 应用库中的“Wine 桌面”卡片可以重新拉起同一会话和渲染 surface。
       WineWindowManager.getInstance().unregisterAbility(this.toplevelId);
       InputOverlayWindowCoordinator.getInstance().detach('desktop-ability-destroy').catch(() => {});
+      if (this.mainWindow) {
+        this.mainWindow.setWindowKeepScreenOn(false).catch(() => {});
+      }
     } catch (e) {
       hilog.error(DOMAIN, TAG, '[DWA] ERR onDestroy: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /** 桌面打开期间按设置保持屏幕常亮，避免游玩中自动锁屏。 */
+  private applyKeepScreenOn(target: window.Window): void {
+    try {
+      const keepScreenOn = AppSettingsStore.getInstance().getGlobalSettings().keepScreenOn;
+      target.setWindowKeepScreenOn(keepScreenOn).catch((error: Error) => {
+        hilog.warn(DOMAIN, TAG, '[DWA] setWindowKeepScreenOn(%{public}s) failed: %{public}s',
+          keepScreenOn ? 'on' : 'off', JSON.stringify(error));
+      });
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, '[DWA] applyKeepScreenOn ERR: %{public}s', JSON.stringify(e));
     }
   }
 
