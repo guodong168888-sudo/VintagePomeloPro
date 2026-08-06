@@ -1,27 +1,16 @@
 import {
-  ButtonGroupPosition,
   ControlBarDirection,
-  DirectionControlMode,
-  FreeButton,
-  FreeButtonLayoutMode,
-  GamepadButtonMapping,
+  ControlElement,
+  ControlElementShape,
+  ControlElementType,
+  InputBindingKind,
   InputProfile,
-  RightJoystickOutputMode,
-  VirtualKey,
-  VirtualKeyColorScheme,
-  VirtualKeyMapping,
-  cloneFreeButtonsConfig,
-  cloneGamepadLayout,
-  cloneVirtualKeyConfig,
-  computeGamepadPositions,
-  computeRadialPositions,
+  cloneInputProfile,
   createDefaultInputProfile,
-  resolveVirtualJoystickDirection,
-  resolveVirtualKeyMapping
+  resolveVirtualJoystickDirection
 } from '../model/AppModels';
 import { InputDispatcher } from '../service/InputDispatcher';
 
-type DirectionName = 'up' | 'down' | 'left' | 'right';
 type ToolbarAction = 'toolbar' | 'editor' | 'mapping' | 'controls' | 'mouse' | 'wake';
 
 interface OverlayPoint {
@@ -29,39 +18,36 @@ interface OverlayPoint {
   y: number;
 }
 
-function cloneInputProfile(profile: InputProfile): InputProfile {
-  return {
-    id: profile.id,
-    name: profile.name,
-    schemaVersion: profile.schemaVersion,
-    virtualKeyConfig: cloneVirtualKeyConfig(profile.virtualKeyConfig),
-    layoutLandscape: cloneGamepadLayout(profile.layoutLandscape),
-    layoutPortrait: cloneGamepadLayout(profile.layoutPortrait),
-    virtualKeyMappings: profile.virtualKeyMappings.map((item: VirtualKeyMapping): VirtualKeyMapping => ({
-      virtualKey: item.virtualKey,
-      evdevCode: item.evdevCode,
-      keyLabel: item.keyLabel
-    })),
-    gamepadMappings: profile.gamepadMappings.map((item: GamepadButtonMapping): GamepadButtonMapping => ({
-      id: item.id,
-      label: item.label,
-      buttonCode: item.buttonCode,
-      evdevCode: item.evdevCode
-    })),
-    freeButtonsConfig: cloneFreeButtonsConfig(profile.freeButtonsConfig)
-  };
+interface TrackpadState {
+  startX: number;
+  startY: number;
+  lastX: number;
+  lastY: number;
+  moved: boolean;
 }
 
+interface StickVisualState {
+  elementId: string;
+  dx: number;
+  dy: number;
+  active: boolean;
+}
+
+const STROKE_COLOR = '#FF2196F3';
+const FILL_IDLE = '#CC404040';
+const FILL_PRESSED = '#FF2979FF';
+const TEXT_IDLE = '#FFE7F2FF';
+const TEXT_PRESSED = '#FFFFFFFF';
+
 /**
- * Wine adapter of VintagePomelo's VirtualGamepad overlay.  Its layout contract
- * is intentionally group based: direction, camera, action and auxiliary.
- * Individual button coordinates are not supported. The left d-pad/joystick
- * remains mutually exclusive while the right camera joystick is independent.
+ * Winlator 风格的元素化虚拟输入覆盖层。控件由 profile.elements 驱动，
+ * 每个元素使用归一化坐标任意排布，支持 BUTTON / D_PAD / STICK /
+ * TRACKPAD / RANGE_BUTTON 五种类型，多指并行注入不串键。
  */
 @Component
 export struct VirtualInputOverlay {
   @Prop @Watch('onProfileChanged') profile: InputProfile = createDefaultInputProfile();
-  /** Forces editor previews to rebuild when a group is dragged in-place. */
+  /** 编辑器预览强制重绘用。 */
   @Prop @Watch('onRenderRevisionChanged') renderRevision: number = 0;
   @Prop opacityValue: number = 100;
   @Prop interactive: boolean = true;
@@ -71,6 +57,9 @@ export struct VirtualInputOverlay {
   @Prop @Watch('onControlBarPositionChanged') controlBarPositionX: number = 1;
   @Prop @Watch('onControlBarPositionChanged') controlBarPositionY: number = 0;
   @Prop @Watch('onTouchpadModeChanged') touchpadMode: boolean = false;
+  /** 编辑器模式：不注入按键，元素可拖动/缩放并支持选中框。 */
+  @Prop editMode: boolean = false;
+  @Prop selectedElementId: string = '';
   onOpenLayoutEditor: () => void = (): void => {};
   onOpenKeyMappingEditor: () => void = (): void => {};
   onControlsVisibleChange: (visible: boolean) => void = (_visible: boolean): void => {};
@@ -80,28 +69,15 @@ export struct VirtualInputOverlay {
   onUnhandledTouch: (event: TouchEvent) => void = (_event: TouchEvent): void => {};
   onUnhandledMouse: (event: MouseEvent) => void = (_event: MouseEvent): void => {};
   onUnhandledAxis: (event?: AxisEvent) => void = (_event?: AxisEvent): void => {};
+  onElementMove: (id: string, x: number, y: number) => void = (_id: string, _x: number, _y: number): void => {};
+  onElementScale: (id: string, scale: number) => void = (_id: string, _scale: number): void => {};
+  onElementSelected: (id: string) => void = (_id: string): void => {};
 
   @State private overlayW: number = 0;
   @State private overlayH: number = 0;
-  @State private pressedKeys: string = '';
-  @State private joystickActive: boolean = false;
-  @State private joystickX: number = 0;
-  @State private joystickY: number = 0;
-  @State private rightJoystickActive: boolean = false;
-  @State private rightJoystickX: number = 0;
-  @State private rightJoystickY: number = 0;
-  @State private rightStickUp: boolean = false;
-  @State private rightStickDown: boolean = false;
-  @State private rightStickLeft: boolean = false;
-  @State private rightStickRight: boolean = false;
-  @State private dpadUp: boolean = false;
-  @State private dpadDown: boolean = false;
-  @State private dpadLeft: boolean = false;
-  @State private dpadRight: boolean = false;
-  @State private pressedFreeButtons: string = '';
-  // Toolbar folding and virtual-control visibility are deliberately separate:
-  // the chevron changes only this local state, while controlsVisible is owned
-  // by the coordinator and never disables the full-screen mouse surface.
+  @State private pressedTokens: string = '';
+  @State private stickStates: StickVisualState[] = [];
+  @State private rangeTokens: string = '';
   @State private toolbarExpanded: boolean = true;
   @State private toolbarAutoHidden: boolean = false;
   @State private toolbarX: number = 4;
@@ -109,19 +85,11 @@ export struct VirtualInputOverlay {
   @State private controlsVisibleVisual: boolean = true;
   @State private touchpadModeVisual: boolean = false;
   @State private renderedProfile: InputProfile = createDefaultInputProfile();
-  private activeButtonTouches: Map<VirtualKey, number> = new Map<VirtualKey, number>();
-  private joystickTouchId: number = -1;
-  private joystickCenterX: number = 0;
-  private joystickCenterY: number = 0;
-  private rightJoystickTouchId: number = -1;
-  private rightJoystickCenterX: number = 0;
-  private rightJoystickCenterY: number = 0;
-  private rightJoystickLastX: number = 0;
-  private rightJoystickLastY: number = 0;
-  private dpadTouchId: number = -1;
-  private activeFreeTouches: Map<string, number> = new Map<string, number>();
-  private activeActionMouseKey: VirtualKey | null = null;
-  private activeActionMouseFallback: number = 0;
+  private activeElementTouches: Map<string, number> = new Map<string, number>();
+  private touchOrigins: Map<string, OverlayPoint> = new Map<string, OverlayPoint>();
+  private trackpadStates: Map<string, TrackpadState> = new Map<string, TrackpadState>();
+  private dragStart: OverlayPoint | null = null;
+  private dragStartScale: number = 1;
   private lastActionTouchAt: number = 0;
   private toolbarTouchId: number = -1;
   private toolbarTouchAction: ToolbarAction | null = null;
@@ -140,140 +108,772 @@ export struct VirtualInputOverlay {
   private lastToolbarTouchAt: number = 0;
   private lastToolbarButtonTouchAt: number = 0;
   private toolbarAutoHideTimer: number = -1;
+  private mouseElementId: string = '';
 
-  private config() {
-    return this.renderedProfile.virtualKeyConfig;
+  // ---- 通用几何与颜色 ----
+
+  private elementBaseSize(element: ControlElement): number {
+    if (element.type === ControlElementType.D_PAD) return 132;
+    if (element.type === ControlElementType.STICK) return 120;
+    return 56;
   }
 
-  private visibleOpacity(transparency: number): number {
-    return Math.max(0.16, Math.min(1, (100 - transparency) / 100 * this.opacityValue / 100));
+  private elementWidth(element: ControlElement): number {
+    if (element.type === ControlElementType.TRACKPAD) return 150 * (element.scale ?? 1);
+    if (element.type === ControlElementType.RANGE_BUTTON) return 44 * (element.scale ?? 1);
+    return this.elementBaseSize(element) * (element.scale ?? 1);
   }
 
-  private strokeColor(): string {
-    return this.config().colorScheme === VirtualKeyColorScheme.WHITE ? '#FFF2F6FF' : '#FF2196F3';
+  private elementHeight(element: ControlElement): number {
+    if (element.type === ControlElementType.TRACKPAD) return 100 * (element.scale ?? 1);
+    if (element.type === ControlElementType.RANGE_BUTTON) return 180 * (element.scale ?? 1);
+    return this.elementBaseSize(element) * (element.scale ?? 1);
   }
 
-  private themedAccent(accent: string): string {
-    return this.config().colorScheme === VirtualKeyColorScheme.WHITE ? this.strokeColor() : accent;
+  private elementCenter(element: ControlElement): OverlayPoint {
+    return { x: this.overlayW * (element.x ?? 0.5), y: this.overlayH * (element.y ?? 0.5) };
   }
 
-  private fillColor(pressed: boolean, accent: string = this.strokeColor()): string {
-    if (this.config().colorScheme === VirtualKeyColorScheme.WHITE) {
-      return pressed ? '#66FFFFFF' : '#2EFFFFFF';
-    }
-    return pressed ? accent : '#CC404040';
+  private elementOpacity(element: ControlElement): number {
+    const elementOpacity = (element.opacity ?? -1) >= 0 ? (element.opacity ?? 70) : this.renderedProfile.overlayOpacity;
+    const base = Math.max(10, Math.min(100, elementOpacity));
+    const global = Math.max(10, Math.min(100, this.opacityValue));
+    return Math.max(0.16, Math.min(1, base / 100 * global / 100));
   }
 
-  private textColor(pressed: boolean, accent?: string): string {
-    if (this.config().colorScheme === VirtualKeyColorScheme.WHITE) {
-      return pressed ? '#FF30343A' : '#FFF2F6FF';
-    }
-    if (pressed) return '#FFFFFFFF';
-    return accent ?? this.strokeColor();
-  }
-
-  private joystickRadius(): number {
-    return 60 * this.config().joystickSize / 100;
-  }
-
-  private directionSize(): number {
-    return this.joystickRadius() * 2 + 20;
-  }
-
-  private rightJoystickRadius(): number {
-    return 55 * this.config().rightJoystickSize / 100;
-  }
-
-  private rightJoystickSize(): number {
-    return this.rightJoystickRadius() * 2;
-  }
-
-  private rightJoystickKnobSize(): number {
-    return 44 * this.config().rightJoystickSize / 100;
-  }
-
-  private rightJoystickMaxOffset(): number {
-    return Math.max(0, this.rightJoystickRadius() - this.rightJoystickKnobSize() / 2);
-  }
-
-  private actionWidth(): number {
-    return 140 * this.config().buttonSize / 100;
-  }
-
-  private actionHeight(): number {
-    return 140 * this.config().buttonSize / 100;
-  }
-
-  private shoulderWidth(): number {
-    return 56 * this.config().buttonSize / 100;
-  }
-
-  private shoulderHeight(): number {
-    return 40 * this.config().buttonSize / 100;
-  }
-
-  private shoulderHitWidth(): number {
-    return Math.max(48, this.shoulderWidth());
-  }
-
-  private shoulderHitHeight(): number {
-    return Math.max(48, this.shoulderHeight());
-  }
-
-  private auxWidth(): number {
-    const count = (this.config().showButtonMenu ? 1 : 0) + (this.config().showButtonStart ? 1 : 0);
-    if (count === 0) return 0;
-    const size = 35 * this.config().buttonSize / 100;
-    return Math.max(48, count * size + (count - 1) * 12);
-  }
-
-  private auxHeight(): number {
-    return Math.max(48, 35 * this.config().buttonSize / 100);
-  }
-
-  private groupPosition(centerX: number, centerY: number, groupW: number, groupH: number): OverlayPoint {
-    return { x: this.overlayW * centerX - groupW / 2, y: this.overlayH * centerY - groupH / 2 };
-  }
-
-  private layout() {
-    return this.overlayH > this.overlayW ? this.renderedProfile.layoutPortrait : this.renderedProfile.layoutLandscape;
-  }
-
-  private mapping(key: VirtualKey, fallback: number): number {
-    return resolveVirtualKeyMapping(this.renderedProfile.virtualKeyMappings, key, fallback);
-  }
-
-  private freeButtonSize(): number {
-    return 50 * this.config().buttonSize / 100;
-  }
-
-  private freeButtonPositions() {
-    const free = this.renderedProfile.freeButtonsConfig;
-    return free.layoutMode === FreeButtonLayoutMode.RADIAL ?
-      computeRadialPositions(free.buttons.length, free.radialScale * 0.6) :
-      computeGamepadPositions(free.buttons.length, free.gamepadSpacing);
-  }
-
-  private freeGroupSize(): number {
-    return Math.max(240, this.renderedProfile.freeButtonsConfig.layoutMode === FreeButtonLayoutMode.RADIAL ? this.renderedProfile.freeButtonsConfig.radialScale * 1.5 : 280);
-  }
-
-  private freePositionX(index: number): number {
-    return this.freeGroupSize() / 2 + (this.freeButtonPositions()[index]?.offsetX ?? 0) - this.freeButtonSize() / 2;
-  }
-
-  private freePositionY(index: number): number {
-    return this.freeGroupSize() / 2 + (this.freeButtonPositions()[index]?.offsetY ?? 0) - this.freeButtonSize() / 2;
+  private elementRadius(element: ControlElement): number {
+    if (element.shape === ControlElementShape.ROUND_RECT) return Math.min(this.elementWidth(element), this.elementHeight(element)) * 0.28;
+    if (element.shape === ControlElementShape.RECT) return 4;
+    return Math.min(this.elementWidth(element), this.elementHeight(element)) / 2;
   }
 
   private rectContains(x: number, y: number, left: number, top: number, width: number, height: number): boolean {
     return x >= left && x <= left + width && y >= top && y <= top + height;
   }
 
+  private elementContains(element: ControlElement, x: number, y: number): boolean {
+    const width = this.elementWidth(element);
+    const height = this.elementHeight(element);
+    const center = this.elementCenter(element);
+    const left = center.x - width / 2;
+    const top = center.y - height / 2;
+    if (element.shape === ControlElementShape.CIRCLE) {
+      const radius = Math.min(width, height) / 2;
+      const dx = x - center.x;
+      const dy = y - center.y;
+      return dx * dx + dy * dy <= radius * radius;
+    }
+    return this.rectContains(x, y, left, top, width, height);
+  }
+
+  private elementAt(x: number, y: number): ControlElement | null {
+    const elements = this.renderedProfile.elements;
+    for (let index = elements.length - 1; index >= 0; index--) {
+      const element = elements[index];
+      if (element.visible && this.elementContains(element, x, y)) return element;
+    }
+    return null;
+  }
+
+  private elementById(id: string): ControlElement | null {
+    const elements = this.renderedProfile.elements;
+    for (let index = 0; index < elements.length; index++) {
+      if (elements[index].id === id) return elements[index];
+    }
+    return null;
+  }
+
+  private activeElementIdForTouch(touchId: number): string {
+    for (const entry of this.activeElementTouches.entries()) {
+      if (entry[1] === touchId) return entry[0];
+    }
+    return '';
+  }
+
+  private visibleElements(): ControlElement[] {
+    return this.renderedProfile.elements.filter((element: ControlElement): boolean =>
+      element.visible || this.editMode);
+  }
+
+  private isElementPressed(id: string): boolean {
+    return this.pressedTokens.indexOf('|' + id + '|') >= 0;
+  }
+
+  private setElementPressed(id: string, pressed: boolean): void {
+    const token = '|' + id + '|';
+    if (pressed && !this.isElementPressed(id)) this.pressedTokens += token;
+    if (!pressed && this.isElementPressed(id)) {
+      this.pressedTokens = this.pressedTokens.replace(token, '');
+    }
+  }
+
+  private stickState(id: string): StickVisualState {
+    for (let index = 0; index < this.stickStates.length; index++) {
+      if (this.stickStates[index].elementId === id) return this.stickStates[index];
+    }
+    return { elementId: id, dx: 0, dy: 0, active: false };
+  }
+
+  private setStickState(id: string, dx: number, dy: number, active: boolean): void {
+    const next: StickVisualState[] = this.stickStates.filter((state: StickVisualState): boolean =>
+      state.elementId !== id);
+    next.push({ elementId: id, dx: dx, dy: dy, active: active });
+    this.stickStates = next;
+  }
+
+  private rangeSelection(id: string): number {
+    const token = '|' + id + ':';
+    const start = this.rangeTokens.indexOf(token);
+    if (start < 0) return -1;
+    const valueStart = start + token.length;
+    const valueEnd = this.rangeTokens.indexOf('|', valueStart);
+    if (valueEnd < 0) return -1;
+    return Number(this.rangeTokens.substring(valueStart, valueEnd));
+  }
+
+  private setRangeSelection(id: string, index: number): void {
+    const pattern = '|' + id + ':\\d+\\|';
+    let tokens = this.rangeTokens;
+    try {
+      tokens = tokens.replace(new RegExp(pattern, 'g'), '');
+    } catch (_) {
+    }
+    if (index >= 0) tokens += '|' + id + ':' + index.toString() + '|';
+    this.rangeTokens = tokens;
+  }
+
+  private stickRadius(element: ControlElement): number {
+    return this.elementBaseSize(element) * (element.scale ?? 1) / 2 - 10;
+  }
+
+  private stickKnobSize(element: ControlElement): number {
+    return 44 * (element.scale ?? 1);
+  }
+
+  private bindingSource(element: ControlElement, slot: string, touchId: number): string {
+    return 'el-' + element.id + '-' + slot + '-' + touchId.toString();
+  }
+
+  private pressBinding(element: ControlElement, slot: string, bindingIndex: number, touchId: number): void {
+    const binding = (element.bindings ?? [])[bindingIndex];
+    if (!binding || binding.kind === InputBindingKind.NONE || binding.code <= 0) return;
+    const source = this.bindingSource(element, slot, touchId);
+    if (binding.kind === InputBindingKind.MOUSE) {
+      InputDispatcher.getInstance().pointerDown(source, 0, 0, binding.code);
+    } else {
+      InputDispatcher.getInstance().pressKey(source, binding.code);
+    }
+  }
+
+  private releaseBinding(element: ControlElement, slot: string, bindingIndex: number, touchId: number): void {
+    const binding = (element.bindings ?? [])[bindingIndex];
+    if (!binding || binding.kind === InputBindingKind.NONE || binding.code <= 0) return;
+    const source = this.bindingSource(element, slot, touchId);
+    if (binding.kind === InputBindingKind.MOUSE) {
+      InputDispatcher.getInstance().pointerUp(source, 0, 0, binding.code);
+    } else {
+      InputDispatcher.getInstance().releaseKey(source, binding.code);
+    }
+    InputDispatcher.getInstance().releaseSource(source);
+  }
+
+  private applyButtonBindings(element: ControlElement, pressed: boolean, touchId: number): void {
+    const bindings = element.bindings ?? [];
+    for (let index = 0; index < bindings.length; index++) {
+      if (pressed) this.pressBinding(element, 'b' + index.toString(), index, touchId);
+      else this.releaseBinding(element, 'b' + index.toString(), index, touchId);
+    }
+  }
+
+  private setDirectionSlot(element: ControlElement, slot: number, pressed: boolean, touchId: number): void {
+    const binding = (element.bindings ?? [])[slot];
+    if (!binding || binding.kind !== InputBindingKind.KEY || binding.code <= 0) return;
+    const source = this.bindingSource(element, 'd' + slot.toString(), touchId);
+    if (pressed) {
+      InputDispatcher.getInstance().pressKey(source, binding.code);
+    } else {
+      InputDispatcher.getInstance().releaseKey(source, binding.code);
+      InputDispatcher.getInstance().releaseSource(source);
+    }
+  }
+
+  private applyStickDirection(element: ControlElement, dx: number, dy: number, touchId: number): void {
+    const direction = resolveVirtualJoystickDirection(dx, dy, this.stickRadius(element), 15, true);
+    this.setDirectionSlot(element, 0, direction.up, touchId);
+    this.setDirectionSlot(element, 1, direction.right, touchId);
+    this.setDirectionSlot(element, 2, direction.down, touchId);
+    this.setDirectionSlot(element, 3, direction.left, touchId);
+  }
+
+  private releaseStickBindings(element: ControlElement, touchId: number): void {
+    for (let slot = 0; slot < 4; slot++) {
+      this.setDirectionSlot(element, slot, false, touchId);
+    }
+  }
+
+  private rangeIndexAt(element: ControlElement, y: number): number {
+    const slots = element.keyList ?? [];
+    if (slots.length === 0) return -1;
+    const height = this.elementHeight(element);
+    const center = this.elementCenter(element);
+    const relative = y - (center.y - height / 2);
+    const slot = Math.floor(relative / (height / slots.length));
+    return Math.max(0, Math.min(slots.length - 1, slot));
+  }
+
+  private applyRangeBinding(element: ControlElement, index: number, pressed: boolean, touchId: number): void {
+    const slots = element.keyList ?? [];
+    if (index < 0 || index >= slots.length) return;
+    const source = this.bindingSource(element, 'r' + index.toString(), touchId);
+    if (pressed) {
+      InputDispatcher.getInstance().pressKey(source, slots[index]);
+    } else {
+      InputDispatcher.getInstance().releaseKey(source, slots[index]);
+      InputDispatcher.getInstance().releaseSource(source);
+    }
+  }
+
+  private releaseElementBindings(element: ControlElement, touchId: number): void {
+    if (element.type === ControlElementType.BUTTON) {
+      this.applyButtonBindings(element, false, touchId);
+    } else if (element.type === ControlElementType.D_PAD || element.type === ControlElementType.STICK) {
+      this.releaseStickBindings(element, touchId);
+    } else if (element.type === ControlElementType.RANGE_BUTTON) {
+      this.applyRangeBinding(element, this.rangeSelection(element.id), false, touchId);
+    }
+  }
+
+  private releaseAllElementTouches(): void {
+    const entries = Array.from(this.activeElementTouches.entries());
+    for (let index = 0; index < entries.length; index++) {
+      const element = this.elementById(entries[index][0]);
+      if (element) this.releaseElementBindings(element, entries[index][1]);
+    }
+    this.activeElementTouches.clear();
+    this.touchOrigins.clear();
+    this.trackpadStates.clear();
+    this.pressedTokens = '';
+    this.stickStates = [];
+    this.rangeTokens = '';
+  }
+
+  // ---- 触摸处理 ----
+
+  private handleElementTouch(event: TouchEvent, element: ControlElement): void {
+    for (let index = 0; index < event.changedTouches.length; index++) {
+      const touch = event.changedTouches[index];
+      if (element.type === ControlElementType.BUTTON) {
+        this.handleButtonElementTouch(event.type, touch, element);
+      } else if (element.type === ControlElementType.D_PAD || element.type === ControlElementType.STICK) {
+        this.handleStickElementTouch(event.type, touch, element);
+      } else if (element.type === ControlElementType.TRACKPAD) {
+        this.handleTrackpadElementTouch(event.type, touch, element);
+      } else {
+        this.handleRangeElementTouch(event.type, touch, element);
+      }
+    }
+  }
+
+  private handleButtonElementTouch(type: TouchType, touch: TouchObject, element: ControlElement): void {
+    const id = element.id;
+    if (type === TouchType.Down) {
+      if (this.activeElementTouches.has(id)) return;
+      this.activeElementTouches.set(id, touch.id);
+      this.lastActionTouchAt = Date.now();
+      if (element.toggleSwitch) {
+        const next = !this.isElementPressed(id);
+        this.applyButtonBindings(element, next, touch.id);
+        this.setElementPressed(id, next);
+      } else {
+        this.applyButtonBindings(element, true, touch.id);
+        this.setElementPressed(id, true);
+      }
+      return;
+    }
+    if ((type === TouchType.Up || type === TouchType.Cancel) &&
+      this.activeElementTouches.get(id) === touch.id) {
+      this.activeElementTouches.delete(id);
+      if (this.isElementPressed(id)) {
+        this.applyButtonBindings(element, false, touch.id);
+        this.setElementPressed(id, false);
+      }
+    }
+  }
+
+  private handleStickElementTouch(type: TouchType, touch: TouchObject, element: ControlElement): void {
+    const id = element.id;
+    if (type === TouchType.Down) {
+      if (this.activeElementTouches.has(id)) return;
+      this.activeElementTouches.set(id, touch.id);
+      this.touchOrigins.set(id, { x: Number(touch.x), y: Number(touch.y) });
+      this.setStickState(id, 0, 0, true);
+      return;
+    }
+    if (type === TouchType.Move && this.activeElementTouches.get(id) === touch.id) {
+      const origin = this.touchOrigins.get(id);
+      if (!origin) return;
+      let dx = Number(touch.x) - origin.x;
+      let dy = Number(touch.y) - origin.y;
+      const radius = this.stickRadius(element);
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      if (distance > radius) {
+        dx = dx * radius / distance;
+        dy = dy * radius / distance;
+      }
+      this.setStickState(id, dx, dy, true);
+      this.applyStickDirection(element, dx, dy, touch.id);
+      return;
+    }
+    if ((type === TouchType.Up || type === TouchType.Cancel) &&
+      this.activeElementTouches.get(id) === touch.id) {
+      this.activeElementTouches.delete(id);
+      this.touchOrigins.delete(id);
+      this.releaseStickBindings(element, touch.id);
+      this.setStickState(id, 0, 0, false);
+    }
+  }
+
+  private handleTrackpadElementTouch(type: TouchType, touch: TouchObject, element: ControlElement): void {
+    const id = element.id;
+    if (type === TouchType.Down) {
+      if (this.activeElementTouches.has(id)) return;
+      this.activeElementTouches.set(id, touch.id);
+      this.lastActionTouchAt = Date.now();
+      this.trackpadStates.set(id, {
+        startX: Number(touch.x), startY: Number(touch.y),
+        lastX: Number(touch.x), lastY: Number(touch.y), moved: false
+      });
+      return;
+    }
+    if (type === TouchType.Move && this.activeElementTouches.get(id) === touch.id) {
+      const state = this.trackpadStates.get(id);
+      if (!state) return;
+      const x = Number(touch.x);
+      const y = Number(touch.y);
+      const dx = x - state.lastX;
+      const dy = y - state.lastY;
+      state.lastX = x;
+      state.lastY = y;
+      if (!state.moved && Math.abs(x - state.startX) + Math.abs(y - state.startY) >= 12) {
+        state.moved = true;
+      }
+      if (state.moved) {
+        const speed = Math.max(0.1, Math.min(5, this.renderedProfile.cursorSpeed));
+        InputDispatcher.getInstance().pointerDelta(
+          'trackpad-' + id + '-' + touch.id.toString(), vp2px(dx) * speed, vp2px(dy) * speed);
+      }
+      return;
+    }
+    if ((type === TouchType.Up || type === TouchType.Cancel) &&
+      this.activeElementTouches.get(id) === touch.id) {
+      const state = this.trackpadStates.get(id);
+      this.activeElementTouches.delete(id);
+      this.trackpadStates.delete(id);
+      if (type === TouchType.Up && state && !state.moved) {
+        const source = 'trackpad-tap-' + id + '-' + touch.id.toString();
+        InputDispatcher.getInstance().pointerDown(source, vp2px(Number(touch.x)), vp2px(Number(touch.y)), 272);
+        InputDispatcher.getInstance().pointerUp(source, vp2px(Number(touch.x)), vp2px(Number(touch.y)), 272);
+      }
+    }
+  }
+
+  private handleRangeElementTouch(type: TouchType, touch: TouchObject, element: ControlElement): void {
+    const id = element.id;
+    const slots = element.keyList ?? [];
+    if (slots.length === 0) return;
+    if (type === TouchType.Down) {
+      if (this.activeElementTouches.has(id)) return;
+      this.activeElementTouches.set(id, touch.id);
+      this.lastActionTouchAt = Date.now();
+      const index = this.rangeIndexAt(element, Number(touch.y));
+      this.setRangeSelection(id, index);
+      this.applyRangeBinding(element, index, true, touch.id);
+      return;
+    }
+    if (type === TouchType.Move && this.activeElementTouches.get(id) === touch.id) {
+      const next = this.rangeIndexAt(element, Number(touch.y));
+      const current = this.rangeSelection(id);
+      if (next !== current) {
+        this.applyRangeBinding(element, current, false, touch.id);
+        this.setRangeSelection(id, next);
+        this.applyRangeBinding(element, next, true, touch.id);
+      }
+      return;
+    }
+    if ((type === TouchType.Up || type === TouchType.Cancel) &&
+      this.activeElementTouches.get(id) === touch.id) {
+      this.activeElementTouches.delete(id);
+      this.applyRangeBinding(element, this.rangeSelection(id), false, touch.id);
+    }
+  }
+
+  private handleOverlayTouch(event: TouchEvent): void {
+    if (event.changedTouches.length === 0) return;
+    if (!this.hideToolbar && this.handleToolbarOverlayTouch(event)) return;
+    if (this.editMode) {
+      event.stopPropagation();
+      return;
+    }
+    if (!this.interactive || !this.controlsVisible) {
+      this.onUnhandledTouch(event);
+      return;
+    }
+    const touch = event.changedTouches[0];
+    const x = Number(touch.x);
+    const y = Number(touch.y);
+    let claimed = false;
+    const activeId = this.activeElementIdForTouch(touch.id);
+    if (activeId.length > 0) {
+      const element = this.elementById(activeId);
+      if (element) {
+        this.handleElementTouch(event, element);
+        claimed = true;
+      }
+    } else if (event.type === TouchType.Down) {
+      const target = this.elementAt(x, y);
+      if (target) {
+        this.handleElementTouch(event, target);
+        claimed = true;
+      }
+    }
+    if (claimed) event.stopPropagation();
+    else this.onUnhandledTouch(event);
+  }
+
+  private handleOverlayMouse(event: MouseEvent): void {
+    if (!this.hideToolbar && this.handleToolbarOverlayMouse(event)) return;
+    if (this.editMode) {
+      event.stopPropagation();
+      return;
+    }
+    if (!this.interactive || !this.controlsVisible || Date.now() - this.lastActionTouchAt <= 320) {
+      this.onUnhandledMouse(event);
+      return;
+    }
+    const x = Number(event.x);
+    const y = Number(event.y);
+    if (event.action === MouseAction.Press) {
+      const target = this.elementAt(x, y);
+      if (!target || (target.type !== ControlElementType.BUTTON && target.type !== ControlElementType.RANGE_BUTTON)) {
+        this.onUnhandledMouse(event);
+        return;
+      }
+      event.stopPropagation();
+      this.mouseElementId = target.id;
+      if (target.type === ControlElementType.BUTTON) {
+        this.applyButtonBindings(target, true, -100);
+        this.setElementPressed(target.id, true);
+      } else {
+        const index = this.rangeIndexAt(target, y);
+        this.setRangeSelection(target.id, index);
+        this.applyRangeBinding(target, index, true, -100);
+      }
+      return;
+    }
+    if (event.action === MouseAction.Release && this.mouseElementId.length > 0) {
+      event.stopPropagation();
+      const target = this.elementById(this.mouseElementId);
+      this.mouseElementId = '';
+      if (target) {
+        if (target.type === ControlElementType.BUTTON) {
+          this.applyButtonBindings(target, false, -100);
+          this.setElementPressed(target.id, false);
+        } else {
+          this.applyRangeBinding(target, this.rangeSelection(target.id), false, -100);
+        }
+      }
+      return;
+    }
+    this.onUnhandledMouse(event);
+  }
+
+  // ---- 元素渲染 ----
+
+  @Builder
+  private ButtonElement(element: ControlElement) {
+    Stack({ alignContent: Alignment.Center }) {
+      Text(element.text.length > 0 ? element.text : '键')
+        .fontSize(14 * (element.scale ?? 1)).fontWeight(FontWeight.Bold).maxLines(1)
+        .fontColor(this.isElementPressed(element.id) ? TEXT_PRESSED : TEXT_IDLE)
+    }
+    .width(this.elementWidth(element)).height(this.elementHeight(element))
+    .borderRadius(this.elementRadius(element))
+    .backgroundColor(this.isElementPressed(element.id) ? FILL_PRESSED : FILL_IDLE)
+    .border({ width: 2, color: this.isElementPressed(element.id) ? STROKE_COLOR : '#55FFFFFF' })
+    .opacity(this.elementOpacity(element))
+    .hitTestBehavior(this.editMode ? HitTestMode.Block : HitTestMode.None)
+    .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
+    .id('virtual-element-' + element.id)
+    .gesture(PanGesture({ fingers: 1 })
+      .onActionStart((event: GestureEvent): void => {
+        this.dragStart = { x: element.x, y: element.y };
+        this.onElementSelected(element.id);
+      })
+      .onActionUpdate((event: GestureEvent): void => {
+        const start = this.dragStart;
+        if (!start || this.overlayW <= 0 || this.overlayH <= 0) return;
+        this.onElementMove(element.id,
+          Math.max(0, Math.min(1, start.x + Number(event.offsetX) / this.overlayW)),
+          Math.max(0, Math.min(1, start.y + Number(event.offsetY) / this.overlayH)));
+      }))
+    .gesture(PinchGesture({ fingers: 2 })
+      .onActionStart((): void => { this.dragStartScale = element.scale; })
+      .onActionUpdate((event: GestureEvent): void => {
+        this.onElementScale(element.id,
+          Math.max(0.5, Math.min(2, this.dragStartScale * Number(event.scale))));
+      }))
+    .onClick((event: ClickEvent): void => {
+      if (this.editMode) {
+        event.stopPropagation();
+        this.onElementSelected(element.id);
+      }
+    })
+  }
+
+  @Builder
+  private DPadElement(element: ControlElement) {
+    Stack() {
+      Stack({ alignContent: Alignment.Center }) {
+        Text('↑').fontSize(16 * (element.scale ?? 1)).fontWeight(FontWeight.Bold)
+          .fontColor(this.isElementPressed(element.id) ? TEXT_PRESSED : TEXT_IDLE)
+      }
+      .width(44 * (element.scale ?? 1)).height(44 * (element.scale ?? 1))
+      .borderRadius(22 * (element.scale ?? 1))
+      .backgroundColor(this.isElementPressed(element.id) ? FILL_PRESSED : FILL_IDLE)
+      .position({ x: this.elementWidth(element) / 2 - 22 * (element.scale ?? 1), y: 8 * (element.scale ?? 1) })
+      Stack({ alignContent: Alignment.Center }) {
+        Text('↓').fontSize(16 * (element.scale ?? 1)).fontWeight(FontWeight.Bold)
+          .fontColor(this.isElementPressed(element.id) ? TEXT_PRESSED : TEXT_IDLE)
+      }
+      .width(44 * (element.scale ?? 1)).height(44 * (element.scale ?? 1))
+      .borderRadius(22 * (element.scale ?? 1))
+      .backgroundColor(this.isElementPressed(element.id) ? FILL_PRESSED : FILL_IDLE)
+      .position({ x: this.elementWidth(element) / 2 - 22 * (element.scale ?? 1), y: this.elementHeight(element) - 52 * (element.scale ?? 1) })
+      Stack({ alignContent: Alignment.Center }) {
+        Text('←').fontSize(16 * (element.scale ?? 1)).fontWeight(FontWeight.Bold)
+          .fontColor(this.isElementPressed(element.id) ? TEXT_PRESSED : TEXT_IDLE)
+      }
+      .width(44 * (element.scale ?? 1)).height(44 * (element.scale ?? 1))
+      .borderRadius(22 * (element.scale ?? 1))
+      .backgroundColor(this.isElementPressed(element.id) ? FILL_PRESSED : FILL_IDLE)
+      .position({ x: 8 * (element.scale ?? 1), y: this.elementHeight(element) / 2 - 22 * (element.scale ?? 1) })
+      Stack({ alignContent: Alignment.Center }) {
+        Text('→').fontSize(16 * (element.scale ?? 1)).fontWeight(FontWeight.Bold)
+          .fontColor(this.isElementPressed(element.id) ? TEXT_PRESSED : TEXT_IDLE)
+      }
+      .width(44 * (element.scale ?? 1)).height(44 * (element.scale ?? 1))
+      .borderRadius(22 * (element.scale ?? 1))
+      .backgroundColor(this.isElementPressed(element.id) ? FILL_PRESSED : FILL_IDLE)
+      .position({ x: this.elementWidth(element) - 52 * (element.scale ?? 1), y: this.elementHeight(element) / 2 - 22 * (element.scale ?? 1) })
+      Stack({ alignContent: Alignment.Center }) {
+        Circle().width(20 * (element.scale ?? 1)).height(20 * (element.scale ?? 1)).fill('#66404040')
+      }
+      .position({ x: this.elementWidth(element) / 2 - 10 * (element.scale ?? 1), y: this.elementHeight(element) / 2 - 10 * (element.scale ?? 1) })
+    }
+    .width(this.elementWidth(element)).height(this.elementHeight(element))
+    .borderRadius(this.elementRadius(element))
+    .backgroundColor('#33404040')
+    .border({ width: 2, color: STROKE_COLOR })
+    .opacity(this.elementOpacity(element))
+    .hitTestBehavior(this.editMode ? HitTestMode.Block : HitTestMode.None)
+    .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
+    .id('virtual-element-' + element.id)
+    .gesture(PanGesture({ fingers: 1 })
+      .onActionStart((event: GestureEvent): void => {
+        this.dragStart = { x: element.x, y: element.y };
+        this.onElementSelected(element.id);
+      })
+      .onActionUpdate((event: GestureEvent): void => {
+        const start = this.dragStart;
+        if (!start || this.overlayW <= 0 || this.overlayH <= 0) return;
+        this.onElementMove(element.id,
+          Math.max(0, Math.min(1, start.x + Number(event.offsetX) / this.overlayW)),
+          Math.max(0, Math.min(1, start.y + Number(event.offsetY) / this.overlayH)));
+      }))
+    .gesture(PinchGesture({ fingers: 2 })
+      .onActionStart((): void => { this.dragStartScale = element.scale; })
+      .onActionUpdate((event: GestureEvent): void => {
+        this.onElementScale(element.id,
+          Math.max(0.5, Math.min(2, this.dragStartScale * Number(event.scale))));
+      }))
+    .onClick((event: ClickEvent): void => {
+      if (this.editMode) {
+        event.stopPropagation();
+        this.onElementSelected(element.id);
+      }
+    })
+  }
+
+  @Builder
+  private StickElement(element: ControlElement) {
+    Stack({ alignContent: Alignment.Center }) {
+      Circle().width(this.elementWidth(element)).height(this.elementHeight(element))
+        .fill('#33404040').stroke(STROKE_COLOR).strokeWidth(2)
+      Stack({ alignContent: Alignment.Center }) {
+        Circle().width(this.stickKnobSize(element)).height(this.stickKnobSize(element))
+          .fill(this.stickState(element.id).active ? FILL_PRESSED : '#CC606060')
+          .stroke('#AAFFFFFF').strokeWidth(2)
+      }
+      .translate({ x: this.stickState(element.id).dx, y: this.stickState(element.id).dy })
+    }
+    .width(this.elementWidth(element)).height(this.elementHeight(element))
+    .opacity(this.elementOpacity(element))
+    .hitTestBehavior(this.editMode ? HitTestMode.Block : HitTestMode.None)
+    .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
+    .id('virtual-element-' + element.id)
+    .gesture(PanGesture({ fingers: 1 })
+      .onActionStart((event: GestureEvent): void => {
+        this.dragStart = { x: element.x, y: element.y };
+        this.onElementSelected(element.id);
+      })
+      .onActionUpdate((event: GestureEvent): void => {
+        const start = this.dragStart;
+        if (!start || this.overlayW <= 0 || this.overlayH <= 0) return;
+        this.onElementMove(element.id,
+          Math.max(0, Math.min(1, start.x + Number(event.offsetX) / this.overlayW)),
+          Math.max(0, Math.min(1, start.y + Number(event.offsetY) / this.overlayH)));
+      }))
+    .gesture(PinchGesture({ fingers: 2 })
+      .onActionStart((): void => { this.dragStartScale = element.scale; })
+      .onActionUpdate((event: GestureEvent): void => {
+        this.onElementScale(element.id,
+          Math.max(0.5, Math.min(2, this.dragStartScale * Number(event.scale))));
+      }))
+    .onClick((event: ClickEvent): void => {
+      if (this.editMode) {
+        event.stopPropagation();
+        this.onElementSelected(element.id);
+      }
+    })
+  }
+
+  @Builder
+  private TrackpadElement(element: ControlElement) {
+    Stack({ alignContent: Alignment.Center }) {
+      Text('鼠标').fontSize(12 * (element.scale ?? 1)).fontColor('#88FFFFFF')
+      if (element.text.length > 0) {
+        Text(element.text).fontSize(11 * (element.scale ?? 1))
+          .fontColor(TEXT_IDLE).margin({ top: 30 * (element.scale ?? 1) })
+      }
+    }
+    .width(this.elementWidth(element)).height(this.elementHeight(element))
+    .borderRadius(this.elementRadius(element))
+    .backgroundColor('#33404040')
+    .border({ width: 2, color: STROKE_COLOR })
+    .opacity(this.elementOpacity(element))
+    .hitTestBehavior(this.editMode ? HitTestMode.Block : HitTestMode.None)
+    .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
+    .id('virtual-element-' + element.id)
+    .gesture(PanGesture({ fingers: 1 })
+      .onActionStart((event: GestureEvent): void => {
+        this.dragStart = { x: element.x, y: element.y };
+        this.onElementSelected(element.id);
+      })
+      .onActionUpdate((event: GestureEvent): void => {
+        const start = this.dragStart;
+        if (!start || this.overlayW <= 0 || this.overlayH <= 0) return;
+        this.onElementMove(element.id,
+          Math.max(0, Math.min(1, start.x + Number(event.offsetX) / this.overlayW)),
+          Math.max(0, Math.min(1, start.y + Number(event.offsetY) / this.overlayH)));
+      }))
+    .gesture(PinchGesture({ fingers: 2 })
+      .onActionStart((): void => { this.dragStartScale = element.scale; })
+      .onActionUpdate((event: GestureEvent): void => {
+        this.onElementScale(element.id,
+          Math.max(0.5, Math.min(2, this.dragStartScale * Number(event.scale))));
+      }))
+    .onClick((event: ClickEvent): void => {
+      if (this.editMode) {
+        event.stopPropagation();
+        this.onElementSelected(element.id);
+      }
+    })
+  }
+
+  @Builder
+  private RangeButtonElement(element: ControlElement) {
+    Stack({ alignContent: Alignment.Top }) {
+      if (element.text.length > 0) {
+        Text(element.text).fontSize(10 * (element.scale ?? 1)).fontColor(TEXT_IDLE)
+          .padding(3).width('100%').textAlign(TextAlign.Center)
+      }
+      ForEach(element.keyList ?? [], (code: number, index: number): void => {
+        Stack({ alignContent: Alignment.Center }) {
+          Text(this.keyLabel(code)).fontSize(10 * (element.scale ?? 1))
+            .fontColor(this.rangeSelection(element.id) === index ? TEXT_PRESSED : TEXT_IDLE)
+        }
+        .width('100%').height(22 * (element.scale ?? 1))
+        .backgroundColor(this.rangeSelection(element.id) === index ? FILL_PRESSED : '#44000000')
+        .position({ x: 0, y: (element.text.length > 0 ? 20 : 4) * (element.scale ?? 1) + index * 22 * (element.scale ?? 1) })
+      }, (code: number, index: number): string => element.id + '-' + code.toString() + '-' + index.toString())
+    }
+    .width(this.elementWidth(element)).height(this.elementHeight(element))
+    .borderRadius(this.elementRadius(element))
+    .backgroundColor('#33404040')
+    .border({ width: 2, color: STROKE_COLOR })
+    .clip(true)
+    .opacity(this.elementOpacity(element))
+    .hitTestBehavior(this.editMode ? HitTestMode.Block : HitTestMode.None)
+    .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
+    .id('virtual-element-' + element.id)
+    .gesture(PanGesture({ fingers: 1 })
+      .onActionStart((event: GestureEvent): void => {
+        this.dragStart = { x: element.x, y: element.y };
+        this.onElementSelected(element.id);
+      })
+      .onActionUpdate((event: GestureEvent): void => {
+        const start = this.dragStart;
+        if (!start || this.overlayW <= 0 || this.overlayH <= 0) return;
+        this.onElementMove(element.id,
+          Math.max(0, Math.min(1, start.x + Number(event.offsetX) / this.overlayW)),
+          Math.max(0, Math.min(1, start.y + Number(event.offsetY) / this.overlayH)));
+      }))
+    .gesture(PinchGesture({ fingers: 2 })
+      .onActionStart((): void => { this.dragStartScale = element.scale; })
+      .onActionUpdate((event: GestureEvent): void => {
+        this.onElementScale(element.id,
+          Math.max(0.5, Math.min(2, this.dragStartScale * Number(event.scale))));
+      }))
+    .onClick((event: ClickEvent): void => {
+      if (this.editMode) {
+        event.stopPropagation();
+        this.onElementSelected(element.id);
+      }
+    })
+  }
+
+  @Builder
+  private ElementView(element: ControlElement) {
+    if (element.type === ControlElementType.BUTTON) {
+      this.ButtonElement(element)
+    } else if (element.type === ControlElementType.D_PAD) {
+      this.DPadElement(element)
+    } else if (element.type === ControlElementType.STICK) {
+      this.StickElement(element)
+    } else if (element.type === ControlElementType.TRACKPAD) {
+      this.TrackpadElement(element)
+    } else {
+      this.RangeButtonElement(element)
+    }
+  }
+
+  private keyLabel(code: number): string {
+    if (code === 57) return '空格';
+    if (code === 1) return 'Esc';
+    if (code === 28) return 'Enter';
+    if (code === 42) return 'Shift';
+    if (code === 29) return 'Ctrl';
+    if (code >= 30 && code <= 38) return String.fromCharCode(65 + (code - 30));
+    if (code >= 44 && code <= 50) return String.fromCharCode(90 - (code - 44));
+    if (code >= 2 && code <= 11) return (code - 2).toString();
+    return code.toString();
+  }
+
+  // ---- 工具栏（沿用 VintagePomelo 可折叠控制栏） ----
+
   private resolveToolbarVertical(): boolean {
     if (this.controlBarDirection === ControlBarDirection.VERTICAL) return true;
     if (this.controlBarDirection === ControlBarDirection.HORIZONTAL) return false;
-    // VintagePomelo AUTO / AUTO_HIDE contract: portrait uses a vertical bar.
     return this.overlayH > this.overlayW;
   }
 
@@ -312,33 +912,18 @@ export struct VirtualInputOverlay {
   }
 
   private onProfileChanged(): void {
+    this.releaseAllElementTouches();
     this.renderedProfile = cloneInputProfile(this.profile);
   }
 
   private onRenderRevisionChanged(): void {
-    // Editor drag updates replace the profile and increment this primitive in
-    // the same render pass. Copying here prevents ArkUI from retaining a stale
-    // nested layout object in the long-lived overlay component.
     this.renderedProfile = cloneInputProfile(this.profile);
   }
 
   private onControlsVisibleChanged(): void {
     this.controlsVisibleVisual = this.controlsVisible;
     if (this.controlsVisible) return;
-    this.releaseRightJoystickInteraction();
-    this.activeButtonTouches.clear();
-    this.activeFreeTouches.clear();
-    this.joystickTouchId = -1;
-    this.dpadTouchId = -1;
-    this.pressedKeys = '';
-    this.pressedFreeButtons = '';
-    this.joystickActive = false;
-    this.joystickX = 0;
-    this.joystickY = 0;
-    this.dpadUp = false;
-    this.dpadDown = false;
-    this.dpadLeft = false;
-    this.dpadRight = false;
+    this.releaseAllElementTouches();
   }
 
   aboutToAppear(): void {
@@ -351,17 +936,17 @@ export struct VirtualInputOverlay {
 
   aboutToDisappear(): void {
     this.cancelToolbarAutoHide();
-    this.releaseRightJoystickInteraction();
+    this.releaseAllElementTouches();
   }
 
   private toolbarWidth(): number {
     if (!this.toolbarExpanded) return 44;
-    return this.resolveToolbarVertical() ? 52 : 220;
+    return this.resolveToolbarVertical() ? 52 : 176;
   }
 
   private toolbarHeight(): number {
     if (!this.toolbarExpanded) return 44;
-    return this.resolveToolbarVertical() ? 220 : 52;
+    return this.resolveToolbarVertical() ? 188 : 52;
   }
 
   private toolbarOriginX(): number {
@@ -417,16 +1002,14 @@ export struct VirtualInputOverlay {
     if (this.resolveToolbarVertical()) {
       if (this.rectContains(x, y, originX, originY, 44, 40)) return 'toolbar';
       if (this.rectContains(x, y, originX, originY + 40, 44, 44)) return 'editor';
-      if (this.rectContains(x, y, originX, originY + 84, 44, 44)) return 'mapping';
-      if (this.rectContains(x, y, originX, originY + 128, 44, 44)) return 'controls';
-      if (this.rectContains(x, y, originX, originY + 172, 44, 44)) return 'mouse';
+      if (this.rectContains(x, y, originX, originY + 84, 44, 44)) return 'controls';
+      if (this.rectContains(x, y, originX, originY + 128, 44, 44)) return 'mouse';
       return null;
     }
     if (this.rectContains(x, y, originX, originY, 44, 52)) return 'toolbar';
     if (this.rectContains(x, y, originX + 44, originY, 44, 52)) return 'editor';
-    if (this.rectContains(x, y, originX + 88, originY, 44, 52)) return 'mapping';
-    if (this.rectContains(x, y, originX + 132, originY, 44, 52)) return 'controls';
-    if (this.rectContains(x, y, originX + 176, originY, 44, 52)) return 'mouse';
+    if (this.rectContains(x, y, originX + 88, originY, 44, 52)) return 'controls';
+    if (this.rectContains(x, y, originX + 132, originY, 44, 52)) return 'mouse';
     return null;
   }
 
@@ -517,8 +1100,6 @@ export struct VirtualInputOverlay {
     const x = Number(touch.x);
     const y = Number(touch.y);
     const action = this.toolbarActionAt(x, y);
-    // Swallow the complete panel rectangle. Empty padding and gaps are valid
-    // drag surfaces and must never fall through to the Wine desktop below.
     if (!action && !this.toolbarPanelContains(x, y)) return false;
     this.toolbarTouchId = touch.id;
     this.toolbarTouchAction = action;
@@ -579,750 +1160,6 @@ export struct VirtualInputOverlay {
       return true;
     }
     return false;
-  }
-
-  private actionOrigin(): OverlayPoint {
-    return this.groupPosition(this.layout().action.centerX, this.layout().action.centerY,
-      this.actionWidth(), this.actionHeight());
-  }
-
-  private actionButtonAtLocal(localX: number, localY: number): [VirtualKey, number] | null {
-    const scale = this.config().buttonSize / 100;
-    const big = 50 * scale;
-    if (this.config().showButtonY && this.rectContains(localX, localY, 45 * scale, 0, big, big)) {
-      return [VirtualKey.BUTTON_Y, 31];
-    }
-    if (this.config().showButtonX && this.rectContains(localX, localY, 0, 45 * scale, big, big)) {
-      return [VirtualKey.BUTTON_X, 30];
-    }
-    if (this.config().showButtonA && this.rectContains(localX, localY, 90 * scale, 45 * scale, big, big)) {
-      return [VirtualKey.BUTTON_A, 57];
-    }
-    if (this.config().showButtonB && this.rectContains(localX, localY, 45 * scale, 90 * scale, big, big)) {
-      return [VirtualKey.BUTTON_B, 45];
-    }
-    return null;
-  }
-
-  private shoulderTargetAt(x: number, y: number): [VirtualKey, number] | null {
-    const layout = this.layout();
-    const targets: Array<[boolean, ButtonGroupPosition, VirtualKey, number]> = [
-      [this.config().showButtonShift, layout.leftTrigger, VirtualKey.BUTTON_SHIFT, 42],
-      [this.config().showButtonL, layout.leftBumper, VirtualKey.BUTTON_L, 16],
-      [this.config().showButtonR, layout.rightBumper, VirtualKey.BUTTON_R, 17],
-      [this.config().showButtonCtrl, layout.rightTrigger, VirtualKey.BUTTON_CTRL, 29]
-    ];
-    for (const target of targets) {
-      if (!target[0]) continue;
-      const origin = this.groupPosition(target[1].centerX, target[1].centerY,
-        this.shoulderHitWidth(), this.shoulderHitHeight());
-      if (this.rectContains(x, y, origin.x, origin.y, this.shoulderHitWidth(), this.shoulderHitHeight())) {
-        return [target[2], target[3]];
-      }
-    }
-    return null;
-  }
-
-  private buttonTargetAt(x: number, y: number): [VirtualKey, number] | null {
-    const shoulder = this.shoulderTargetAt(x, y);
-    if (shoulder) return shoulder;
-    const origin = this.actionOrigin();
-    const action = this.actionButtonAtLocal(x - origin.x, y - origin.y);
-    if (action) return action;
-    if ((this.config().showButtonMenu || this.config().showButtonStart) && this.auxWidth() > 0) {
-      const aux = this.groupPosition(this.layout().aux.centerX, this.layout().aux.centerY,
-        this.auxWidth(), this.auxHeight());
-      if (this.rectContains(x, y, aux.x, aux.y, this.auxWidth(), this.auxHeight())) {
-        if (this.config().showButtonMenu && this.config().showButtonStart) {
-          return x < aux.x + this.auxWidth() / 2 ?
-            [VirtualKey.BUTTON_MENU, 1] : [VirtualKey.BUTTON_START, 28];
-        }
-        return this.config().showButtonMenu ? [VirtualKey.BUTTON_MENU, 1] : [VirtualKey.BUTTON_START, 28];
-      }
-    }
-    return null;
-  }
-
-  private activeButtonForTouch(touchId: number): [VirtualKey, number] | null {
-    for (const entry of this.activeButtonTouches.entries()) {
-      if (entry[1] === touchId) return [entry[0], this.fallbackForKey(entry[0])];
-    }
-    return null;
-  }
-
-  private fallbackForKey(key: VirtualKey): number {
-    switch (key) {
-      case VirtualKey.BUTTON_SHIFT: return 42;
-      case VirtualKey.BUTTON_CTRL: return 29;
-      case VirtualKey.BUTTON_L: return 16;
-      case VirtualKey.BUTTON_R: return 17;
-      case VirtualKey.BUTTON_Y: return 31;
-      case VirtualKey.BUTTON_X: return 30;
-      case VirtualKey.BUTTON_A: return 57;
-      case VirtualKey.BUTTON_B: return 45;
-      case VirtualKey.BUTTON_MENU: return 1;
-      case VirtualKey.BUTTON_START: return 28;
-      case VirtualKey.RIGHT_STICK_UP: return 23;
-      case VirtualKey.RIGHT_STICK_DOWN: return 37;
-      case VirtualKey.RIGHT_STICK_LEFT: return 36;
-      case VirtualKey.RIGHT_STICK_RIGHT: return 38;
-      default: return 0;
-    }
-  }
-
-  private handleActionOverlayTouch(event: TouchEvent, x: number, y: number): boolean {
-    const touch = event.changedTouches[0];
-    if (!touch) return false;
-    const active = this.activeButtonForTouch(touch.id);
-    if (active) {
-      this.handleButtonTouch(event, active[0], active[1]);
-      return true;
-    }
-    const origin = this.actionOrigin();
-    const target = event.type === TouchType.Down ? this.actionButtonAtLocal(x - origin.x, y - origin.y) : null;
-    if (target) {
-      this.handleButtonTouch(event, target[0], target[1]);
-      return true;
-    }
-    return this.rectContains(x, y, this.actionOrigin().x, this.actionOrigin().y,
-      this.actionWidth(), this.actionHeight());
-  }
-
-  private handleActionGroupTouch(event: TouchEvent): void {
-    if (event.changedTouches.length === 0) return;
-    this.lastActionTouchAt = Date.now();
-    const touch = event.changedTouches[0];
-    const active = this.activeButtonForTouch(touch.id);
-    if (active) {
-      this.handleButtonTouch(event, active[0], active[1]);
-      return;
-    }
-    const target = event.type === TouchType.Down ?
-      this.actionButtonAtLocal(Number(touch.x), Number(touch.y)) : null;
-    if (target) this.handleButtonTouch(event, target[0], target[1]);
-    else event.stopPropagation();
-  }
-
-  private handleActionGroupMouse(event: MouseEvent): void {
-    event.stopPropagation();
-    if (Date.now() - this.lastActionTouchAt <= 320) return;
-    if (event.action === MouseAction.Press) {
-      const target = this.actionButtonAtLocal(Number(event.x), Number(event.y));
-      if (!target) return;
-      this.activeActionMouseKey = target[0];
-      this.activeActionMouseFallback = target[1];
-      this.setPressed(target[0], true);
-      this.pressVirtualKey(target[0], target[1], -100, 'action-mouse');
-      return;
-    }
-    if (event.action === MouseAction.Release && this.activeActionMouseKey !== null) {
-      const key = this.activeActionMouseKey;
-      const fallback = this.activeActionMouseFallback;
-      this.activeActionMouseKey = null;
-      this.activeActionMouseFallback = 0;
-      this.setPressed(key, false);
-      this.releaseVirtualKey(key, fallback, -100, 'action-mouse');
-    }
-  }
-
-  private handleFreeOverlayTouch(event: TouchEvent, x: number, y: number): boolean {
-    const touch = event.changedTouches[0];
-    if (!touch) return false;
-    for (const button of this.renderedProfile.freeButtonsConfig.buttons) {
-      if (this.activeFreeTouches.get(button.id) === touch.id) {
-        this.handleFreeButtonTouch(event, button);
-        return true;
-      }
-    }
-    for (const button of this.renderedProfile.freeButtonsConfig.buttons) {
-      const index = this.renderedProfile.freeButtonsConfig.buttons.indexOf(button);
-      if (this.rectContains(x, y,
-        this.groupPosition(this.layout().action.centerX, this.layout().action.centerY,
-          this.freeGroupSize(), this.freeGroupSize()).x + this.freePositionX(index),
-        this.groupPosition(this.layout().action.centerX, this.layout().action.centerY,
-          this.freeGroupSize(), this.freeGroupSize()).y + this.freePositionY(index),
-        this.freeButtonSize(), this.freeButtonSize())) {
-        this.handleFreeButtonTouch(event, button);
-        return true;
-      }
-    }
-    return this.rectContains(x, y,
-      this.groupPosition(this.layout().action.centerX, this.layout().action.centerY,
-        this.freeGroupSize(), this.freeGroupSize()).x,
-      this.groupPosition(this.layout().action.centerX, this.layout().action.centerY,
-        this.freeGroupSize(), this.freeGroupSize()).y,
-      this.freeGroupSize(), this.freeGroupSize());
-  }
-
-  private handleOverlayTouch(event: TouchEvent): void {
-    if (event.changedTouches.length === 0) return;
-    if (!this.hideToolbar && this.handleToolbarOverlayTouch(event)) return;
-    if (!this.interactive || !this.controlsVisible) {
-      this.onUnhandledTouch(event);
-      return;
-    }
-    const touch = event.changedTouches[0];
-    const x = Number(touch.x);
-    const y = Number(touch.y);
-    const direction = this.groupPosition(this.layout().direction.centerX, this.layout().direction.centerY,
-      this.directionSize(), this.directionSize());
-    let claimed = false;
-    if (this.dpadTouchId === touch.id) {
-      this.handleDpadTouch(event);
-      claimed = true;
-    } else if (this.joystickTouchId === touch.id) {
-      this.handleJoystickTouch(event);
-      claimed = true;
-    } else if (this.rightJoystickTouchId === touch.id) {
-      this.handleRightJoystickTouch(event);
-      claimed = true;
-    } else if (this.activeButtonForTouch(touch.id)) {
-      this.lastActionTouchAt = Date.now();
-      const active = this.activeButtonForTouch(touch.id);
-      if (active) this.handleButtonTouch(event, active[0], active[1]);
-      claimed = true;
-    } else if (this.renderedProfile.freeButtonsConfig.enabled && this.renderedProfile.freeButtonsConfig.buttons.length > 0) {
-      claimed = this.handleFreeOverlayTouch(event, x, y);
-    } else if (this.rectContains(x, y, direction.x, direction.y, this.directionSize(), this.directionSize())) {
-      if (this.config().dpadMode === DirectionControlMode.DPAD) this.handleDpadTouch(event);
-      else this.handleJoystickTouch(event);
-      claimed = true;
-    } else {
-      const target = event.type === TouchType.Down ? this.buttonTargetAt(x, y) : null;
-      if (target) {
-        this.lastActionTouchAt = Date.now();
-        this.handleButtonTouch(event, target[0], target[1]);
-        claimed = true;
-      } else if (event.type === TouchType.Down && this.isRightJoystickHit(x, y)) {
-        this.handleRightJoystickTouch(event);
-        claimed = true;
-      }
-    }
-    if (claimed) event.stopPropagation();
-    else this.onUnhandledTouch(event);
-  }
-
-  private handleOverlayMouse(event: MouseEvent): void {
-    if (!this.hideToolbar && this.handleToolbarOverlayMouse(event)) return;
-    if (!this.interactive || !this.controlsVisible ||
-      this.renderedProfile.freeButtonsConfig.enabled || Date.now() - this.lastActionTouchAt <= 320) {
-      this.onUnhandledMouse(event);
-      return;
-    }
-    const x = Number(event.x);
-    const y = Number(event.y);
-    if (event.action === MouseAction.Press) {
-      const target = this.buttonTargetAt(x, y);
-      if (!target) {
-        this.onUnhandledMouse(event);
-        return;
-      }
-      event.stopPropagation();
-      this.activeActionMouseKey = target[0];
-      this.activeActionMouseFallback = target[1];
-      this.setPressed(target[0], true);
-      this.pressVirtualKey(target[0], target[1], -100, 'overlay-mouse');
-      return;
-    }
-    if (event.action === MouseAction.Release && this.activeActionMouseKey !== null) {
-      event.stopPropagation();
-      const key = this.activeActionMouseKey;
-      const fallback = this.activeActionMouseFallback;
-      this.activeActionMouseKey = null;
-      this.activeActionMouseFallback = 0;
-      this.setPressed(key, false);
-      this.releaseVirtualKey(key, fallback, -100, 'overlay-mouse');
-      return;
-    }
-    this.onUnhandledMouse(event);
-  }
-
-  private isFreePressed(button: FreeButton): boolean {
-    return this.pressedFreeButtons.indexOf('|' + button.id + '|') >= 0;
-  }
-
-  private setFreePressed(button: FreeButton, pressed: boolean): void {
-    const token = '|' + button.id + '|';
-    if (pressed && !this.isFreePressed(button)) this.pressedFreeButtons += token;
-    if (!pressed && this.isFreePressed(button)) this.pressedFreeButtons = this.pressedFreeButtons.replace(token, '');
-  }
-
-  private source(key: VirtualKey, touchId: number, section: string = 'button'): string {
-    return 'vintage-' + section + '-' + key + '-' + touchId;
-  }
-
-  private isPressed(key: VirtualKey): boolean {
-    return this.pressedKeys.indexOf('|' + key + '|') >= 0;
-  }
-
-  private setPressed(key: VirtualKey, pressed: boolean): void {
-    const token = '|' + key + '|';
-    if (pressed && !this.isPressed(key)) this.pressedKeys += token;
-    if (!pressed && this.isPressed(key)) this.pressedKeys = this.pressedKeys.replace(token, '');
-  }
-
-  private pressVirtualKey(key: VirtualKey, fallback: number, touchId: number, section: string = 'button'): void {
-    if (!this.interactive) return;
-    InputDispatcher.getInstance().pressKey(this.source(key, touchId, section), this.mapping(key, fallback));
-  }
-
-  private releaseVirtualKey(key: VirtualKey, fallback: number, touchId: number, section: string = 'button'): void {
-    if (!this.interactive) return;
-    const source = this.source(key, touchId, section);
-    InputDispatcher.getInstance().releaseKey(source, this.mapping(key, fallback));
-    InputDispatcher.getInstance().releaseSource(source);
-  }
-
-  private handleButtonTouch(event: TouchEvent, key: VirtualKey, fallback: number): void {
-    if (!this.interactive) return;
-    event.stopPropagation();
-    for (let index = 0; index < event.changedTouches.length; index++) {
-      const touch = event.changedTouches[index];
-      if (event.type === TouchType.Down && !this.activeButtonTouches.has(key)) {
-        this.activeButtonTouches.set(key, touch.id);
-        this.setPressed(key, true);
-        this.pressVirtualKey(key, fallback, touch.id);
-      } else if ((event.type === TouchType.Up || event.type === TouchType.Cancel) &&
-        this.activeButtonTouches.get(key) === touch.id) {
-        this.activeButtonTouches.delete(key);
-        this.setPressed(key, false);
-        this.releaseVirtualKey(key, fallback, touch.id);
-      }
-    }
-  }
-
-  private handleFreeButtonTouch(event: TouchEvent, button: FreeButton): void {
-    if (!this.interactive) return;
-    event.stopPropagation();
-    for (let index = 0; index < event.changedTouches.length; index++) {
-      const touch = event.changedTouches[index];
-      const source = 'vintage-free-' + button.id + '-' + touch.id;
-      if (event.type === TouchType.Down && !this.activeFreeTouches.has(button.id)) {
-        this.activeFreeTouches.set(button.id, touch.id);
-        this.setFreePressed(button, true);
-        InputDispatcher.getInstance().pressKey(source, button.evdevCode);
-      } else if ((event.type === TouchType.Up || event.type === TouchType.Cancel) && this.activeFreeTouches.get(button.id) === touch.id) {
-        this.activeFreeTouches.delete(button.id);
-        this.setFreePressed(button, false);
-        InputDispatcher.getInstance().releaseKey(source, button.evdevCode);
-        InputDispatcher.getInstance().releaseSource(source);
-      }
-    }
-  }
-
-  private setDirection(key: VirtualKey, name: DirectionName, fallback: number, pressed: boolean, touchId: number, section: string): void {
-    const previous = name === 'up' ? this.dpadUp : name === 'down' ? this.dpadDown : name === 'left' ? this.dpadLeft : this.dpadRight;
-    if (previous === pressed) return;
-    if (name === 'up') this.dpadUp = pressed;
-    if (name === 'down') this.dpadDown = pressed;
-    if (name === 'left') this.dpadLeft = pressed;
-    if (name === 'right') this.dpadRight = pressed;
-    this.setPressed(key, pressed);
-    if (pressed) this.pressVirtualKey(key, fallback, touchId, section);
-    else this.releaseVirtualKey(key, fallback, touchId, section);
-  }
-
-  private applyDirection(up: boolean, down: boolean, left: boolean, right: boolean, touchId: number, section: string): void {
-    this.setDirection(VirtualKey.DPAD_UP, 'up', 103, up, touchId, section);
-    this.setDirection(VirtualKey.DPAD_DOWN, 'down', 108, down, touchId, section);
-    this.setDirection(VirtualKey.DPAD_LEFT, 'left', 105, left, touchId, section);
-    this.setDirection(VirtualKey.DPAD_RIGHT, 'right', 106, right, touchId, section);
-  }
-
-  private releaseDirections(touchId: number, section: string): void {
-    this.applyDirection(false, false, false, false, touchId, section);
-  }
-
-  private directionFor(dx: number, dy: number): [boolean, boolean, boolean, boolean] {
-    const direction = resolveVirtualJoystickDirection(dx, dy, this.joystickRadius(),
-      this.config().joystickDeadzone, this.config().eightDirectionJoystick);
-    return [direction.up, direction.down, direction.left, direction.right];
-  }
-
-  private handleJoystickTouch(event: TouchEvent): void {
-    if (!this.interactive) return;
-    event.stopPropagation();
-    if (event.type === TouchType.Down && event.changedTouches.length > 0) {
-      const touch = event.changedTouches[0];
-      this.joystickTouchId = touch.id;
-      this.joystickCenterX = Number(touch.x);
-      this.joystickCenterY = Number(touch.y);
-      this.joystickActive = true;
-      this.joystickX = 0;
-      this.joystickY = 0;
-      return;
-    }
-    if (event.type === TouchType.Move && this.joystickTouchId >= 0) {
-      for (let index = 0; index < event.touches.length; index++) {
-        const touch = event.touches[index];
-        if (touch.id !== this.joystickTouchId) continue;
-        let dx = Number(touch.x) - this.joystickCenterX;
-        let dy = Number(touch.y) - this.joystickCenterY;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        if (distance > this.joystickRadius()) {
-          dx = dx * this.joystickRadius() / distance;
-          dy = dy * this.joystickRadius() / distance;
-        }
-        this.joystickX = dx;
-        this.joystickY = dy;
-        const direction = this.directionFor(dx, dy);
-        this.applyDirection(direction[0], direction[1], direction[2], direction[3], this.joystickTouchId, 'joystick');
-        break;
-      }
-      return;
-    }
-    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-      for (let index = 0; index < event.changedTouches.length; index++) {
-        if (event.changedTouches[index].id === this.joystickTouchId) {
-          this.releaseDirections(this.joystickTouchId, 'joystick');
-          this.joystickTouchId = -1;
-          this.joystickActive = false;
-          this.joystickX = 0;
-          this.joystickY = 0;
-          break;
-        }
-      }
-    }
-  }
-
-  private rightJoystickSource(touchId: number): string {
-    return 'right-joystick-' + touchId;
-  }
-
-  private isRightJoystickHit(x: number, y: number): boolean {
-    if (!this.config().showRightJoystick) return false;
-    const centerX = this.overlayW * this.layout().camera.centerX;
-    const centerY = this.overlayH * this.layout().camera.centerY;
-    const radius = this.rightJoystickRadius() + 12;
-    const dx = x - centerX;
-    const dy = y - centerY;
-    return dx * dx + dy * dy <= radius * radius;
-  }
-
-  private releaseRightJoystickInteraction(): void {
-    if (this.rightJoystickTouchId >= 0) {
-      this.releaseRightDirections(this.rightJoystickTouchId);
-      InputDispatcher.getInstance().releaseSource(this.rightJoystickSource(this.rightJoystickTouchId));
-    }
-    this.rightJoystickTouchId = -1;
-    this.rightJoystickActive = false;
-    this.rightJoystickX = 0;
-    this.rightJoystickY = 0;
-    this.rightStickUp = false;
-    this.rightStickDown = false;
-    this.rightStickLeft = false;
-    this.rightStickRight = false;
-  }
-
-  private setRightDirection(key: VirtualKey, name: DirectionName, fallback: number,
-    pressed: boolean, touchId: number): void {
-    const previous = name === 'up' ? this.rightStickUp : name === 'down' ? this.rightStickDown :
-      name === 'left' ? this.rightStickLeft : this.rightStickRight;
-    if (previous === pressed) return;
-    if (name === 'up') this.rightStickUp = pressed;
-    if (name === 'down') this.rightStickDown = pressed;
-    if (name === 'left') this.rightStickLeft = pressed;
-    if (name === 'right') this.rightStickRight = pressed;
-    this.setPressed(key, pressed);
-    if (pressed) this.pressVirtualKey(key, fallback, touchId, 'right-joystick');
-    else this.releaseVirtualKey(key, fallback, touchId, 'right-joystick');
-  }
-
-  private applyRightDirection(up: boolean, down: boolean, left: boolean, right: boolean, touchId: number): void {
-    this.setRightDirection(VirtualKey.RIGHT_STICK_UP, 'up', 23, up, touchId);
-    this.setRightDirection(VirtualKey.RIGHT_STICK_DOWN, 'down', 37, down, touchId);
-    this.setRightDirection(VirtualKey.RIGHT_STICK_LEFT, 'left', 36, left, touchId);
-    this.setRightDirection(VirtualKey.RIGHT_STICK_RIGHT, 'right', 38, right, touchId);
-  }
-
-  private releaseRightDirections(touchId: number): void {
-    this.applyRightDirection(false, false, false, false, touchId);
-  }
-
-  /** Right analog stick adapted from VintagePomelo's camera-look control. */
-  private handleRightJoystickTouch(event: TouchEvent): void {
-    if (!this.interactive) return;
-    event.stopPropagation();
-    if (event.type === TouchType.Down && event.changedTouches.length > 0 && this.rightJoystickTouchId < 0) {
-      const touch = event.changedTouches[0];
-      this.rightJoystickTouchId = touch.id;
-      this.rightJoystickCenterX = Number(touch.x);
-      this.rightJoystickCenterY = Number(touch.y);
-      this.rightJoystickLastX = Number(touch.x);
-      this.rightJoystickLastY = Number(touch.y);
-      this.rightJoystickActive = true;
-      this.rightJoystickX = 0;
-      this.rightJoystickY = 0;
-      return;
-    }
-    if (event.type === TouchType.Move && this.rightJoystickTouchId >= 0) {
-      for (let index = 0; index < event.touches.length; index++) {
-        const touch = event.touches[index];
-        if (touch.id !== this.rightJoystickTouchId) continue;
-        const currentX = Number(touch.x);
-        const currentY = Number(touch.y);
-        const rawX = currentX - this.rightJoystickCenterX;
-        const rawY = currentY - this.rightJoystickCenterY;
-        const distance = Math.sqrt(rawX * rawX + rawY * rawY);
-        const maxOffset = this.rightJoystickMaxOffset();
-        if (distance > maxOffset && distance > 0) {
-          this.rightJoystickX = rawX * maxOffset / distance;
-          this.rightJoystickY = rawY * maxOffset / distance;
-        } else {
-          this.rightJoystickX = rawX;
-          this.rightJoystickY = rawY;
-        }
-
-        const deltaX = currentX - this.rightJoystickLastX;
-        const deltaY = currentY - this.rightJoystickLastY;
-        this.rightJoystickLastX = currentX;
-        this.rightJoystickLastY = currentY;
-        const deadzone = this.rightJoystickRadius() * this.config().rightJoystickDeadzone / 100;
-        if (this.config().rightJoystickOutputMode === RightJoystickOutputMode.KEYS) {
-          const direction = resolveVirtualJoystickDirection(rawX, rawY, this.rightJoystickRadius(),
-            this.config().rightJoystickDeadzone, true);
-          this.applyRightDirection(direction.up, direction.down, direction.left, direction.right,
-            this.rightJoystickTouchId);
-        } else if (distance > deadzone && (deltaX !== 0 || deltaY !== 0)) {
-          this.releaseRightDirections(this.rightJoystickTouchId);
-          const sensitivity = Math.max(0.25, Math.min(3, this.config().rightJoystickSensitivity / 100));
-          const ui = this.getUIContext();
-          InputDispatcher.getInstance().pointerDelta(this.rightJoystickSource(this.rightJoystickTouchId),
-            ui.vp2px(deltaX) * sensitivity, ui.vp2px(deltaY) * sensitivity);
-        }
-        break;
-      }
-      return;
-    }
-    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-      for (let index = 0; index < event.changedTouches.length; index++) {
-        if (event.changedTouches[index].id === this.rightJoystickTouchId) {
-          this.releaseRightJoystickInteraction();
-          break;
-        }
-      }
-    }
-  }
-
-  private updateDpad(event: TouchEvent): void {
-    for (let index = 0; index < event.touches.length; index++) {
-      const touch = event.touches[index];
-      if (touch.id !== this.dpadTouchId) continue;
-      const centerX = this.overlayW * this.layout().direction.centerX;
-      const centerY = this.overlayH * this.layout().direction.centerY;
-      const direction = this.directionFor(Number(touch.x) - centerX, Number(touch.y) - centerY);
-      this.applyDirection(direction[0], direction[1], direction[2], direction[3], this.dpadTouchId, 'dpad');
-      break;
-    }
-  }
-
-  private handleDpadTouch(event: TouchEvent): void {
-    if (!this.interactive) return;
-    event.stopPropagation();
-    if (event.type === TouchType.Down && event.changedTouches.length > 0) {
-      this.dpadTouchId = event.changedTouches[0].id;
-      this.updateDpad(event);
-      return;
-    }
-    if (event.type === TouchType.Move && this.dpadTouchId >= 0) {
-      this.updateDpad(event);
-      return;
-    }
-    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-      for (let index = 0; index < event.changedTouches.length; index++) {
-        if (event.changedTouches[index].id === this.dpadTouchId) {
-          this.releaseDirections(this.dpadTouchId, 'dpad');
-          this.dpadTouchId = -1;
-          break;
-        }
-      }
-    }
-  }
-
-  @Builder
-  private GameButton(label: string, key: VirtualKey, fallback: number, accent: string = this.strokeColor(), small: boolean = false) {
-    Stack({ alignContent: Alignment.Center }) {
-      Circle().width((small ? 35 : 50) * this.config().buttonSize / 100).height((small ? 35 : 50) * this.config().buttonSize / 100)
-        .fill(this.fillColor(this.isPressed(key), this.themedAccent(accent)))
-        .stroke(this.themedAccent(accent)).strokeWidth(small ? 1.5 : 2)
-        .opacity(this.visibleOpacity(this.config().transparency)).shadow({ radius: this.isPressed(key) ? 2 : 4, color: '#66000000' })
-      Text(label).fontSize((small ? 10 : 16) * this.config().buttonSize / 100).fontWeight(FontWeight.Bold)
-        .fontColor(this.textColor(this.isPressed(key), this.themedAccent(accent)))
-    }
-    .width((small ? 35 : 50) * this.config().buttonSize / 100).height((small ? 35 : 50) * this.config().buttonSize / 100)
-    .hitTestBehavior(HitTestMode.None)
-  }
-
-  @Builder
-  private Dpad() {
-    Stack() {
-      Circle().width(this.directionSize()).height(this.directionSize()).fill('#00000000')
-        .stroke(this.strokeColor()).strokeWidth(2)
-        .opacity(this.visibleOpacity(this.config().joystickTransparency))
-      Rect().width(this.joystickRadius() * 0.6).height(this.joystickRadius() * 0.9).fill(this.fillColor(this.dpadUp)).borderRadius({ topLeft: this.joystickRadius() * 0.3, topRight: this.joystickRadius() * 0.3 })
-        .opacity(this.visibleOpacity(this.config().joystickTransparency) * (this.dpadUp ? 1 : 0.5)).position({ x: this.directionSize() / 2 - this.joystickRadius() * 0.3, y: 10 })
-      Rect().width(this.joystickRadius() * 0.6).height(this.joystickRadius() * 0.9).fill(this.fillColor(this.dpadDown)).borderRadius({ bottomLeft: this.joystickRadius() * 0.3, bottomRight: this.joystickRadius() * 0.3 })
-        .opacity(this.visibleOpacity(this.config().joystickTransparency) * (this.dpadDown ? 1 : 0.5)).position({ x: this.directionSize() / 2 - this.joystickRadius() * 0.3, y: this.directionSize() - this.joystickRadius() * 0.9 - 10 })
-      Rect().width(this.joystickRadius() * 0.9).height(this.joystickRadius() * 0.6).fill(this.fillColor(this.dpadLeft)).borderRadius({ topLeft: this.joystickRadius() * 0.3, bottomLeft: this.joystickRadius() * 0.3 })
-        .opacity(this.visibleOpacity(this.config().joystickTransparency) * (this.dpadLeft ? 1 : 0.5)).position({ x: 10, y: this.directionSize() / 2 - this.joystickRadius() * 0.3 })
-      Rect().width(this.joystickRadius() * 0.9).height(this.joystickRadius() * 0.6).fill(this.fillColor(this.dpadRight)).borderRadius({ topRight: this.joystickRadius() * 0.3, bottomRight: this.joystickRadius() * 0.3 })
-        .opacity(this.visibleOpacity(this.config().joystickTransparency) * (this.dpadRight ? 1 : 0.5)).position({ x: this.directionSize() - this.joystickRadius() * 0.9 - 10, y: this.directionSize() / 2 - this.joystickRadius() * 0.3 })
-      Circle().width(this.joystickRadius() * 0.4).height(this.joystickRadius() * 0.4).fill(this.fillColor(false)).opacity(this.visibleOpacity(this.config().joystickTransparency) * 0.7)
-    }
-    .width(this.directionSize()).height(this.directionSize()).hitTestBehavior(HitTestMode.None).id('wine-vintage-direction-dpad')
-  }
-
-  @Builder
-  private Joystick() {
-    Stack() {
-      Circle().width(this.directionSize()).height(this.directionSize()).fill('#00000000')
-        .stroke(this.strokeColor()).strokeWidth(2)
-        .opacity(this.visibleOpacity(this.config().joystickTransparency))
-      ForEach([0, 45, 90, 135, 180, 225, 270, 315], (angle: number): void => {
-        Line().width(10).height(2).backgroundColor(this.strokeColor()).opacity(this.visibleOpacity(this.config().joystickTransparency) * 0.5)
-          .rotate({ angle: angle }).position({ x: this.joystickRadius() + 10 + Math.cos(angle * Math.PI / 180) * (this.joystickRadius() - 5) - 5, y: this.joystickRadius() + 10 + Math.sin(angle * Math.PI / 180) * (this.joystickRadius() - 5) - 1 })
-      }, (angle: number): string => angle.toString())
-      Circle().width(50 * this.config().joystickSize / 100).height(50 * this.config().joystickSize / 100)
-        .fill(this.fillColor(this.joystickActive))
-        .opacity(this.visibleOpacity(this.config().joystickTransparency) * (this.joystickActive ? 1 : 0.7)).translate({ x: this.joystickX, y: this.joystickY })
-    }
-    .width(this.directionSize()).height(this.directionSize()).hitTestBehavior(HitTestMode.None).id('wine-vintage-direction-joystick')
-  }
-
-  @Builder
-  private DirectionGroup() {
-    Column() {
-      if (this.config().dpadMode === DirectionControlMode.DPAD) this.Dpad()
-      else this.Joystick()
-    }
-    .width(this.directionSize()).height(this.directionSize())
-    .hitTestBehavior(HitTestMode.None)
-    .position(this.groupPosition(this.layout().direction.centerX, this.layout().direction.centerY, this.directionSize(), this.directionSize()))
-  }
-
-  @Builder
-  private RightJoystickGroup() {
-    if (this.config().showRightJoystick) {
-      Stack() {
-        Circle().width(this.rightJoystickSize()).height(this.rightJoystickSize()).fill('#00000000')
-          .stroke(this.themedAccent('#FF8BC34A')).strokeWidth(2)
-          .opacity(this.visibleOpacity(this.config().joystickTransparency))
-        ForEach([0, 90, 180, 270], (angle: number): void => {
-          Line().width(10).height(2).backgroundColor(this.themedAccent('#FF8BC34A'))
-            .opacity(this.visibleOpacity(this.config().joystickTransparency) * 0.6)
-            .rotate({ angle: angle })
-            .position({
-              x: this.rightJoystickRadius() + Math.cos(angle * Math.PI / 180) * (this.rightJoystickRadius() - 8) - 5,
-              y: this.rightJoystickRadius() + Math.sin(angle * Math.PI / 180) * (this.rightJoystickRadius() - 8) - 1
-            })
-        }, (angle: number): string => angle.toString())
-        Circle().width(6).height(6).fill('#B38BC34A')
-          .opacity(this.visibleOpacity(this.config().joystickTransparency) * 0.7)
-        Circle().width(this.rightJoystickKnobSize()).height(this.rightJoystickKnobSize())
-          .fill(this.fillColor(this.rightJoystickActive, this.themedAccent('#FF8BC34A')))
-          .stroke(this.themedAccent('#FF8BC34A')).strokeWidth(1.5)
-          .opacity(this.visibleOpacity(this.config().joystickTransparency) * (this.rightJoystickActive ? 1 : 0.8))
-          .shadow({ radius: 4, color: '#66000000' })
-          .translate({ x: this.rightJoystickX, y: this.rightJoystickY })
-      }
-      .width(this.rightJoystickSize()).height(this.rightJoystickSize())
-      .hitTestBehavior(HitTestMode.None).id('wine-vintage-right-joystick')
-      .position(this.groupPosition(this.layout().camera.centerX, this.layout().camera.centerY,
-        this.rightJoystickSize(), this.rightJoystickSize()))
-    }
-  }
-
-  @Builder
-  private ActionGroup() {
-    Stack() {
-      if (this.config().showButtonY) {
-        Stack() { this.GameButton('Y', VirtualKey.BUTTON_Y, 31, this.strokeColor()) }
-          .width(50 * this.config().buttonSize / 100).height(50 * this.config().buttonSize / 100).position({ x: 45 * this.config().buttonSize / 100, y: 0 })
-      }
-      if (this.config().showButtonX) {
-        Stack() { this.GameButton('X', VirtualKey.BUTTON_X, 30, this.strokeColor()) }
-          .width(50 * this.config().buttonSize / 100).height(50 * this.config().buttonSize / 100).position({ x: 0, y: 45 * this.config().buttonSize / 100 })
-      }
-      if (this.config().showButtonA) {
-        Stack() { this.GameButton('A', VirtualKey.BUTTON_A, 57, '#FF81C784') }
-          .width(50 * this.config().buttonSize / 100).height(50 * this.config().buttonSize / 100).position({ x: 90 * this.config().buttonSize / 100, y: 45 * this.config().buttonSize / 100 })
-      }
-      if (this.config().showButtonB) {
-        Stack() { this.GameButton('B', VirtualKey.BUTTON_B, 45, '#FFFF5252') }
-          .width(50 * this.config().buttonSize / 100).height(50 * this.config().buttonSize / 100).position({ x: 45 * this.config().buttonSize / 100, y: 90 * this.config().buttonSize / 100 })
-      }
-    }
-    .width(this.actionWidth()).height(this.actionHeight()).hitTestBehavior(HitTestMode.None)
-    .id('wine-vintage-action')
-    .position(this.groupPosition(this.layout().action.centerX, this.layout().action.centerY, this.actionWidth(), this.actionHeight()))
-  }
-
-  @Builder
-  private ShoulderButton(label: string, key: VirtualKey, accent: string, position: ButtonGroupPosition, id: string) {
-    Stack({ alignContent: Alignment.Center }) {
-      Rect().width(this.shoulderWidth()).height(this.shoulderHeight())
-        .fill(this.fillColor(this.isPressed(key), this.themedAccent(accent)))
-        .stroke(this.themedAccent(accent)).strokeWidth(2).borderRadius(this.shoulderHeight() / 2)
-        .opacity(this.visibleOpacity(this.config().transparency))
-        .shadow({ radius: this.isPressed(key) ? 2 : 5, color: '#66000000' })
-      Text(label).fontSize(12 * this.config().buttonSize / 100).fontWeight(FontWeight.Bold)
-        .fontColor(this.textColor(this.isPressed(key), this.themedAccent(accent)))
-    }
-    .width(this.shoulderHitWidth()).height(this.shoulderHitHeight())
-    .position(this.groupPosition(position.centerX, position.centerY, this.shoulderHitWidth(), this.shoulderHitHeight()))
-    .hitTestBehavior(HitTestMode.None).id(id)
-  }
-
-  @Builder
-  private ShoulderGroups() {
-    if (this.config().showButtonShift) {
-      this.ShoulderButton('LT', VirtualKey.BUTTON_SHIFT, '#FFFFB74D', this.layout().leftTrigger, 'wine-vintage-left-trigger')
-    }
-    if (this.config().showButtonL) {
-      this.ShoulderButton('LB', VirtualKey.BUTTON_L, this.strokeColor(), this.layout().leftBumper, 'wine-vintage-left-bumper')
-    }
-    if (this.config().showButtonR) {
-      this.ShoulderButton('RB', VirtualKey.BUTTON_R, this.strokeColor(), this.layout().rightBumper, 'wine-vintage-right-bumper')
-    }
-    if (this.config().showButtonCtrl) {
-      this.ShoulderButton('RT', VirtualKey.BUTTON_CTRL, '#FF64B5F6', this.layout().rightTrigger, 'wine-vintage-right-trigger')
-    }
-  }
-
-  @Builder
-  private AuxGroup() {
-    if (this.auxWidth() > 0) {
-      Row({ space: 12 }) {
-        if (this.config().showButtonMenu) this.GameButton('菜单', VirtualKey.BUTTON_MENU, 1, this.strokeColor(), true)
-        if (this.config().showButtonStart) this.GameButton('Start', VirtualKey.BUTTON_START, 28, this.strokeColor(), true)
-      }
-      .width(this.auxWidth()).height(this.auxHeight()).justifyContent(FlexAlign.Center).hitTestBehavior(HitTestMode.None)
-      .id('wine-vintage-aux')
-      .position(this.groupPosition(this.layout().aux.centerX, this.layout().aux.centerY, this.auxWidth(), this.auxHeight()))
-    }
-  }
-
-  /** VintagePomelo's optional free-button mode, rendered in place of fixed controls. */
-  @Builder
-  private FreeButtonGroup() {
-    Stack({ alignContent: Alignment.Center }) {
-      ForEach(this.renderedProfile.freeButtonsConfig.buttons, (button: FreeButton, index: number): void => {
-        Stack({ alignContent: Alignment.Center }) {
-          Circle().width(this.freeButtonSize()).height(this.freeButtonSize())
-            .fill(this.isFreePressed(button) ? '#FF2979FF' : '#8032323A')
-            .stroke(this.strokeColor()).strokeWidth(2)
-            .opacity(this.visibleOpacity(this.config().transparency))
-          Text(button.keyLabel).fontSize(12 * this.config().buttonSize / 100).fontWeight(FontWeight.Bold)
-            .fontColor(this.isFreePressed(button) ? '#FFFFFFFF' : '#FFE7F2FF').maxLines(1)
-        }
-        .width(this.freeButtonSize()).height(this.freeButtonSize())
-        .position({ x: this.freePositionX(index), y: this.freePositionY(index) })
-        .hitTestBehavior(HitTestMode.None)
-      }, (button: FreeButton): string => button.id)
-    }
-    .width(this.freeGroupSize()).height(this.freeGroupSize()).hitTestBehavior(HitTestMode.None)
-    .id('wine-vintage-free-buttons')
-    .position(this.groupPosition(this.layout().action.centerX, this.layout().action.centerY, this.freeGroupSize(), this.freeGroupSize()))
   }
 
   @Builder
@@ -1404,8 +1241,6 @@ export struct VirtualInputOverlay {
   private ExpandedToolbarButtons() {
     this.ControlBarButton($r('sys.symbol.gearshape'), 'wine-input-layout-editor', false,
       '#FFFFFFFF', '#44FFFFFF', false, (): void => this.runToolbarAction('editor'))
-    this.ControlBarButton($r('sys.symbol.keyboard'), 'wine-input-key-mapping-editor', false,
-      '#FFFFFFFF', '#44FFFFFF', false, (): void => this.runToolbarAction('mapping'))
     this.ControlsVisibilityButton()
     this.TouchpadModeButton()
   }
@@ -1425,12 +1260,9 @@ export struct VirtualInputOverlay {
     .backgroundColor(this.toolbarExpanded ? '#1AFFFFFF' : '#BF282828')
     .border({ width: 1, color: '#33FFFFFF' })
     .id('wine-input-overlay-toggle')
-    // The root overlay owns this button's pointer stream so a click toggles
-    // the bar while a drag repositions it without leaking events to Wine.
     .hitTestBehavior(HitTestMode.None)
   }
 
-  /** Direct ArkTS adaptation of VintagePomelo's collapsible icon control bar. */
   @Builder
   private Toolbar() {
     if (this.toolbarAutoHidden && this.isAutoHideMode()) {
@@ -1476,19 +1308,11 @@ export struct VirtualInputOverlay {
 
   build() {
     Stack() {
-      // Referencing the revision in the render tree makes ArkUI invalidate an
-      // editor preview while preserving stable production test IDs.
       Text(this.renderRevision.toString()).width(0).height(0).opacity(0).hitTestBehavior(HitTestMode.None)
-      if (this.overlayW > 0 && this.overlayH > 0 && this.controlsVisibleVisual) {
-        if (this.renderedProfile.freeButtonsConfig.enabled && this.renderedProfile.freeButtonsConfig.buttons.length > 0) {
-          this.FreeButtonGroup()
-        } else {
-          this.DirectionGroup()
-          this.RightJoystickGroup()
-          this.ShoulderGroups()
-          this.ActionGroup()
-          this.AuxGroup()
-        }
+      if (this.overlayW > 0 && this.overlayH > 0 && (this.controlsVisibleVisual || this.editMode)) {
+        ForEach(this.visibleElements(), (element: ControlElement): void => {
+          this.ElementView(element)
+        }, (element: ControlElement): string => element.id)
       }
       if (!this.hideToolbar) this.Toolbar()
     }
@@ -1496,6 +1320,12 @@ export struct VirtualInputOverlay {
     .onTouch((event: TouchEvent): void => this.handleOverlayTouch(event))
     .onMouse((event: MouseEvent): void => this.handleOverlayMouse(event))
     .onAxisEvent((event?: AxisEvent): void => this.onUnhandledAxis(event))
+    .onClick((event: ClickEvent): void => {
+      if (this.editMode) {
+        event.stopPropagation();
+        this.onElementSelected('');
+      }
+    })
     .onAreaChange((_oldValue: Area, area: Area): void => {
       this.overlayW = area.width as number;
       this.overlayH = area.height as number;
