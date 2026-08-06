@@ -8,20 +8,15 @@ import {
   ControlElementType,
   InputBinding,
   InputBindingKind,
-  InputLayoutForm,
-  INPUT_LAYOUT_FORMS,
   InputProfile,
   ThemeMode,
   cloneInputProfile,
   createControlElement,
   createDefaultInputProfile,
-  elementsForForm,
-  inputLayoutFormLabel,
   keyBinding,
   MOUSE_LEFT_BUTTON,
   MOUSE_RIGHT_BUTTON,
-  MOUSE_MIDDLE_BUTTON,
-  resolveInputLayoutForm
+  MOUSE_MIDDLE_BUTTON
 } from '../model/AppModels';
 import { KEY_NAME_OPTIONS, keyNameLabel } from '../common/EvdevKeyNames';
 import { VirtualInputOverlay } from '../components/VirtualInputOverlay';
@@ -73,8 +68,6 @@ struct InputLayoutEditor {
   @State private baseProfileId: string = 'default';
   @State private previewW: number = 0;
   @State private previewH: number = 0;
-  @State private editForm: InputLayoutForm = InputLayoutForm.TABLET;
-  @State private editFormTouched: boolean = false;
   @State private selectedElementId: string = '';
   @State private previewRevision: number = 0;
   @State private showPropertyPanel: boolean = false;
@@ -249,7 +242,7 @@ struct InputLayoutEditor {
   }
 
   private selectedElement(): ControlElement | null {
-    const elements = elementsForForm(this.profile, this.editForm);
+    const elements = this.profile.elements;
     for (let index = 0; index < elements.length; index++) {
       if (elements[index].id === this.selectedElementId) return elements[index];
     }
@@ -258,23 +251,8 @@ struct InputLayoutEditor {
 
   private updateProfile(mutator: (elements: ControlElement[]) => ControlElement[]): void {
     const next = cloneInputProfile(this.profile);
-    if (this.editForm === InputLayoutForm.PHONE) {
-      next.elementsPhone = mutator(next.elementsPhone ?? []);
-    } else if (this.editForm === InputLayoutForm.DESKTOP) {
-      next.elementsDesktop = mutator(next.elementsDesktop ?? []);
-    } else {
-      next.elementsTablet = mutator(next.elementsTablet ?? []);
-    }
+    next.elements = mutator(next.elements ?? []);
     this.profile = next;
-    this.previewRevision++;
-  }
-
-  private switchForm(form: InputLayoutForm): void {
-    if (this.editForm === form) return;
-    this.editForm = form;
-    this.editFormTouched = true;
-    this.selectedElementId = '';
-    this.showPropertyPanel = false;
     this.previewRevision++;
   }
 
@@ -313,6 +291,64 @@ struct InputLayoutEditor {
       visible: element.visible,
       keyList: patch.keyList ?? element.keyList
     };
+  }
+
+  /** 画布使用窗口内可用区域（顶部提示栏与底部操作栏之间，右侧留给属性面板）。 */
+  private canvasHeight(): number {
+    return Math.max(240, this.previewH - 240);
+  }
+
+  private canvasWidth(): number {
+    const reserved = 300;
+    const maxWidth = Math.max(300, this.previewW - reserved - 48);
+    return Math.max(160, maxWidth);
+  }
+
+  private canvasLeft(): number {
+    const reserved = 300;
+    const freeWidth = Math.max(0, this.previewW - reserved);
+    return Math.max(12, (freeWidth - this.canvasWidth()) / 2 + 12);
+  }
+
+  private canvasTop(): number {
+    return Math.max(140, (this.previewH - this.canvasHeight()) / 2);
+  }
+
+  private elementPixelWidth(element: ControlElement): number {
+    if (element.type === ControlElementType.TRACKPAD) return 150 * (element.scale ?? 1);
+    if (element.type === ControlElementType.RANGE_BUTTON) return 44 * (element.scale ?? 1);
+    if (element.type === ControlElementType.D_PAD) return 132 * (element.scale ?? 1);
+    if (element.type === ControlElementType.STICK) return 120 * (element.scale ?? 1);
+    return 56 * (element.scale ?? 1);
+  }
+
+  private elementPixelHeight(element: ControlElement): number {
+    if (element.type === ControlElementType.TRACKPAD) return 100 * (element.scale ?? 1);
+    if (element.type === ControlElementType.RANGE_BUTTON) return 180 * (element.scale ?? 1);
+    return this.elementPixelWidth(element);
+  }
+
+  private elementsOverlap(left: ControlElement, right: ControlElement): boolean {
+    const halfWidth = (this.elementPixelWidth(left) + this.elementPixelWidth(right)) / 2;
+    const halfHeight = (this.elementPixelHeight(left) + this.elementPixelHeight(right)) / 2;
+    const dx = Math.abs(left.x - right.x) * this.canvasWidth();
+    const dy = Math.abs(left.y - right.y) * this.canvasHeight();
+    return dx < halfWidth && dy < halfHeight;
+  }
+
+  private overlapWarning(): string {
+    const element = this.selectedElement();
+    if (!element) return '';
+    const elements = this.profile.elements;
+    for (let index = 0; index < elements.length; index++) {
+      const other = elements[index];
+      if (other.id === element.id || !other.visible) continue;
+      if (this.elementsOverlap(element, other)) {
+        const label = other.text.length > 0 ? other.text : '未命名控件';
+        return '与「' + label + '」重叠，请拖动错开';
+      }
+    }
+    return '';
   }
 
   private defaultBindings(type: ControlElementType): InputBinding[] {
@@ -544,22 +580,6 @@ struct InputLayoutEditor {
   }
 
   @Builder
-  private FormSwitcher() {
-    Row({ space: 6 }) {
-      ForEach(INPUT_LAYOUT_FORMS, (form: InputLayoutForm): void => {
-        Text(inputLayoutFormLabel(form)).fontSize(11)
-          .fontColor(this.editForm === form ? '#FFFFFFFF' : '#FFFFFF99')
-          .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-          .backgroundColor(this.editForm === form ? '#335C8DFF' : '#18FFFFFF')
-          .borderRadius(12).border({ width: 1, color: this.editForm === form ? '#FF64B5F6' : '#33FFFFFF' })
-          .id('editor-form-' + form)
-          .onClick((): void => this.switchForm(form))
-      }, (form: InputLayoutForm): string => form)
-    }
-    .padding(4).backgroundColor('#AA111111').borderRadius(18).border({ width: 1, color: '#44FFFFFF' })
-  }
-
-  @Builder
   private ShapeChip(label: string, shape: ControlElementShape) {
     Text(label).fontSize(11).fontColor(this.selectedElement()?.shape === shape ? '#FFFFFFFF' : '#FFFFFF99')
       .padding({ left: 9, right: 9, top: 6, bottom: 6 })
@@ -639,6 +659,9 @@ struct InputLayoutEditor {
             Text('✕').fontSize(14).fontColor('#FFFF5252').onClick((): void => { this.showPropertyPanel = false; })
           }
           .width('100%').height(28)
+          if (this.overlapWarning().length > 0) {
+            Text(this.overlapWarning()).fontSize(11).fontColor('#FFFF5252').width('100%')
+          }
           Text('文字标签').fontSize(11).fontColor('#FFFFFFAA').width('100%')
           TextInput({ text: this.selectedElement()?.text ?? '', placeholder: '显示文字（可留空）' })
             .height(36).fontSize(12).fontColor('#FFFFFFFF')
@@ -767,14 +790,13 @@ struct InputLayoutEditor {
       }
       Stack() {
         Column().width('100%').height('100%').backgroundColor('#FF1A1A2E')
-        ForEach([this.previewRevision], (_revision: number): void => {
+        Stack() {
           VirtualInputOverlay({
             profile: this.profile,
             renderRevision: this.previewRevision,
             interactive: false,
             hideToolbar: true,
             editMode: true,
-            editForm: this.editForm,
             selectedElementId: this.selectedElementId,
             onElementMove: (id: string, x: number, y: number): void => this.moveElement(id, x, y),
             onElementScale: (id: string, scale: number): void => this.scaleElement(id, scale),
@@ -784,16 +806,23 @@ struct InputLayoutEditor {
             }
           })
             .width('100%').height('100%')
-        }, (revision: number): string => revision.toString())
+          Text('当前画面画布')
+            .fontSize(10).fontColor('#FFFFFF66').padding({ left: 8, right: 8, top: 4, bottom: 4 })
+            .backgroundColor('#44000000').borderRadius(6)
+            .position({ x: 8, y: 6 }).id('editor-canvas-label')
+        }
+        .width(this.canvasWidth()).height(this.canvasHeight())
+        .border({ width: 1, color: '#33FFFFFF' }).borderRadius(8)
+        .position({ x: this.canvasLeft(), y: this.canvasTop() })
+        .id('editor-canvas')
         Column({ space: 6 }) {
-          this.FormSwitcher()
-          Text('正在编辑' + inputLayoutFormLabel(this.editForm) + '布局 · 点按选中 · 拖动移动 · 双指缩放')
+          Text('点按选中 · 拖动移动 · 双指缩放 · 位置与缩放实时预览')
             .fontSize(10).fontColor('#FFFFFF88').padding({ left: 8, right: 8, top: 4, bottom: 4 })
             .backgroundColor('#66000000').borderRadius(6)
             .id('editor-hint')
         }
         .position({ x: 16, y: 14 }).alignItems(HorizontalAlign.Start)
-        Column({ space: 8 }) {
+        Row({ space: 12 }) {
           this.AddElementBar()
           this.ActionBar()
         }
@@ -816,9 +845,6 @@ struct InputLayoutEditor {
       .onAreaChange((_oldValue: Area, area: Area): void => {
         this.previewW = area.width as number;
         this.previewH = area.height as number;
-        if (!this.editFormTouched) {
-          this.editForm = resolveInputLayoutForm(this.previewW);
-        }
       })
     }
     .width('100%').height('100%').backgroundColor('#FF1A1A2E')

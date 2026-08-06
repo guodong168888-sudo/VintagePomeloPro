@@ -3,13 +3,9 @@ import {
   ControlElement,
   ControlElementShape,
   ControlElementType,
-  InputLayoutForm,
   InputBindingKind,
   InputProfile,
-  cloneInputProfile,
   createDefaultInputProfile,
-  elementsForForm,
-  resolveInputLayoutForm,
   resolveVirtualJoystickDirection
 } from '../model/AppModels';
 import { InputDispatcher } from '../service/InputDispatcher';
@@ -62,8 +58,6 @@ export struct VirtualInputOverlay {
   @Prop @Watch('onTouchpadModeChanged') touchpadMode: boolean = false;
   /** 编辑器模式：不注入按键，元素可拖动/缩放并支持选中框。 */
   @Prop editMode: boolean = false;
-  /** 编辑模式下强制渲染的断点形态（默认平板）。 */
-  @Prop editForm: InputLayoutForm = InputLayoutForm.TABLET;
   @Prop selectedElementId: string = '';
   onOpenLayoutEditor: () => void = (): void => {};
   onOpenKeyMappingEditor: () => void = (): void => {};
@@ -89,12 +83,18 @@ export struct VirtualInputOverlay {
   @State private toolbarY: number = 8;
   @State private controlsVisibleVisual: boolean = true;
   @State private touchpadModeVisual: boolean = false;
-  @State private renderedProfile: InputProfile = createDefaultInputProfile();
   private activeElementTouches: Map<string, number> = new Map<string, number>();
   private touchOrigins: Map<string, OverlayPoint> = new Map<string, OverlayPoint>();
   private trackpadStates: Map<string, TrackpadState> = new Map<string, TrackpadState>();
-  private dragStart: OverlayPoint | null = null;
-  private dragStartScale: number = 1;
+  private editDragElementId: string = '';
+  private editDragTouchId: number = -1;
+  private editDragStartX: number = 0;
+  private editDragStartY: number = 0;
+  private editDragOriginX: number = 0;
+  private editDragOriginY: number = 0;
+  private editPinchElementId: string = '';
+  private editPinchStartDistance: number = 0;
+  private editPinchStartScale: number = 1;
   private lastActionTouchAt: number = 0;
   private toolbarTouchId: number = -1;
   private toolbarTouchAction: ToolbarAction | null = null;
@@ -140,7 +140,7 @@ export struct VirtualInputOverlay {
   }
 
   private elementOpacity(element: ControlElement): number {
-    const elementOpacity = (element.opacity ?? -1) >= 0 ? (element.opacity ?? 70) : this.renderedProfile.overlayOpacity;
+    const elementOpacity = (element.opacity ?? -1) >= 0 ? (element.opacity ?? 70) : this.profile.overlayOpacity;
     const base = Math.max(10, Math.min(100, elementOpacity));
     const global = Math.max(10, Math.min(100, this.opacityValue));
     return Math.max(0.16, Math.min(1, base / 100 * global / 100));
@@ -172,8 +172,7 @@ export struct VirtualInputOverlay {
   }
 
   private elementAt(x: number, y: number): ControlElement | null {
-    const form = this.editMode ? this.editForm : resolveInputLayoutForm(this.overlayW);
-    const elements = elementsForForm(this.renderedProfile, form);
+    const elements = this.profile.elements ?? [];
     for (let index = elements.length - 1; index >= 0; index--) {
       const element = elements[index];
       if (element.visible && this.elementContains(element, x, y)) return element;
@@ -182,8 +181,7 @@ export struct VirtualInputOverlay {
   }
 
   private elementById(id: string): ControlElement | null {
-    const form = this.editMode ? this.editForm : resolveInputLayoutForm(this.overlayW);
-    const elements = elementsForForm(this.renderedProfile, form);
+    const elements = this.profile.elements ?? [];
     for (let index = 0; index < elements.length; index++) {
       if (elements[index].id === id) return elements[index];
     }
@@ -198,8 +196,7 @@ export struct VirtualInputOverlay {
   }
 
   private visibleElements(): ControlElement[] {
-    const form = this.editMode ? this.editForm : resolveInputLayoutForm(this.overlayW);
-    return elementsForForm(this.renderedProfile, form).filter((element: ControlElement): boolean =>
+    return (this.profile.elements ?? []).filter((element: ControlElement): boolean =>
       element.visible || this.editMode);
   }
 
@@ -469,7 +466,7 @@ export struct VirtualInputOverlay {
         state.moved = true;
       }
       if (state.moved) {
-        const speed = Math.max(0.1, Math.min(5, this.renderedProfile.cursorSpeed));
+        const speed = Math.max(0.1, Math.min(5, this.profile.cursorSpeed));
         InputDispatcher.getInstance().pointerDelta(
           'trackpad-' + id + '-' + touch.id.toString(), vp2px(dx) * speed, vp2px(dy) * speed);
       }
@@ -523,7 +520,7 @@ export struct VirtualInputOverlay {
     if (!this.hideToolbar && this.handleToolbarOverlayTouch(event)) return;
     if (this.editMode) {
       event.stopPropagation();
-      if (event.type === TouchType.Down) this.onElementSelected('');
+      this.handleEditorTouch(event);
       return;
     }
     if (!this.interactive || !this.controlsVisible) {
@@ -550,6 +547,75 @@ export struct VirtualInputOverlay {
     }
     if (claimed) event.stopPropagation();
     else this.onUnhandledTouch(event);
+  }
+
+  /** 编辑器交互：点按选中、单指拖动、双指缩放，全部由根触摸统一处理。 */
+  private handleEditorTouch(event: TouchEvent): void {
+    const touches = event.touches;
+    if (event.type === TouchType.Down) {
+      if (this.editDragTouchId >= 0) return;
+      const touch = event.changedTouches[0];
+      if (!touch) return;
+      const x = Number(touch.x);
+      const y = Number(touch.y);
+      const target = this.elementAt(x, y);
+      if (target) {
+        this.editDragElementId = target.id;
+        this.editDragTouchId = touch.id;
+        this.editDragStartX = x;
+        this.editDragStartY = y;
+        this.editDragOriginX = target.x;
+        this.editDragOriginY = target.y;
+        this.onElementSelected(target.id);
+      } else {
+        this.editDragElementId = '';
+        this.onElementSelected('');
+      }
+      return;
+    }
+    if (event.type === TouchType.Move) {
+      if (touches.length >= 2) {
+        const a = touches[0];
+        const b = touches[1];
+        const dx = Number(b.x) - Number(a.x);
+        const dy = Number(b.y) - Number(a.y);
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        if (this.editPinchElementId.length === 0) {
+          const mid = this.elementAt((Number(a.x) + Number(b.x)) / 2, (Number(a.y) + Number(b.y)) / 2);
+          if (mid) {
+            this.editPinchElementId = mid.id;
+            this.editPinchStartDistance = Math.max(1, distance);
+            this.editPinchStartScale = mid.scale;
+            this.onElementSelected(mid.id);
+          }
+        } else if (this.editPinchStartDistance > 0) {
+          this.onElementScale(this.editPinchElementId,
+            Math.max(0.5, Math.min(2, this.editPinchStartScale * distance / this.editPinchStartDistance)));
+        }
+        return;
+      }
+      const touch = event.changedTouches[0];
+      if (!touch) return;
+      if (this.editDragTouchId === touch.id && this.editDragElementId.length > 0) {
+        const x = Number(touch.x);
+        const y = Number(touch.y);
+        const nx = Math.max(0, Math.min(1, this.editDragOriginX + (x - this.editDragStartX) / this.overlayW));
+        const ny = Math.max(0, Math.min(1, this.editDragOriginY + (y - this.editDragStartY) / this.overlayH));
+        this.onElementMove(this.editDragElementId, nx, ny);
+      }
+      return;
+    }
+    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+      const touch = event.changedTouches[0];
+      if (touch && this.editDragTouchId === touch.id) {
+        this.editDragElementId = '';
+        this.editDragTouchId = -1;
+      }
+      if (touches.length < 2) {
+        this.editPinchElementId = '';
+        this.editPinchStartDistance = 0;
+      }
+    }
   }
 
   private handleOverlayMouse(event: MouseEvent): void {
@@ -613,32 +679,9 @@ export struct VirtualInputOverlay {
     .backgroundColor(this.isElementPressed(element.id) ? FILL_PRESSED : FILL_IDLE)
     .border({ width: 2, color: this.isElementPressed(element.id) ? STROKE_COLOR : '#55FFFFFF' })
     .opacity(this.elementOpacity(element))
-    .hitTestBehavior(this.editMode ? HitTestMode.Block : HitTestMode.None)
+    .hitTestBehavior(HitTestMode.None)
     .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
     .id('virtual-element-' + element.id)
-    .gesture(PanGesture({ fingers: 1 })
-      .onActionStart((event: GestureEvent): void => {
-        this.dragStart = { x: element.x, y: element.y };
-        this.onElementSelected(element.id);
-      })
-      .onActionUpdate((event: GestureEvent): void => {
-        const start = this.dragStart;
-        if (!start || this.overlayW <= 0 || this.overlayH <= 0) return;
-        this.onElementMove(element.id,
-          Math.max(0, Math.min(1, start.x + Number(event.offsetX) / this.overlayW)),
-          Math.max(0, Math.min(1, start.y + Number(event.offsetY) / this.overlayH)));
-      }))
-    .gesture(PinchGesture({ fingers: 2 })
-      .onActionStart((): void => { this.dragStartScale = element.scale; })
-      .onActionUpdate((event: GestureEvent): void => {
-        this.onElementScale(element.id,
-          Math.max(0.5, Math.min(2, this.dragStartScale * Number(event.scale))));
-      }))
-    .onClick((event: ClickEvent): void => {
-      if (this.editMode) {
-        this.onElementSelected(element.id);
-      }
-    })
   }
 
   @Builder
@@ -686,32 +729,9 @@ export struct VirtualInputOverlay {
     .backgroundColor('#33404040')
     .border({ width: 2, color: STROKE_COLOR })
     .opacity(this.elementOpacity(element))
-    .hitTestBehavior(this.editMode ? HitTestMode.Block : HitTestMode.None)
+    .hitTestBehavior(HitTestMode.None)
     .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
     .id('virtual-element-' + element.id)
-    .gesture(PanGesture({ fingers: 1 })
-      .onActionStart((event: GestureEvent): void => {
-        this.dragStart = { x: element.x, y: element.y };
-        this.onElementSelected(element.id);
-      })
-      .onActionUpdate((event: GestureEvent): void => {
-        const start = this.dragStart;
-        if (!start || this.overlayW <= 0 || this.overlayH <= 0) return;
-        this.onElementMove(element.id,
-          Math.max(0, Math.min(1, start.x + Number(event.offsetX) / this.overlayW)),
-          Math.max(0, Math.min(1, start.y + Number(event.offsetY) / this.overlayH)));
-      }))
-    .gesture(PinchGesture({ fingers: 2 })
-      .onActionStart((): void => { this.dragStartScale = element.scale; })
-      .onActionUpdate((event: GestureEvent): void => {
-        this.onElementScale(element.id,
-          Math.max(0.5, Math.min(2, this.dragStartScale * Number(event.scale))));
-      }))
-    .onClick((event: ClickEvent): void => {
-      if (this.editMode) {
-        this.onElementSelected(element.id);
-      }
-    })
   }
 
   @Builder
@@ -728,32 +748,9 @@ export struct VirtualInputOverlay {
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))
     .opacity(this.elementOpacity(element))
-    .hitTestBehavior(this.editMode ? HitTestMode.Block : HitTestMode.None)
+    .hitTestBehavior(HitTestMode.None)
     .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
     .id('virtual-element-' + element.id)
-    .gesture(PanGesture({ fingers: 1 })
-      .onActionStart((event: GestureEvent): void => {
-        this.dragStart = { x: element.x, y: element.y };
-        this.onElementSelected(element.id);
-      })
-      .onActionUpdate((event: GestureEvent): void => {
-        const start = this.dragStart;
-        if (!start || this.overlayW <= 0 || this.overlayH <= 0) return;
-        this.onElementMove(element.id,
-          Math.max(0, Math.min(1, start.x + Number(event.offsetX) / this.overlayW)),
-          Math.max(0, Math.min(1, start.y + Number(event.offsetY) / this.overlayH)));
-      }))
-    .gesture(PinchGesture({ fingers: 2 })
-      .onActionStart((): void => { this.dragStartScale = element.scale; })
-      .onActionUpdate((event: GestureEvent): void => {
-        this.onElementScale(element.id,
-          Math.max(0.5, Math.min(2, this.dragStartScale * Number(event.scale))));
-      }))
-    .onClick((event: ClickEvent): void => {
-      if (this.editMode) {
-        this.onElementSelected(element.id);
-      }
-    })
   }
 
   @Builder
@@ -770,32 +767,9 @@ export struct VirtualInputOverlay {
     .backgroundColor('#33404040')
     .border({ width: 2, color: STROKE_COLOR })
     .opacity(this.elementOpacity(element))
-    .hitTestBehavior(this.editMode ? HitTestMode.Block : HitTestMode.None)
+    .hitTestBehavior(HitTestMode.None)
     .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
     .id('virtual-element-' + element.id)
-    .gesture(PanGesture({ fingers: 1 })
-      .onActionStart((event: GestureEvent): void => {
-        this.dragStart = { x: element.x, y: element.y };
-        this.onElementSelected(element.id);
-      })
-      .onActionUpdate((event: GestureEvent): void => {
-        const start = this.dragStart;
-        if (!start || this.overlayW <= 0 || this.overlayH <= 0) return;
-        this.onElementMove(element.id,
-          Math.max(0, Math.min(1, start.x + Number(event.offsetX) / this.overlayW)),
-          Math.max(0, Math.min(1, start.y + Number(event.offsetY) / this.overlayH)));
-      }))
-    .gesture(PinchGesture({ fingers: 2 })
-      .onActionStart((): void => { this.dragStartScale = element.scale; })
-      .onActionUpdate((event: GestureEvent): void => {
-        this.onElementScale(element.id,
-          Math.max(0.5, Math.min(2, this.dragStartScale * Number(event.scale))));
-      }))
-    .onClick((event: ClickEvent): void => {
-      if (this.editMode) {
-        this.onElementSelected(element.id);
-      }
-    })
   }
 
   @Builder
@@ -821,32 +795,9 @@ export struct VirtualInputOverlay {
     .border({ width: 2, color: STROKE_COLOR })
     .clip(true)
     .opacity(this.elementOpacity(element))
-    .hitTestBehavior(this.editMode ? HitTestMode.Block : HitTestMode.None)
+    .hitTestBehavior(HitTestMode.None)
     .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
     .id('virtual-element-' + element.id)
-    .gesture(PanGesture({ fingers: 1 })
-      .onActionStart((event: GestureEvent): void => {
-        this.dragStart = { x: element.x, y: element.y };
-        this.onElementSelected(element.id);
-      })
-      .onActionUpdate((event: GestureEvent): void => {
-        const start = this.dragStart;
-        if (!start || this.overlayW <= 0 || this.overlayH <= 0) return;
-        this.onElementMove(element.id,
-          Math.max(0, Math.min(1, start.x + Number(event.offsetX) / this.overlayW)),
-          Math.max(0, Math.min(1, start.y + Number(event.offsetY) / this.overlayH)));
-      }))
-    .gesture(PinchGesture({ fingers: 2 })
-      .onActionStart((): void => { this.dragStartScale = element.scale; })
-      .onActionUpdate((event: GestureEvent): void => {
-        this.onElementScale(element.id,
-          Math.max(0.5, Math.min(2, this.dragStartScale * Number(event.scale))));
-      }))
-    .onClick((event: ClickEvent): void => {
-      if (this.editMode) {
-        this.onElementSelected(element.id);
-      }
-    })
   }
 
   @Builder
@@ -920,11 +871,9 @@ export struct VirtualInputOverlay {
 
   private onProfileChanged(): void {
     this.releaseAllElementTouches();
-    this.renderedProfile = cloneInputProfile(this.profile);
   }
 
   private onRenderRevisionChanged(): void {
-    this.renderedProfile = cloneInputProfile(this.profile);
   }
 
   private onControlsVisibleChanged(): void {
@@ -934,7 +883,6 @@ export struct VirtualInputOverlay {
   }
 
   aboutToAppear(): void {
-    this.renderedProfile = cloneInputProfile(this.profile);
     this.controlsVisibleVisual = this.controlsVisible;
     this.touchpadModeVisual = this.touchpadMode;
     this.applyConfiguredToolbarPosition();
@@ -1319,7 +1267,9 @@ export struct VirtualInputOverlay {
       if (this.overlayW > 0 && this.overlayH > 0 && (this.controlsVisibleVisual || this.editMode)) {
         ForEach(this.visibleElements(), (element: ControlElement): void => {
           this.ElementView(element)
-        }, (element: ControlElement): string => element.id)
+        }, (element: ControlElement): string =>
+          element.id + '|' + (element.x ?? 0).toFixed(3) + '|' + (element.y ?? 0).toFixed(3) +
+          '|' + (element.scale ?? 1).toFixed(2))
       }
       if (!this.hideToolbar) this.Toolbar()
     }

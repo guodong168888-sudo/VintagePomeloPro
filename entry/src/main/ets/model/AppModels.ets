@@ -419,48 +419,12 @@ export interface InputProfile {
   /** 方案级覆盖层透明度（0-100）。 */
   overlayOpacity: number;
   gamepadMappings: GamepadButtonMapping[];
-  /** 手机（<720vp）元素集，竖屏友好排布。 */
-  elementsPhone: ControlElement[];
-  /** 平板（720-1280vp）元素集，横屏友好排布。 */
-  elementsTablet: ControlElement[];
-  /** PC/大屏（>=1280vp）元素集，配合实体键鼠的精简覆盖。 */
-  elementsDesktop: ControlElement[];
-  /** 旧 v6 单元素集兼容字段：加载时复制到三套，不参与新逻辑。 */
-  elements?: ControlElement[];
-}
-
-/**
- * 输入方案按断点布局分成三种形态，与 BreakpointSystem 对齐：
- * xs/sm（<720vp）→ 手机，md/lg（720-1280vp）→ 平板，xl（>=1280vp）→ PC。
- */
-export enum InputLayoutForm {
-  PHONE = 'phone',
-  TABLET = 'tablet',
-  DESKTOP = 'desktop'
-}
-
-export const INPUT_LAYOUT_FORMS: InputLayoutForm[] = [
-  InputLayoutForm.PHONE,
-  InputLayoutForm.TABLET,
-  InputLayoutForm.DESKTOP
-];
-
-export function inputLayoutFormLabel(form: InputLayoutForm): string {
-  if (form === InputLayoutForm.PHONE) return '手机';
-  if (form === InputLayoutForm.DESKTOP) return 'PC';
-  return '平板';
-}
-
-export function resolveInputLayoutForm(widthVp: number): InputLayoutForm {
-  if (widthVp >= 1280) return InputLayoutForm.DESKTOP;
-  if (widthVp >= 720) return InputLayoutForm.TABLET;
-  return InputLayoutForm.PHONE;
-}
-
-export function elementsForForm(profile: InputProfile, form: InputLayoutForm): ControlElement[] {
-  if (form === InputLayoutForm.PHONE) return profile.elementsPhone ?? [];
-  if (form === InputLayoutForm.DESKTOP) return profile.elementsDesktop ?? [];
-  return profile.elementsTablet ?? [];
+  /** 当前设备画面使用的元素集（归一化坐标，自动适配任意屏幕比例）。 */
+  elements: ControlElement[];
+  /** 废弃兼容字段：曾按断点分三套，加载时回退读取平板套。 */
+  elementsTablet?: ControlElement[];
+  elementsPhone?: ControlElement[];
+  elementsDesktop?: ControlElement[];
 }
 
 /** VintagePomelo-compatible 4/8-way virtual joystick quantization. */
@@ -592,7 +556,8 @@ export function cloneGamepadMappings(mappings?: GamepadButtonMapping[]): Gamepad
 export function cloneInputProfile(profile?: InputProfile, profileId?: string, profileName?: string): InputProfile {
   const fallback = createDefaultInputProfile();
   const value = profile ?? fallback;
-  const legacy = value.elements ?? [];
+  const legacyThree = (value.elementsTablet ?? []).length > 0 ? value.elementsTablet : undefined;
+  const source = (value.elements ?? legacyThree ?? []).map(cloneControlElement);
   return {
     id: profileId ?? value.id,
     name: profileName ?? value.name,
@@ -600,9 +565,7 @@ export function cloneInputProfile(profile?: InputProfile, profileId?: string, pr
     cursorSpeed: value.cursorSpeed ?? fallback.cursorSpeed,
     overlayOpacity: value.overlayOpacity ?? fallback.overlayOpacity,
     gamepadMappings: cloneGamepadMappings(value.gamepadMappings),
-    elementsPhone: (value.elementsPhone ?? legacy).map(cloneControlElement),
-    elementsTablet: (value.elementsTablet ?? legacy).map(cloneControlElement),
-    elementsDesktop: (value.elementsDesktop ?? legacy).map(cloneControlElement)
+    elements: source
   };
 }
 
@@ -625,30 +588,7 @@ function arrowBindings(): InputBinding[] {
   return [keyBinding(103), keyBinding(106), keyBinding(108), keyBinding(105)];
 }
 
-function defaultTemplateElements(form: InputLayoutForm): ControlElement[] {
-  if (form === InputLayoutForm.PHONE) {
-    return [
-      createControlElement(ControlElementType.D_PAD, 0.16, 0.80, '', dpadWASD(), undefined, 0.9),
-      createControlElement(ControlElementType.TRACKPAD, 0.62, 0.46, '鼠标', [], undefined, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.80, 0.72, '左键', [mouseBinding(MOUSE_LEFT_BUTTON)], undefined, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.90, 0.60, '右键', [mouseBinding(MOUSE_RIGHT_BUTTON)], undefined, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.86, 0.84, '空格', [keyBinding(57)], undefined, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.92, 0.70, 'E', [keyBinding(18)], undefined, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.06, 0.06, 'Esc', [keyBinding(1)], ControlElementShape.ROUND_RECT, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.08, 0.90, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.22, 0.90, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT, 0.9)
-    ];
-  }
-  if (form === InputLayoutForm.DESKTOP) {
-    return [
-      createControlElement(ControlElementType.TRACKPAD, 0.68, 0.40, '鼠标', []),
-      createControlElement(ControlElementType.BUTTON, 0.84, 0.74, '左键', [mouseBinding(MOUSE_LEFT_BUTTON)]),
-      createControlElement(ControlElementType.BUTTON, 0.92, 0.62, '右键', [mouseBinding(MOUSE_RIGHT_BUTTON)]),
-      createControlElement(ControlElementType.BUTTON, 0.05, 0.06, 'Esc', [keyBinding(1)], ControlElementShape.ROUND_RECT),
-      createControlElement(ControlElementType.BUTTON, 0.05, 0.13, 'Enter', [keyBinding(28)], ControlElementShape.ROUND_RECT),
-      createControlElement(ControlElementType.BUTTON, 0.13, 0.06, 'Tab', [keyBinding(15)], ControlElementShape.ROUND_RECT)
-    ];
-  }
+function defaultTemplateElements(): ControlElement[] {
   return [
     createControlElement(ControlElementType.D_PAD, 0.13, 0.74, '', dpadWASD()),
     createControlElement(ControlElementType.TRACKPAD, 0.68, 0.42, '鼠标', []),
@@ -662,31 +602,7 @@ function defaultTemplateElements(form: InputLayoutForm): ControlElement[] {
   ];
 }
 
-function shooterTemplateElements(form: InputLayoutForm): ControlElement[] {
-  if (form === InputLayoutForm.PHONE) {
-    return [
-      createControlElement(ControlElementType.D_PAD, 0.15, 0.80, '', dpadWASD(), undefined, 0.9),
-      createControlElement(ControlElementType.TRACKPAD, 0.62, 0.46, '视角', [], undefined, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.80, 0.72, '开火', [mouseBinding(MOUSE_LEFT_BUTTON)], undefined, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.90, 0.60, '瞄准', [mouseBinding(MOUSE_RIGHT_BUTTON)], undefined, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.90, 0.86, 'R', [keyBinding(19)], undefined, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.74, 0.86, '跳', [keyBinding(57)], undefined, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.08, 0.90, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.22, 0.90, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.06, 0.06, 'Esc', [keyBinding(1)], ControlElementShape.ROUND_RECT, 0.9),
-      createControlElement(ControlElementType.RANGE_BUTTON, 0.94, 0.46, '武器', [], ControlElementShape.ROUND_RECT, 0.8, false, [2, 3, 4, 5, 6])
-    ];
-  }
-  if (form === InputLayoutForm.DESKTOP) {
-    return [
-      createControlElement(ControlElementType.TRACKPAD, 0.68, 0.40, '视角', []),
-      createControlElement(ControlElementType.BUTTON, 0.84, 0.74, '开火', [mouseBinding(MOUSE_LEFT_BUTTON)]),
-      createControlElement(ControlElementType.BUTTON, 0.92, 0.62, '瞄准', [mouseBinding(MOUSE_RIGHT_BUTTON)]),
-      createControlElement(ControlElementType.BUTTON, 0.92, 0.86, 'R', [keyBinding(19)]),
-      createControlElement(ControlElementType.BUTTON, 0.76, 0.86, '跳', [keyBinding(57)]),
-      createControlElement(ControlElementType.BUTTON, 0.05, 0.06, 'Esc', [keyBinding(1)], ControlElementShape.ROUND_RECT)
-    ];
-  }
+function shooterTemplateElements(): ControlElement[] {
   return [
     createControlElement(ControlElementType.D_PAD, 0.12, 0.72, '', dpadWASD()),
     createControlElement(ControlElementType.TRACKPAD, 0.68, 0.38, '视角', []),
@@ -701,36 +617,7 @@ function shooterTemplateElements(form: InputLayoutForm): ControlElement[] {
   ];
 }
 
-function actionTemplateElements(form: InputLayoutForm): ControlElement[] {
-  if (form === InputLayoutForm.PHONE) {
-    return [
-      createControlElement(ControlElementType.STICK, 0.15, 0.80, '', dpadWASD(), undefined, 0.9),
-      createControlElement(ControlElementType.STICK, 0.72, 0.80, '', arrowBindings(), ControlElementShape.CIRCLE, 0.8),
-      createControlElement(ControlElementType.BUTTON, 0.82, 0.72, 'A', [keyBinding(57)], undefined, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.90, 0.62, 'B', [keyBinding(36)], undefined, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.82, 0.86, 'X', [keyBinding(18)], undefined, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.90, 0.86, 'Y', [keyBinding(37)], undefined, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.06, 0.70, 'L', [keyBinding(16)], undefined, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.16, 0.70, 'R', [keyBinding(17)], undefined, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.06, 0.06, 'Start', [keyBinding(28)], ControlElementShape.ROUND_RECT, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.08, 0.90, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT, 0.9),
-      createControlElement(ControlElementType.BUTTON, 0.22, 0.90, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT, 0.9)
-    ];
-  }
-  if (form === InputLayoutForm.DESKTOP) {
-    return [
-      createControlElement(ControlElementType.TRACKPAD, 0.62, 0.42, '鼠标', []),
-      createControlElement(ControlElementType.BUTTON, 0.80, 0.74, 'A', [keyBinding(57)]),
-      createControlElement(ControlElementType.BUTTON, 0.88, 0.62, 'B', [keyBinding(36)]),
-      createControlElement(ControlElementType.BUTTON, 0.80, 0.86, 'X', [keyBinding(18)]),
-      createControlElement(ControlElementType.BUTTON, 0.88, 0.86, 'Y', [keyBinding(37)]),
-      createControlElement(ControlElementType.BUTTON, 0.06, 0.70, 'L', [keyBinding(16)]),
-      createControlElement(ControlElementType.BUTTON, 0.16, 0.70, 'R', [keyBinding(17)]),
-      createControlElement(ControlElementType.BUTTON, 0.05, 0.06, 'Start', [keyBinding(28)], ControlElementShape.ROUND_RECT),
-      createControlElement(ControlElementType.BUTTON, 0.08, 0.90, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT),
-      createControlElement(ControlElementType.BUTTON, 0.22, 0.90, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT)
-    ];
-  }
+function actionTemplateElements(): ControlElement[] {
   return [
     createControlElement(ControlElementType.STICK, 0.13, 0.74, '', dpadWASD()),
     createControlElement(ControlElementType.STICK, 0.76, 0.78, '', arrowBindings(), ControlElementShape.CIRCLE, 0.9),
@@ -746,10 +633,10 @@ function actionTemplateElements(form: InputLayoutForm): ControlElement[] {
   ];
 }
 
-function templateElements(templateId: string, form: InputLayoutForm): ControlElement[] {
-  if (templateId === 'shooter') return shooterTemplateElements(form);
-  if (templateId === 'action') return actionTemplateElements(form);
-  return defaultTemplateElements(form);
+function templateElements(templateId: string): ControlElement[] {
+  if (templateId === 'shooter') return shooterTemplateElements();
+  if (templateId === 'action') return actionTemplateElements();
+  return defaultTemplateElements();
 }
 
 export function createInputProfileFromTemplate(id: string, name: string, templateId: string): InputProfile {
@@ -760,9 +647,7 @@ export function createInputProfileFromTemplate(id: string, name: string, templat
     cursorSpeed: 1,
     overlayOpacity: 70,
     gamepadMappings: cloneGamepadMappings(DEFAULT_GAMEPAD_MAPPINGS),
-    elementsPhone: templateElements(templateId, InputLayoutForm.PHONE),
-    elementsTablet: templateElements(templateId, InputLayoutForm.TABLET),
-    elementsDesktop: templateElements(templateId, InputLayoutForm.DESKTOP)
+    elements: templateElements(templateId)
   };
 }
 
@@ -985,9 +870,7 @@ export function importProfileFromIcpJson(json: string, profileId: string, name?:
     cursorSpeed: clampNumber(raw.cursorSpeed, 0.1, 5, 1),
     overlayOpacity: 70,
     gamepadMappings: cloneGamepadMappings(DEFAULT_GAMEPAD_MAPPINGS),
-    elementsPhone: elements.map(cloneControlElement),
-    elementsTablet: elements.map(cloneControlElement),
-    elementsDesktop: elements.map(cloneControlElement)
+    elements: elements.map(cloneControlElement)
   };
 }
 
@@ -1020,8 +903,8 @@ function exportBindingNames(element: ControlElement): string[] {
  * 导出为 Winlator 兼容的 .icp JSON（标准字段子集；本项目扩展字段如
  * 元素级透明度、可见性不导出）。
  */
-export function exportProfileToIcpJson(profile: InputProfile, form: InputLayoutForm = InputLayoutForm.TABLET): string {
-  const elements = elementsForForm(profile, form).map((element: ControlElement): IcpElementRaw => ({
+export function exportProfileToIcpJson(profile: InputProfile): string {
+  const elements = (profile.elements ?? []).map((element: ControlElement): IcpElementRaw => ({
     type: element.type,
     shape: element.shape,
     bindings: exportBindingNames(element),

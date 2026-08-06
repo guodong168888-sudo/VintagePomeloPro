@@ -13,7 +13,6 @@ import {
   DisplayMode,
   EngineState,
   GlobalSettings,
-  InputLayoutForm,
   InputProfile,
   INPUT_TEMPLATES,
   InputTemplate,
@@ -24,8 +23,7 @@ import {
   box64PresetDescription,
   box64PresetLabel,
   cloneVirtualMouseConfig,
-  createDefaultGlobalSettings,
-  inputLayoutFormLabel
+  createDefaultGlobalSettings
 } from '../model/AppModels';
 import { ThemeSettingsService } from '../service/ThemeSettingsService';
 import { EngineStateListener, WineEngineService } from '../service/WineEngineService';
@@ -771,8 +769,7 @@ struct SystemSettingsPage {
       const profile = await service.importProfileFromIcp(content);
       this.inputProfiles = service.getDesktopProfiles();
       this.selectDesktopProfile(profile.id);
-      const total = profile.elementsPhone.length + profile.elementsTablet.length +
-        profile.elementsDesktop.length;
+      const total = profile.elements.length;
       promptAction.showToast({ message: '已导入 ' + profile.name + '（' +
         total.toString() + ' 个控件）' });
     } catch (_) {
@@ -780,19 +777,11 @@ struct SystemSettingsPage {
     }
   }
 
-  private currentInputLayoutForm(): InputLayoutForm {
-    const breakpoint = BreakpointSystem.getCurrent();
-    if (breakpoint === 'xl') return InputLayoutForm.DESKTOP;
-    if (breakpoint === 'md' || breakpoint === 'lg') return InputLayoutForm.TABLET;
-    return InputLayoutForm.PHONE;
-  }
-
   private async exportCurrentInputProfile(): Promise<void> {
     try {
       const service = InputProfileService.getInstance();
-      const form = this.currentInputLayoutForm();
-      const path = await service.exportProfileToFile(this.settings.desktopInputProfileId || 'default', form);
-      promptAction.showToast({ message: '已导出' + inputLayoutFormLabel(form) + '布局：' + path });
+      const path = await service.exportProfileToFile(this.settings.desktopInputProfileId || 'default');
+      promptAction.showToast({ message: '已导出：' + path });
     } catch (_) {
       promptAction.showToast({ message: '导出失败：请检查 Download 目录是否可写' });
     }

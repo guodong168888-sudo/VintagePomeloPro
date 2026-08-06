@@ -5,7 +5,6 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import preferences from '@ohos.data.preferences';
 import {
   INPUT_PROFILE_SCHEMA_VERSION,
-  InputLayoutForm,
   InputProfile,
   cloneInputProfile,
   createDefaultInputProfile,
@@ -150,9 +149,9 @@ export class InputProfileService {
   /**
    * 导出方案为 Winlator 兼容 .icp JSON 文本。
    */
-  exportProfileToIcp(profileId: string, form: InputLayoutForm = InputLayoutForm.TABLET): string {
+  exportProfileToIcp(profileId: string): string {
     const profile = this.getProfile(profileId);
-    return exportProfileToIcpJson(profile, form);
+    return exportProfileToIcpJson(profile);
   }
 
   /**
@@ -174,8 +173,8 @@ export class InputProfileService {
   /**
    * 把方案导出到 Download/<bundle>/input_profiles/<name>.icp，返回文件路径。
    */
-  async exportProfileToFile(profileId: string, form: InputLayoutForm = InputLayoutForm.TABLET): Promise<string> {
-    const json = this.exportProfileToIcp(profileId, form);
+  async exportProfileToFile(profileId: string): Promise<string> {
+    const json = this.exportProfileToIcp(profileId);
     const directory = this.resolveInputProfileDirectory();
     if (!directory) throw new Error('无法解析 Download 输入方案目录');
     const safeName = this.sanitizeFileName(this.getProfile(profileId).name);
