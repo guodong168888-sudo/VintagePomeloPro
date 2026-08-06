@@ -126,13 +126,17 @@ export struct VirtualInputOverlay {
 
   private elementWidth(element: ControlElement): number {
     if (element.type === ControlElementType.TRACKPAD) return 150 * (element.scale ?? 1);
-    if (element.type === ControlElementType.RANGE_BUTTON) return 44 * (element.scale ?? 1);
+    if (element.type === ControlElementType.RANGE_BUTTON) {
+      return (element.orientation === 'horizontal' ? 180 : 44) * (element.scale ?? 1);
+    }
     return this.elementBaseSize(element) * (element.scale ?? 1);
   }
 
   private elementHeight(element: ControlElement): number {
     if (element.type === ControlElementType.TRACKPAD) return 100 * (element.scale ?? 1);
-    if (element.type === ControlElementType.RANGE_BUTTON) return 180 * (element.scale ?? 1);
+    if (element.type === ControlElementType.RANGE_BUTTON) {
+      return (element.orientation === 'horizontal' ? 44 : 180) * (element.scale ?? 1);
+    }
     return this.elementBaseSize(element) * (element.scale ?? 1);
   }
 
@@ -159,9 +163,15 @@ export struct VirtualInputOverlay {
   }
 
   private elementContains(element: ControlElement, x: number, y: number): boolean {
-    const width = element.type === ControlElementType.RANGE_BUTTON ?
-      Math.max(this.elementWidth(element), 68 * (element.scale ?? 1)) : this.elementWidth(element);
-    const height = this.elementHeight(element);
+    let width = this.elementWidth(element);
+    let height = this.elementHeight(element);
+    if (element.type === ControlElementType.RANGE_BUTTON) {
+      // 命中区比视觉条稍宽/高，方便手指点按。
+      const horizontal = element.orientation === 'horizontal';
+      const expand = 68 * (element.scale ?? 1);
+      width = horizontal ? width : Math.max(width, expand);
+      height = horizontal ? Math.max(height, expand) : height;
+    }
     const center = this.elementCenter(element);
     const left = center.x - width / 2;
     const top = center.y - height / 2;
@@ -218,6 +228,7 @@ export struct VirtualInputOverlay {
       '|' + (element.opacity ?? -1).toString() +
       '|' + (element.text ?? '') +
       '|' + (element.shape ?? '') +
+      '|' + (element.orientation ?? 'vertical') +
       '|' + (element.toggleSwitch ? '1' : '0') +
       '|' + (element.visible ? '1' : '0') +
       '|' + bindingParts.join(',');
@@ -344,23 +355,26 @@ export struct VirtualInputOverlay {
 
   private rangeSlotTop(element: ControlElement): number {
     const scale = element.scale ?? 1;
+    if (element.orientation === 'horizontal') return 0;
     return (element.text.length > 0 ? 20 : 0) * scale;
   }
 
   private rangeSlotHeight(element: ControlElement): number {
     const slots = element.keyList ?? [];
     if (slots.length === 0) return 0;
-    const height = this.elementHeight(element);
-    const slotArea = Math.max(1, height - this.rangeSlotTop(element));
+    const size = element.orientation === 'horizontal' ?
+      this.elementWidth(element) : this.elementHeight(element);
+    const slotArea = Math.max(1, size - this.rangeSlotTop(element));
     return slotArea / slots.length;
   }
 
-  private rangeIndexAt(element: ControlElement, y: number): number {
+  private rangeIndexAt(element: ControlElement, point: number): number {
     const slots = element.keyList ?? [];
     if (slots.length === 0) return -1;
-    const height = this.elementHeight(element);
-    const center = this.elementCenter(element);
-    const relative = y - (center.y - height / 2) - this.rangeSlotTop(element);
+    const horizontal = element.orientation === 'horizontal';
+    const size = horizontal ? this.elementWidth(element) : this.elementHeight(element);
+    const center = horizontal ? this.elementCenter(element).x : this.elementCenter(element).y;
+    const relative = point - (center - size / 2) - this.rangeSlotTop(element);
     const slot = Math.floor(relative / this.rangeSlotHeight(element));
     return Math.max(0, Math.min(slots.length - 1, slot));
   }
@@ -602,12 +616,14 @@ export struct VirtualInputOverlay {
       if (this.activeElementTouches.has(id)) return;
       this.activeElementTouches.set(id, touch.id);
       this.lastActionTouchAt = Date.now();
-      const index = this.rangeIndexAt(element, Number(touch.y));
+      const point = element.orientation === 'horizontal' ? Number(touch.x) : Number(touch.y);
+      const index = this.rangeIndexAt(element, point);
       this.setRangeSelection(id, index);
       return;
     }
     if (type === TouchType.Move && this.activeElementTouches.get(id) === touch.id) {
-      const next = this.rangeIndexAt(element, Number(touch.y));
+      const point = element.orientation === 'horizontal' ? Number(touch.x) : Number(touch.y);
+      const next = this.rangeIndexAt(element, point);
       this.setRangeSelection(id, next);
       return;
     }
@@ -886,18 +902,21 @@ export struct VirtualInputOverlay {
   @Builder
   private RangeButtonElement(element: ControlElement) {
     Stack({ alignContent: Alignment.Top }) {
-      if (element.text.length > 0) {
+      if (element.text.length > 0 && element.orientation !== 'horizontal') {
         Text(element.text).fontSize(10 * (element.scale ?? 1)).fontColor(TEXT_IDLE)
           .padding(3).width('100%').textAlign(TextAlign.Center)
       }
       ForEach(element.keyList ?? [], (code: number, index: number): void => {
         Stack({ alignContent: Alignment.Center }) {
-          Text(this.keyLabel(code)).fontSize(10 * (element.scale ?? 1))
+          Text(this.keyLabel(code)).fontSize((element.orientation === 'horizontal' ? 8 : 10) * (element.scale ?? 1))
             .fontColor(this.rangeSelection(element.id) === index ? TEXT_PRESSED : TEXT_IDLE)
         }
-        .width('100%').height(this.rangeSlotHeight(element))
+        .width(element.orientation === 'horizontal' ? this.rangeSlotHeight(element) : '100%')
+        .height(element.orientation === 'horizontal' ? '100%' : this.rangeSlotHeight(element))
         .backgroundColor(this.rangeSelection(element.id) === index ? FILL_PRESSED : '#44000000')
-        .position({ x: 0, y: this.rangeSlotTop(element) + index * this.rangeSlotHeight(element) })
+        .position(element.orientation === 'horizontal' ?
+          { x: this.rangeSlotTop(element) + index * this.rangeSlotHeight(element), y: 0 } :
+          { x: 0, y: this.rangeSlotTop(element) + index * this.rangeSlotHeight(element) })
       }, (code: number, index: number): string => element.id + '-' + code.toString() + '-' + index.toString())
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))

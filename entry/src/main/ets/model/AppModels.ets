@@ -408,6 +408,8 @@ export interface ControlElement {
   visible: boolean;
   /** RANGE_BUTTON 可选键列表（evdev 码）。 */
   keyList: number[];
+  /** RANGE_BUTTON 方向：'vertical' 纵向（默认）/ 'horizontal' 横向。 */
+  orientation: string;
 }
 
 export interface InputProfile {
@@ -506,7 +508,8 @@ export function createControlElement(
   shape?: ControlElementShape,
   scale?: number,
   toggleSwitch?: boolean,
-  keyList?: number[]): ControlElement {
+  keyList?: number[],
+  orientation?: string): ControlElement {
   const resolvedShape = shape ?? (type === ControlElementType.TRACKPAD || type === ControlElementType.RANGE_BUTTON
     ? ControlElementShape.ROUND_RECT : ControlElementShape.CIRCLE);
   return {
@@ -522,7 +525,8 @@ export function createControlElement(
     text: text,
     iconId: 0,
     visible: true,
-    keyList: (keyList ?? []).map((code: number): number => code)
+    keyList: (keyList ?? []).map((code: number): number => code),
+    orientation: orientation ?? 'vertical'
   };
 }
 
@@ -540,7 +544,8 @@ export function cloneControlElement(element: ControlElement): ControlElement {
     text: element.text ?? '',
     iconId: element.iconId ?? 0,
     visible: element.visible ?? true,
-    keyList: (element.keyList ?? []).map((code: number): number => code)
+    keyList: (element.keyList ?? []).map((code: number): number => code),
+    orientation: element.orientation ?? 'vertical'
   };
 }
 
@@ -777,6 +782,7 @@ interface IcpElementRaw {
   toggleSwitch?: boolean;
   text?: string;
   iconId?: number;
+  orientation?: string;
 }
 
 interface IcpProfileRaw {
@@ -860,7 +866,8 @@ export function importProfileFromIcpJson(json: string, profileId: string, name?:
       text: (el.text ?? '').trim().slice(0, 24),
       iconId: 0,
       visible: true,
-      keyList: keyList
+      keyList: keyList,
+      orientation: el.orientation === 'horizontal' ? 'horizontal' : 'vertical'
     });
   }
   return {
@@ -913,7 +920,8 @@ export function exportProfileToIcpJson(profile: InputProfile): string {
     y: element.y,
     toggleSwitch: element.toggleSwitch,
     text: element.text,
-    iconId: element.iconId ?? 0
+    iconId: element.iconId ?? 0,
+    orientation: element.orientation ?? 'vertical'
   }));
   const payload: IcpProfileRaw = {
     id: 0,

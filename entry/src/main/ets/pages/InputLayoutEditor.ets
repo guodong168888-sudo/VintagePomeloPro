@@ -40,6 +40,7 @@ interface ElementPatch {
   opacity?: number;
   bindings?: InputBinding[];
   keyList?: number[];
+  orientation?: string;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -303,13 +304,16 @@ struct InputLayoutEditor {
       text: patch.text ?? element.text,
       iconId: element.iconId,
       visible: element.visible,
-      keyList: patch.keyList ?? element.keyList
+      keyList: patch.keyList ?? element.keyList,
+      orientation: patch.orientation ?? element.orientation ?? 'vertical'
     };
   }
 
   private elementPixelWidth(element: ControlElement): number {
     if (element.type === ControlElementType.TRACKPAD) return 150 * (element.scale ?? 1);
-    if (element.type === ControlElementType.RANGE_BUTTON) return 44 * (element.scale ?? 1);
+    if (element.type === ControlElementType.RANGE_BUTTON) {
+      return (element.orientation === 'horizontal' ? 180 : 44) * (element.scale ?? 1);
+    }
     if (element.type === ControlElementType.D_PAD) return 132 * (element.scale ?? 1);
     if (element.type === ControlElementType.STICK) return 120 * (element.scale ?? 1);
     return 56 * (element.scale ?? 1);
@@ -317,7 +321,9 @@ struct InputLayoutEditor {
 
   private elementPixelHeight(element: ControlElement): number {
     if (element.type === ControlElementType.TRACKPAD) return 100 * (element.scale ?? 1);
-    if (element.type === ControlElementType.RANGE_BUTTON) return 180 * (element.scale ?? 1);
+    if (element.type === ControlElementType.RANGE_BUTTON) {
+      return (element.orientation === 'horizontal' ? 44 : 180) * (element.scale ?? 1);
+    }
     return this.elementPixelWidth(element);
   }
 
@@ -699,6 +705,27 @@ struct InputLayoutEditor {
         }.width('100%')
       } else if (this.selectedElement()?.type === ControlElementType.RANGE_BUTTON) {
         Column({ space: 6 }) {
+          Row({ space: 8 }) {
+            Text('方向').fontSize(11).fontColor('#FFFFFFAA')
+            Text('纵向').fontSize(11)
+              .fontColor((this.selectedElement()?.orientation ?? 'vertical') === 'vertical' ? '#FF64B5F6' : '#FFFFFF88')
+              .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+              .backgroundColor((this.selectedElement()?.orientation ?? 'vertical') === 'vertical' ? '#335C8DFF' : '#18FFFFFF')
+              .borderRadius(12).border({ width: 1, color: '#44FFFFFF' })
+              .onClick((): void => {
+                this.updateSelectedElement((element: ControlElement): ControlElement =>
+                  this.withElement(element, { orientation: 'vertical' }));
+              })
+            Text('横向').fontSize(11)
+              .fontColor(this.selectedElement()?.orientation === 'horizontal' ? '#FF64B5F6' : '#FFFFFF88')
+              .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+              .backgroundColor(this.selectedElement()?.orientation === 'horizontal' ? '#335C8DFF' : '#18FFFFFF')
+              .borderRadius(12).border({ width: 1, color: '#44FFFFFF' })
+              .onClick((): void => {
+                this.updateSelectedElement((element: ControlElement): ControlElement =>
+                  this.withElement(element, { orientation: 'horizontal' }));
+              })
+          }.width('100%')
           Text('可选键列表（滑动选键，点按发送）').fontSize(11).fontColor('#FFFFFFAA').width('100%')
           Flex({ wrap: FlexWrap.Wrap }) {
             ForEach(this.selectedElement()?.keyList ?? [], (code: number): void => {
