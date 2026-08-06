@@ -1,3 +1,4 @@
+import { bindingToEvdevName, evdevNameToBinding } from '../common/EvdevKeyNames';
 export enum AppSource {
   BUILTIN = 'builtin',
   DOWNLOAD = 'download'
@@ -340,31 +341,85 @@ export interface NativeWineSessionInfo {
   toplevelId: number;
 }
 
+export const INPUT_PROFILE_SCHEMA_VERSION = 6;
+
+/** Winlator 风格的可排布输入元素类型。 */
+export enum ControlElementType {
+  BUTTON = 'BUTTON',
+  D_PAD = 'D_PAD',
+  STICK = 'STICK',
+  TRACKPAD = 'TRACKPAD',
+  RANGE_BUTTON = 'RANGE_BUTTON'
+}
+
+export enum ControlElementShape {
+  CIRCLE = 'CIRCLE',
+  RECT = 'RECT',
+  ROUND_RECT = 'ROUND_RECT',
+  SQUARE = 'SQUARE'
+}
+
+export enum InputBindingKind {
+  NONE = 'NONE',
+  KEY = 'KEY',
+  MOUSE = 'MOUSE'
+}
+
+export interface InputBinding {
+  kind: InputBindingKind;
+  code: number;
+}
+
+export const MOUSE_LEFT_BUTTON = 272;
+export const MOUSE_RIGHT_BUTTON = 273;
+export const MOUSE_MIDDLE_BUTTON = 274;
+
+export function keyBinding(code: number): InputBinding {
+  return { kind: InputBindingKind.KEY, code: code };
+}
+
+export function mouseBinding(code: number): InputBinding {
+  return { kind: InputBindingKind.MOUSE, code: code };
+}
+
+export function cloneInputBinding(binding?: InputBinding): InputBinding {
+  const value = binding ?? { kind: InputBindingKind.NONE, code: 0 };
+  return { kind: value.kind ?? InputBindingKind.NONE, code: value.code ?? 0 };
+}
+
+/**
+ * 元素中心使用归一化坐标（0.0-1.0），与屏幕比例无关（参考 Winlator .icp）。
+ * bindings 为多键组合：BUTTON 按下时同时按下全部槽位；D_PAD/STICK 依次为
+ * 上/右/下/左；TRACKPAD 不发键；RANGE_BUTTON 使用 keyList 滑动选键。
+ */
+export interface ControlElement {
+  id: string;
+  type: ControlElementType;
+  shape: ControlElementShape;
+  x: number;
+  y: number;
+  scale: number;
+  /** -1 继承方案透明度 overlayOpacity；0-100 为元素级覆盖。 */
+  opacity: number;
+  bindings: InputBinding[];
+  toggleSwitch: boolean;
+  text: string;
+  iconId: number;
+  visible: boolean;
+  /** RANGE_BUTTON 可选键列表（evdev 码）。 */
+  keyList: number[];
+}
+
 export interface InputProfile {
   id: string;
   name: string;
   schemaVersion: number;
-  virtualKeyConfig: VirtualKeyConfig;
-  layoutLandscape: VirtualGamepadLayout;
-  layoutPortrait: VirtualGamepadLayout;
-  virtualKeyMappings: VirtualKeyMapping[];
+  /** 触摸板指针速度倍率（0.1-5.0）。 */
+  cursorSpeed: number;
+  /** 方案级覆盖层透明度（0-100）。 */
+  overlayOpacity: number;
   gamepadMappings: GamepadButtonMapping[];
-  /** VintagePomelo-compatible optional free-key overlay. */
-  freeButtonsConfig: FreeButtonsConfig;
-}
-
-// These models intentionally follow VintagePomelo's virtual gamepad contract.
-// A direction group has exactly one renderer: d-pad or joystick, never both.
-export enum DirectionControlMode {
-  DPAD = 'dpad',
-  JOYSTICK = 'joystick'
-}
-
-export interface VirtualJoystickDirection {
-  up: boolean;
-  down: boolean;
-  left: boolean;
-  right: boolean;
+  elements: ControlElement[];
 }
 
 /** VintagePomelo-compatible 4/8-way virtual joystick quantization. */
@@ -386,92 +441,16 @@ export function resolveVirtualJoystickDirection(dx: number, dy: number, radius: 
   if (angle >= 67.5 && angle < 112.5) return { up: false, down: true, left: false, right: false };
   if (angle >= 112.5 && angle < 157.5) return { up: false, down: true, left: true, right: false };
   if (angle >= 157.5 || angle < -157.5) return { up: false, down: false, left: true, right: false };
-  if (angle >= -157.5 && angle < -112.5) return { up: true, down: false, left: true, right: false };
-  if (angle >= -112.5 && angle < -67.5) return { up: true, down: false, left: false, right: false };
+  if (angle >= -157.5 && angle < -112.5) return { up: true, down: false, left: false, right: false };
+  if (angle >= -112.5 && angle < -67.5) return { up: true, down: false, left: false, right: true };
   return { up: true, down: false, left: false, right: true };
 }
 
-export enum VirtualKeyColorScheme {
-  DEFAULT = 'default',
-  WHITE = 'white'
-}
-
-export enum RightJoystickOutputMode {
-  MOUSE = 'mouse',
-  KEYS = 'keys'
-}
-
-export interface VirtualKeyConfig {
-  transparency: number;
-  joystickTransparency: number;
-  joystickSize: number;
-  buttonSize: number;
-  showButtonA: boolean;
-  showButtonB: boolean;
-  showButtonX: boolean;
-  showButtonY: boolean;
-  showButtonL: boolean;
-  showButtonR: boolean;
-  showButtonMenu: boolean;
-  showButtonStart: boolean;
-  showButtonShift: boolean;
-  showButtonCtrl: boolean;
-  joystickDeadzone: number;
-  eightDirectionJoystick: boolean;
-  showRightJoystick: boolean;
-  rightJoystickSize: number;
-  rightJoystickDeadzone: number;
-  rightJoystickSensitivity: number;
-  rightJoystickOutputMode: RightJoystickOutputMode;
-  dpadMode: DirectionControlMode;
-  colorScheme: VirtualKeyColorScheme;
-}
-
-export enum VirtualKey {
-  DPAD_UP = 'dpad_up',
-  DPAD_DOWN = 'dpad_down',
-  DPAD_LEFT = 'dpad_left',
-  DPAD_RIGHT = 'dpad_right',
-  RIGHT_STICK_UP = 'right_stick_up',
-  RIGHT_STICK_DOWN = 'right_stick_down',
-  RIGHT_STICK_LEFT = 'right_stick_left',
-  RIGHT_STICK_RIGHT = 'right_stick_right',
-  BUTTON_A = 'button_a',
-  BUTTON_B = 'button_b',
-  BUTTON_X = 'button_x',
-  BUTTON_Y = 'button_y',
-  BUTTON_L = 'button_l',
-  BUTTON_R = 'button_r',
-  BUTTON_MENU = 'button_menu',
-  BUTTON_START = 'button_start',
-  BUTTON_SHIFT = 'button_shift',
-  BUTTON_CTRL = 'button_ctrl'
-}
-
-export interface VirtualKeyMapping {
-  virtualKey: VirtualKey;
-  evdevCode: number;
-  keyLabel: string;
-}
-
-export function resolveVirtualKeyMapping(mappings: VirtualKeyMapping[], key: VirtualKey, fallback: number): number {
-  return mappings.find((mapping: VirtualKeyMapping): boolean => mapping.virtualKey === key)?.evdevCode ?? fallback;
-}
-
-export interface ButtonGroupPosition {
-  centerX: number;
-  centerY: number;
-}
-
-export interface VirtualGamepadLayout {
-  direction: ButtonGroupPosition;
-  leftTrigger: ButtonGroupPosition;
-  leftBumper: ButtonGroupPosition;
-  action: ButtonGroupPosition;
-  camera: ButtonGroupPosition;
-  rightBumper: ButtonGroupPosition;
-  rightTrigger: ButtonGroupPosition;
-  aux: ButtonGroupPosition;
+export interface VirtualJoystickDirection {
+  up: boolean;
+  down: boolean;
+  left: boolean;
+  right: boolean;
 }
 
 export interface GamepadButtonMapping {
@@ -481,351 +460,350 @@ export interface GamepadButtonMapping {
   evdevCode: number;
 }
 
-/**
- * Free buttons deliberately remain a separate mode from the grouped gamepad.
- * The fixed gamepad still moves and scales by group; free buttons use the
- * familiar VintagePomelo gamepad/radial presets and never re-introduce the
- * former per-control coordinate editor.
- */
-export enum FreeButtonLayoutMode {
-  GAMEPAD = 'gamepad',
-  RADIAL = 'radial'
+export const DEFAULT_GAMEPAD_MAPPINGS: GamepadButtonMapping[] = [
+  { id: 'dpad-up', label: '方向键 ↑', buttonCode: 2012, evdevCode: 103 },
+  { id: 'dpad-down', label: '方向键 ↓', buttonCode: 2013, evdevCode: 108 },
+  { id: 'dpad-left', label: '方向键 ←', buttonCode: 2014, evdevCode: 105 },
+  { id: 'dpad-right', label: '方向键 →', buttonCode: 2015, evdevCode: 106 },
+  { id: 'a', label: 'A / 确认', buttonCode: 2301, evdevCode: 57 },
+  { id: 'b', label: 'B / 返回', buttonCode: 2302, evdevCode: 45 },
+  { id: 'x', label: 'X', buttonCode: 2304, evdevCode: 30 },
+  { id: 'y', label: 'Y', buttonCode: 2305, evdevCode: 31 },
+  { id: 'l1', label: 'L1', buttonCode: 2307, evdevCode: 16 },
+  { id: 'r1', label: 'R1', buttonCode: 2308, evdevCode: 17 },
+  { id: 'l2', label: 'L2', buttonCode: 2309, evdevCode: 42 },
+  { id: 'r2', label: 'R2', buttonCode: 2310, evdevCode: 29 },
+  { id: 'select', label: 'Select', buttonCode: 2311, evdevCode: 1 },
+  { id: 'start', label: 'Start', buttonCode: 2312, evdevCode: 28 },
+  { id: 'l3', label: 'L3', buttonCode: 2313, evdevCode: 28 },
+  { id: 'r3', label: 'R3', buttonCode: 2314, evdevCode: 57 },
+  { id: 'home', label: 'Home', buttonCode: 2315, evdevCode: 63 }
+];
+
+export function generateControlElementId(prefix: string = 'el'): string {
+  return prefix + '-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 0x10000).toString(36);
 }
 
-export interface FreeButton {
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+/**
+ * 创建一个新元素。shape 缺省按类型选择：触摸板/滚动键为圆角矩形，
+ * 其余为圆形。
+ */
+export function createControlElement(
+  type: ControlElementType,
+  x: number,
+  y: number,
+  text: string,
+  bindings: InputBinding[],
+  shape?: ControlElementShape,
+  scale?: number,
+  toggleSwitch?: boolean,
+  keyList?: number[]): ControlElement {
+  const resolvedShape = shape ?? (type === ControlElementType.TRACKPAD || type === ControlElementType.RANGE_BUTTON
+    ? ControlElementShape.ROUND_RECT : ControlElementShape.CIRCLE);
+  return {
+    id: generateControlElementId('el'),
+    type: type,
+    shape: resolvedShape,
+    x: clamp01(x),
+    y: clamp01(y),
+    scale: Math.max(0.5, Math.min(2, scale ?? 1)),
+    opacity: -1,
+    bindings: (bindings ?? []).map(cloneInputBinding),
+    toggleSwitch: toggleSwitch ?? false,
+    text: text,
+    iconId: 0,
+    visible: true,
+    keyList: (keyList ?? []).map((code: number): number => code)
+  };
+}
+
+export function cloneControlElement(element: ControlElement): ControlElement {
+  return {
+    id: element.id,
+    type: element.type ?? ControlElementType.BUTTON,
+    shape: element.shape ?? ControlElementShape.CIRCLE,
+    x: clamp01(element.x ?? 0.5),
+    y: clamp01(element.y ?? 0.5),
+    scale: element.scale ?? 1,
+    opacity: element.opacity ?? -1,
+    bindings: (element.bindings ?? []).map(cloneInputBinding),
+    toggleSwitch: element.toggleSwitch ?? false,
+    text: element.text ?? '',
+    iconId: element.iconId ?? 0,
+    visible: element.visible ?? true,
+    keyList: (element.keyList ?? []).map((code: number): number => code)
+  };
+}
+
+export function cloneGamepadMappings(mappings?: GamepadButtonMapping[]): GamepadButtonMapping[] {
+  return (mappings ?? DEFAULT_GAMEPAD_MAPPINGS).map((mapping: GamepadButtonMapping): GamepadButtonMapping => ({
+    id: mapping.id,
+    label: mapping.label,
+    buttonCode: mapping.buttonCode,
+    evdevCode: mapping.evdevCode
+  }));
+}
+
+export function cloneInputProfile(profile?: InputProfile, profileId?: string, profileName?: string): InputProfile {
+  const fallback = createDefaultInputProfile();
+  const value = profile ?? fallback;
+  return {
+    id: profileId ?? value.id,
+    name: profileName ?? value.name,
+    schemaVersion: INPUT_PROFILE_SCHEMA_VERSION,
+    cursorSpeed: value.cursorSpeed ?? fallback.cursorSpeed,
+    overlayOpacity: value.overlayOpacity ?? fallback.overlayOpacity,
+    gamepadMappings: cloneGamepadMappings(value.gamepadMappings),
+    elements: (value.elements ?? []).map(cloneControlElement)
+  };
+}
+
+export interface InputTemplate {
   id: string;
-  evdevCode: number;
-  keyLabel: string;
+  name: string;
 }
 
-export interface FreeButtonsConfig {
-  enabled: boolean;
-  layoutMode: FreeButtonLayoutMode;
-  buttons: FreeButton[];
-  radialScale: number;
-  gamepadSpacing: number;
+export const INPUT_TEMPLATES: InputTemplate[] = [
+  { id: 'default', name: '通用' },
+  { id: 'shooter', name: '射击' },
+  { id: 'action', name: '动作' }
+];
+
+function dpadWASD(): InputBinding[] {
+  return [keyBinding(17), keyBinding(32), keyBinding(31), keyBinding(30)];
 }
 
-export interface FreeButtonPosition {
-  offsetX: number;
-  offsetY: number;
+function arrowBindings(): InputBinding[] {
+  return [keyBinding(103), keyBinding(106), keyBinding(108), keyBinding(105)];
 }
 
-export const DEFAULT_FREE_BUTTONS_CONFIG: FreeButtonsConfig = {
-  enabled: false,
-  layoutMode: FreeButtonLayoutMode.GAMEPAD,
-  buttons: [],
-  radialScale: 100,
-  gamepadSpacing: 100
-};
+function defaultTemplateElements(): ControlElement[] {
+  return [
+    createControlElement(ControlElementType.D_PAD, 0.13, 0.74, '', dpadWASD()),
+    createControlElement(ControlElementType.TRACKPAD, 0.68, 0.42, '鼠标', []),
+    createControlElement(ControlElementType.BUTTON, 0.80, 0.70, '左键', [mouseBinding(MOUSE_LEFT_BUTTON)]),
+    createControlElement(ControlElementType.BUTTON, 0.88, 0.60, '右键', [mouseBinding(MOUSE_RIGHT_BUTTON)]),
+    createControlElement(ControlElementType.BUTTON, 0.86, 0.82, '空格', [keyBinding(57)]),
+    createControlElement(ControlElementType.BUTTON, 0.93, 0.70, 'E', [keyBinding(18)]),
+    createControlElement(ControlElementType.BUTTON, 0.05, 0.07, 'Esc', [keyBinding(1)], ControlElementShape.ROUND_RECT),
+    createControlElement(ControlElementType.BUTTON, 0.08, 0.88, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT),
+    createControlElement(ControlElementType.BUTTON, 0.20, 0.88, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT)
+  ];
+}
 
-export function cloneFreeButtonsConfig(config?: FreeButtonsConfig): FreeButtonsConfig {
-  const value = config ?? DEFAULT_FREE_BUTTONS_CONFIG;
+function shooterTemplateElements(): ControlElement[] {
+  return [
+    createControlElement(ControlElementType.D_PAD, 0.12, 0.72, '', dpadWASD()),
+    createControlElement(ControlElementType.TRACKPAD, 0.68, 0.38, '视角', []),
+    createControlElement(ControlElementType.BUTTON, 0.80, 0.68, '开火', [mouseBinding(MOUSE_LEFT_BUTTON)]),
+    createControlElement(ControlElementType.BUTTON, 0.89, 0.58, '瞄准', [mouseBinding(MOUSE_RIGHT_BUTTON)]),
+    createControlElement(ControlElementType.BUTTON, 0.90, 0.84, 'R', [keyBinding(19)]),
+    createControlElement(ControlElementType.BUTTON, 0.72, 0.84, '跳', [keyBinding(57)]),
+    createControlElement(ControlElementType.BUTTON, 0.08, 0.86, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT),
+    createControlElement(ControlElementType.BUTTON, 0.20, 0.86, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT),
+    createControlElement(ControlElementType.BUTTON, 0.05, 0.07, 'Esc', [keyBinding(1)], ControlElementShape.ROUND_RECT),
+    createControlElement(ControlElementType.RANGE_BUTTON, 0.95, 0.46, '武器', [], ControlElementShape.ROUND_RECT, 0.9, false, [2, 3, 4, 5, 6])
+  ];
+}
+
+function actionTemplateElements(): ControlElement[] {
+  return [
+    createControlElement(ControlElementType.STICK, 0.13, 0.74, '', dpadWASD()),
+    createControlElement(ControlElementType.STICK, 0.76, 0.78, '', arrowBindings(), ControlElementShape.CIRCLE, 0.9),
+    createControlElement(ControlElementType.BUTTON, 0.85, 0.70, 'A', [keyBinding(57)]),
+    createControlElement(ControlElementType.BUTTON, 0.92, 0.60, 'B', [keyBinding(36)]),
+    createControlElement(ControlElementType.BUTTON, 0.85, 0.84, 'X', [keyBinding(18)]),
+    createControlElement(ControlElementType.BUTTON, 0.92, 0.84, 'Y', [keyBinding(37)]),
+    createControlElement(ControlElementType.BUTTON, 0.06, 0.64, 'L', [keyBinding(16)]),
+    createControlElement(ControlElementType.BUTTON, 0.16, 0.64, 'R', [keyBinding(17)]),
+    createControlElement(ControlElementType.BUTTON, 0.05, 0.07, 'Start', [keyBinding(28)], ControlElementShape.ROUND_RECT),
+    createControlElement(ControlElementType.BUTTON, 0.08, 0.88, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT),
+    createControlElement(ControlElementType.BUTTON, 0.20, 0.88, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT)
+  ];
+}
+
+export function createInputProfileFromTemplate(id: string, name: string, templateId: string): InputProfile {
+  let elements: ControlElement[] = defaultTemplateElements();
+  if (templateId === 'shooter') elements = shooterTemplateElements();
+  if (templateId === 'action') elements = actionTemplateElements();
   return {
-    enabled: value.enabled ?? DEFAULT_FREE_BUTTONS_CONFIG.enabled,
-    layoutMode: value.layoutMode === FreeButtonLayoutMode.RADIAL ? FreeButtonLayoutMode.RADIAL : FreeButtonLayoutMode.GAMEPAD,
-    buttons: (value.buttons ?? []).slice(0, 8).map((button: FreeButton): FreeButton => ({
-      id: button.id,
-      evdevCode: button.evdevCode,
-      keyLabel: button.keyLabel
-    })),
-    radialScale: value.radialScale ?? DEFAULT_FREE_BUTTONS_CONFIG.radialScale,
-    gamepadSpacing: value.gamepadSpacing ?? DEFAULT_FREE_BUTTONS_CONFIG.gamepadSpacing
-  };
-}
-
-export function generateFreeButtonId(): string {
-  return 'free-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 0x10000).toString(36);
-}
-
-/** Same arrangement and scaling contract used by VintagePomelo's free mode. */
-export function computeGamepadPositions(count: number, spacing: number = 100): FreeButtonPosition[] {
-  const unit = 55 * Math.max(0.8, Math.min(1.5, spacing / 100));
-  const positions: FreeButtonPosition[] = [];
-  if (count <= 0) return positions;
-  if (count === 1) return [{ offsetX: 0, offsetY: 0 }];
-  if (count === 2) return [{ offsetX: -unit * 0.5, offsetY: 0 }, { offsetX: unit * 0.5, offsetY: 0 }];
-  if (count === 3) return [{ offsetX: -unit * 0.5, offsetY: -unit * 0.35 }, { offsetX: unit * 0.5, offsetY: -unit * 0.35 }, { offsetX: 0, offsetY: unit * 0.35 }];
-  positions.push(
-    { offsetX: unit * 0.82, offsetY: 0 }, { offsetX: 0, offsetY: unit * 0.82 },
-    { offsetX: -unit * 0.82, offsetY: 0 }, { offsetX: 0, offsetY: -unit * 0.82 }
-  );
-  if (count >= 5) positions.push({ offsetX: count === 5 ? unit * 0.6 : -unit * 0.6, offsetY: -unit * 1.85 });
-  if (count >= 6) positions.push({ offsetX: unit * 0.6, offsetY: -unit * 1.85 });
-  if (count >= 7) positions.push({ offsetX: -unit * 0.6, offsetY: -unit * 2.9 });
-  if (count >= 8) positions.push({ offsetX: unit * 0.6, offsetY: -unit * 2.9 });
-  return positions;
-}
-
-export function computeRadialPositions(count: number, radius: number): FreeButtonPosition[] {
-  const positions: FreeButtonPosition[] = [];
-  const safeCount = Math.max(1, count);
-  for (let index = 0; index < count; index++) {
-    const angle = -Math.PI / 2 + (Math.PI * 2 * index / safeCount);
-    positions.push({ offsetX: Math.cos(angle) * radius, offsetY: Math.sin(angle) * radius });
-  }
-  return positions;
-}
-
-export const DEFAULT_GAMEPAD_LAYOUT: VirtualGamepadLayout = {
-  direction: { centerX: 0.13, centerY: 0.70 },
-  leftTrigger: { centerX: 0.075, centerY: 0.45 },
-  leftBumper: { centerX: 0.16, centerY: 0.45 },
-  action: { centerX: 0.88, centerY: 0.65 },
-  camera: { centerX: 0.70, centerY: 0.78 },
-  rightBumper: { centerX: 0.84, centerY: 0.45 },
-  rightTrigger: { centerX: 0.925, centerY: 0.45 },
-  aux: { centerX: 0.50, centerY: 0.62 }
-};
-
-export const DEFAULT_GAMEPAD_LAYOUT_PORTRAIT: VirtualGamepadLayout = {
-  direction: { centerX: 0.16, centerY: 0.83 },
-  leftTrigger: { centerX: 0.09, centerY: 0.66 },
-  leftBumper: { centerX: 0.23, centerY: 0.66 },
-  action: { centerX: 0.84, centerY: 0.77 },
-  camera: { centerX: 0.60, centerY: 0.87 },
-  rightBumper: { centerX: 0.77, centerY: 0.66 },
-  rightTrigger: { centerX: 0.91, centerY: 0.66 },
-  aux: { centerX: 0.50, centerY: 0.65 }
-};
-
-export const DEFAULT_VIRTUAL_KEY_CONFIG: VirtualKeyConfig = {
-  transparency: 40,
-  joystickTransparency: 50,
-  joystickSize: 100,
-  buttonSize: 100,
-  showButtonA: true,
-  showButtonB: true,
-  showButtonX: true,
-  showButtonY: true,
-  showButtonL: true,
-  showButtonR: true,
-  showButtonMenu: true,
-  showButtonStart: true,
-  showButtonShift: true,
-  showButtonCtrl: true,
-  joystickDeadzone: 15,
-  eightDirectionJoystick: true,
-  showRightJoystick: true,
-  rightJoystickSize: 100,
-  rightJoystickDeadzone: 12,
-  rightJoystickSensitivity: 100,
-  rightJoystickOutputMode: RightJoystickOutputMode.MOUSE,
-  dpadMode: DirectionControlMode.DPAD,
-  colorScheme: VirtualKeyColorScheme.DEFAULT
-};
-
-export function cloneVirtualKeyConfig(config: VirtualKeyConfig): VirtualKeyConfig {
-  return {
-    transparency: config.transparency ?? DEFAULT_VIRTUAL_KEY_CONFIG.transparency,
-    joystickTransparency: config.joystickTransparency ?? DEFAULT_VIRTUAL_KEY_CONFIG.joystickTransparency,
-    joystickSize: config.joystickSize ?? DEFAULT_VIRTUAL_KEY_CONFIG.joystickSize,
-    buttonSize: config.buttonSize ?? DEFAULT_VIRTUAL_KEY_CONFIG.buttonSize,
-    showButtonA: config.showButtonA ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonA,
-    showButtonB: config.showButtonB ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonB,
-    showButtonX: config.showButtonX ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonX,
-    showButtonY: config.showButtonY ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonY,
-    showButtonL: config.showButtonL ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonL,
-    showButtonR: config.showButtonR ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonR,
-    showButtonMenu: config.showButtonMenu ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonMenu,
-    showButtonStart: config.showButtonStart ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonStart,
-    showButtonShift: config.showButtonShift ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonShift,
-    showButtonCtrl: config.showButtonCtrl ?? DEFAULT_VIRTUAL_KEY_CONFIG.showButtonCtrl,
-    joystickDeadzone: config.joystickDeadzone ?? DEFAULT_VIRTUAL_KEY_CONFIG.joystickDeadzone,
-    eightDirectionJoystick: config.eightDirectionJoystick ?? DEFAULT_VIRTUAL_KEY_CONFIG.eightDirectionJoystick,
-    showRightJoystick: config.showRightJoystick ?? DEFAULT_VIRTUAL_KEY_CONFIG.showRightJoystick,
-    // Profiles saved before schema v4 had one joystick scale. Reuse it when
-    // introducing the right stick so upgraded layouts keep balanced controls.
-    rightJoystickSize: config.rightJoystickSize ?? config.joystickSize ?? DEFAULT_VIRTUAL_KEY_CONFIG.rightJoystickSize,
-    rightJoystickDeadzone: config.rightJoystickDeadzone ?? DEFAULT_VIRTUAL_KEY_CONFIG.rightJoystickDeadzone,
-    rightJoystickSensitivity: config.rightJoystickSensitivity ?? DEFAULT_VIRTUAL_KEY_CONFIG.rightJoystickSensitivity,
-    rightJoystickOutputMode: config.rightJoystickOutputMode ?? DEFAULT_VIRTUAL_KEY_CONFIG.rightJoystickOutputMode,
-    dpadMode: config.dpadMode ?? DEFAULT_VIRTUAL_KEY_CONFIG.dpadMode,
-    colorScheme: config.colorScheme ?? DEFAULT_VIRTUAL_KEY_CONFIG.colorScheme
-  };
-}
-
-export function cloneGamepadLayout(layout: VirtualGamepadLayout,
-  defaults: VirtualGamepadLayout = DEFAULT_GAMEPAD_LAYOUT): VirtualGamepadLayout {
-  return {
-    direction: { centerX: layout.direction?.centerX ?? defaults.direction.centerX, centerY: layout.direction?.centerY ?? defaults.direction.centerY },
-    leftTrigger: { centerX: layout.leftTrigger?.centerX ?? defaults.leftTrigger.centerX, centerY: layout.leftTrigger?.centerY ?? defaults.leftTrigger.centerY },
-    leftBumper: { centerX: layout.leftBumper?.centerX ?? defaults.leftBumper.centerX, centerY: layout.leftBumper?.centerY ?? defaults.leftBumper.centerY },
-    action: { centerX: layout.action?.centerX ?? defaults.action.centerX, centerY: layout.action?.centerY ?? defaults.action.centerY },
-    camera: { centerX: layout.camera?.centerX ?? defaults.camera.centerX, centerY: layout.camera?.centerY ?? defaults.camera.centerY },
-    rightBumper: { centerX: layout.rightBumper?.centerX ?? defaults.rightBumper.centerX, centerY: layout.rightBumper?.centerY ?? defaults.rightBumper.centerY },
-    rightTrigger: { centerX: layout.rightTrigger?.centerX ?? defaults.rightTrigger.centerX, centerY: layout.rightTrigger?.centerY ?? defaults.rightTrigger.centerY },
-    aux: { centerX: layout.aux?.centerX ?? defaults.aux.centerX, centerY: layout.aux?.centerY ?? defaults.aux.centerY }
-  };
-}
-
-export function normalizeLaunchPath(path: string): string {
-  return path.trim().replace(/\\/g, '/').replace(/\/+/g, '/').toLowerCase();
-}
-
-/**
- * Wine maps the app-owned Download library to Z:\\, so a program started
- * from Explorer is reported as Z:\\games\\... while the catalog stores the
- * same file as /storage/Users/currentUser/Download/<bundle>/games/....
- * Collapse only those two app-library forms; arbitrary C:\\Games paths must
- * remain distinct from the app-owned games directory.
- */
-export function normalizeCatalogLaunchIdentity(path: string): string {
-  const normalized = normalizeLaunchPath(path);
-  const gamesMarker = '/games/';
-  if (normalized.startsWith('z:/games/')) return normalized.substring(3);
-  if (normalized.startsWith('/storage/users/currentuser/download/')) {
-    const markerIndex = normalized.indexOf(gamesMarker);
-    if (markerIndex >= 0) return normalized.substring(markerIndex + 1);
-  }
-  return normalized;
-}
-
-/**
- * Merge ArkTS-owned sessions with the native Wine process registry.  A native
- * path is used only when it identifies one catalog card unambiguously; this
- * avoids marking both the Wine desktop and File Explorer as running merely
- * because they both launch explorer.exe.
- */
-export function resolveRunningAppIds(apps: AppDescriptor[], sessionAppIds: Set<string>,
-  nativeRunningPaths: Set<string>): Set<string> {
-  const result: Set<string> = new Set<string>();
-  sessionAppIds.forEach((appId: string): void => { result.add(appId); });
-
-  const normalizedNativePaths: Set<string> = new Set<string>();
-  nativeRunningPaths.forEach((path: string): void => {
-    const normalized = normalizeCatalogLaunchIdentity(path);
-    if (normalized.length > 0) normalizedNativePaths.add(normalized);
-  });
-
-  const catalogPathCounts: Map<string, number> = new Map<string, number>();
-  apps.forEach((app: AppDescriptor): void => {
-    const normalized = normalizeCatalogLaunchIdentity(app.launchTarget.executable);
-    if (normalized.length > 0) {
-      catalogPathCounts.set(normalized, (catalogPathCounts.get(normalized) ?? 0) + 1);
-    }
-  });
-  apps.forEach((app: AppDescriptor): void => {
-    const normalized = normalizeCatalogLaunchIdentity(app.launchTarget.executable);
-    if (normalized.length > 0 && catalogPathCounts.get(normalized) === 1 &&
-      normalizedNativePaths.has(normalized)) result.add(app.id);
-  });
-  return result;
-}
-
-export function stableAppId(source: AppSource, path: string): string {
-  const value = source + ':' + normalizeLaunchPath(path);
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index++) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return source + '-' + (hash >>> 0).toString(16).padStart(8, '0');
-}
-
-export function createDefaultGlobalSettings(): GlobalSettings {
-  return {
-    defaultDisplayMode: DisplayMode.DESKTOP,
-    desktopOrientation: ScreenOrientationSetting.SENSOR_LANDSCAPE,
-    desktopWindowMode: DesktopWindowMode.FULLSCREEN,
-    keepScreenOn: true,
-    box64Preset: BOX64_PRESET_DEFAULT,
-    desktopInputProfileId: 'default',
-    viewMode: ViewMode.GRID,
-    themeMode: ThemeMode.SYSTEM,
-    useGlassEffect: true,
-    usePageBackground: false,
-    pageBackgroundUri: '',
-    virtualInputEnabled: true,
-    // Hardware keyboard/mouse is the least surprising first-run experience.
-    // The input layer remains enabled for full-screen mouse and can be
-    // explicitly enabled from system settings when a controller is used.
-    showVirtualControls: false,
-    // 独立 ArkTS 覆盖层默认保持可见，避免实体输入后无法恢复控制层。
-    autoHideVirtualControls: false,
-    controlBarDirection: ControlBarDirection.AUTO,
-    controlBarPositionX: 1,
-    controlBarPositionY: 0,
-    virtualMouseConfig: cloneVirtualMouseConfig(DEFAULT_VIRTUAL_MOUSE_CONFIG),
-    controlOpacity: 72,
-    gamepadDeadzone: 18,
-    outputScale: 100,
-    d3dRendererPreference: D3DRendererPreference.DXVK
-  };
-}
-
-export function resolveInputProfileId(appProfileId: string, desktopProfileId: string): string {
-  const appValue = (appProfileId ?? '').trim();
-  if (appValue.length > 0 && appValue !== 'default') return appValue;
-  const desktopValue = (desktopProfileId ?? '').trim();
-  return desktopValue.length > 0 ? desktopValue : 'default';
-}
-
-export function createDefaultAppSettings(appId: string): AppSettings {
-  return {
-    appId: appId,
-    customTitle: '',
-    customCover: '',
-    favorite: false,
-    box64Preset: BOX64_PRESET_DEFAULT,
-    executable: '',
-    arguments: [],
-    workingDirectory: '',
-    displayModeOverride: null,
-    inputProfileId: 'default',
-    prefixId: 'default'
+    id: id,
+    name: name,
+    schemaVersion: INPUT_PROFILE_SCHEMA_VERSION,
+    cursorSpeed: 1,
+    overlayOpacity: 70,
+    gamepadMappings: cloneGamepadMappings(DEFAULT_GAMEPAD_MAPPINGS),
+    elements: elements
   };
 }
 
 export function createDefaultInputProfile(): InputProfile {
+  return createInputProfileFromTemplate('default', '默认输入方案', 'default');
+}
+
+interface IcpElementRaw {
+  type?: string;
+  shape?: string;
+  bindings?: string[];
+  scale?: number;
+  x?: number;
+  y?: number;
+  toggleSwitch?: boolean;
+  text?: string;
+  iconId?: number;
+}
+
+interface IcpProfileRaw {
+  name?: string;
+  cursorSpeed?: number;
+  elements?: IcpElementRaw[];
+}
+
+function parseElementType(value: string): ControlElementType | null {
+  if (value === 'BUTTON') return ControlElementType.BUTTON;
+  if (value === 'D_PAD') return ControlElementType.D_PAD;
+  if (value === 'STICK') return ControlElementType.STICK;
+  if (value === 'TRACKPAD') return ControlElementType.TRACKPAD;
+  if (value === 'RANGE_BUTTON') return ControlElementType.RANGE_BUTTON;
+  return null;
+}
+
+function parseElementShape(value: string, type: ControlElementType): ControlElementShape {
+  if (value === 'RECT') return ControlElementShape.RECT;
+  if (value === 'ROUND_RECT') return ControlElementShape.ROUND_RECT;
+  if (value === 'SQUARE') return ControlElementShape.SQUARE;
+  if (value === 'CIRCLE') return ControlElementShape.CIRCLE;
+  return type === ControlElementType.TRACKPAD || type === ControlElementType.RANGE_BUTTON
+    ? ControlElementShape.ROUND_RECT : ControlElementShape.CIRCLE;
+}
+
+function clampNumber(value: number | undefined, min: number, max: number, fallback: number): number {
+  if (value === undefined || Number.isNaN(value)) return fallback;
+  return Math.max(min, Math.min(max, value));
+}
+
+function parseIcpBinding(value: string): InputBinding {
+  const named = evdevNameToBinding(value);
+  if (named.kind === 'MOUSE') return mouseBinding(named.code);
+  if (named.kind === 'KEY') return keyBinding(named.code);
+  return { kind: InputBindingKind.NONE, code: 0 };
+}
+
+/**
+ * 解析 Winlator .icp JSON。未知元素类型跳过，未知字段忽略。
+ * 导入的元素位置/绑定/形状尽量保留，透明度与可见性使用默认值。
+ */
+export function importProfileFromIcpJson(json: string, profileId: string, name?: string): InputProfile {
+  const raw = JSON.parse(json) as IcpProfileRaw;
+  const elements: ControlElement[] = [];
+  const raws = raw.elements ?? [];
+  for (let index = 0; index < raws.length; index++) {
+    const el = raws[index];
+    const type = parseElementType(el.type ?? '');
+    if (type === null) continue;
+    const rawBindings = (el.bindings ?? [])
+      .slice(0, 8)
+      .map((value: string): InputBinding => parseIcpBinding(value))
+      .filter((binding: InputBinding): boolean => binding.kind !== InputBindingKind.NONE);
+    let bindings: InputBinding[] = [];
+    let keyList: number[] = [];
+    if (type === ControlElementType.BUTTON) {
+      bindings = rawBindings.slice(0, 4);
+    } else if (type === ControlElementType.D_PAD || type === ControlElementType.STICK) {
+      bindings = [
+        rawBindings[0] ?? { kind: InputBindingKind.NONE, code: 0 },
+        rawBindings[1] ?? { kind: InputBindingKind.NONE, code: 0 },
+        rawBindings[2] ?? { kind: InputBindingKind.NONE, code: 0 },
+        rawBindings[3] ?? { kind: InputBindingKind.NONE, code: 0 }
+      ];
+    } else if (type === ControlElementType.RANGE_BUTTON) {
+      keyList = rawBindings.map((binding: InputBinding): number => binding.code);
+      bindings = keyList.length > 0 ? [keyBinding(keyList[0])] : [];
+    }
+    elements.push({
+      id: 'imp-' + index.toString(),
+      type: type,
+      shape: parseElementShape(el.shape ?? '', type),
+      x: clampNumber(el.x, 0, 1, 0.5),
+      y: clampNumber(el.y, 0, 1, 0.5),
+      scale: clampNumber(el.scale, 0.5, 2, 1),
+      opacity: -1,
+      bindings: bindings.map(cloneInputBinding),
+      toggleSwitch: el.toggleSwitch ?? false,
+      text: (el.text ?? '').trim().slice(0, 24),
+      iconId: 0,
+      visible: true,
+      keyList: keyList
+    });
+  }
   return {
-    id: 'default',
-    name: 'Vintage 默认手柄布局',
-    schemaVersion: 5,
-    virtualKeyConfig: cloneVirtualKeyConfig(DEFAULT_VIRTUAL_KEY_CONFIG),
-    layoutLandscape: cloneGamepadLayout(DEFAULT_GAMEPAD_LAYOUT),
-    layoutPortrait: cloneGamepadLayout(DEFAULT_GAMEPAD_LAYOUT_PORTRAIT, DEFAULT_GAMEPAD_LAYOUT_PORTRAIT),
-    virtualKeyMappings: [
-      { virtualKey: VirtualKey.DPAD_UP, evdevCode: 103, keyLabel: '↑' },
-      { virtualKey: VirtualKey.DPAD_DOWN, evdevCode: 108, keyLabel: '↓' },
-      { virtualKey: VirtualKey.DPAD_LEFT, evdevCode: 105, keyLabel: '←' },
-      { virtualKey: VirtualKey.DPAD_RIGHT, evdevCode: 106, keyLabel: '→' },
-      { virtualKey: VirtualKey.RIGHT_STICK_UP, evdevCode: 23, keyLabel: 'I' },
-      { virtualKey: VirtualKey.RIGHT_STICK_DOWN, evdevCode: 37, keyLabel: 'K' },
-      { virtualKey: VirtualKey.RIGHT_STICK_LEFT, evdevCode: 36, keyLabel: 'J' },
-      { virtualKey: VirtualKey.RIGHT_STICK_RIGHT, evdevCode: 38, keyLabel: 'L' },
-      { virtualKey: VirtualKey.BUTTON_A, evdevCode: 57, keyLabel: 'Space' },
-      { virtualKey: VirtualKey.BUTTON_B, evdevCode: 45, keyLabel: 'X' },
-      { virtualKey: VirtualKey.BUTTON_X, evdevCode: 30, keyLabel: 'A' },
-      { virtualKey: VirtualKey.BUTTON_Y, evdevCode: 31, keyLabel: 'S' },
-      { virtualKey: VirtualKey.BUTTON_L, evdevCode: 16, keyLabel: 'Q' },
-      { virtualKey: VirtualKey.BUTTON_R, evdevCode: 17, keyLabel: 'W' },
-      { virtualKey: VirtualKey.BUTTON_MENU, evdevCode: 1, keyLabel: 'Esc' },
-      { virtualKey: VirtualKey.BUTTON_START, evdevCode: 28, keyLabel: 'Enter' },
-      { virtualKey: VirtualKey.BUTTON_SHIFT, evdevCode: 42, keyLabel: 'Shift' },
-      { virtualKey: VirtualKey.BUTTON_CTRL, evdevCode: 29, keyLabel: 'Ctrl' }
-    ],
-    gamepadMappings: [
-      { id: 'dpad-up', label: '方向键 ↑', buttonCode: 2012, evdevCode: 103 },
-      { id: 'dpad-down', label: '方向键 ↓', buttonCode: 2013, evdevCode: 108 },
-      { id: 'dpad-left', label: '方向键 ←', buttonCode: 2014, evdevCode: 105 },
-      { id: 'dpad-right', label: '方向键 →', buttonCode: 2015, evdevCode: 106 },
-      { id: 'a', label: 'A / 确认', buttonCode: 2301, evdevCode: 57 },
-      { id: 'b', label: 'B / 返回', buttonCode: 2302, evdevCode: 45 },
-      { id: 'x', label: 'X', buttonCode: 2304, evdevCode: 30 },
-      { id: 'y', label: 'Y', buttonCode: 2305, evdevCode: 31 },
-      { id: 'l1', label: 'L1', buttonCode: 2307, evdevCode: 16 },
-      { id: 'r1', label: 'R1', buttonCode: 2308, evdevCode: 17 },
-      { id: 'l2', label: 'L2', buttonCode: 2309, evdevCode: 42 },
-      { id: 'r2', label: 'R2', buttonCode: 2310, evdevCode: 29 },
-      { id: 'select', label: 'Select', buttonCode: 2311, evdevCode: 1 },
-      { id: 'start', label: 'Start', buttonCode: 2312, evdevCode: 28 },
-      { id: 'l3', label: 'L3', buttonCode: 2313, evdevCode: 28 },
-      { id: 'r3', label: 'R3', buttonCode: 2314, evdevCode: 57 },
-      { id: 'home', label: 'Home', buttonCode: 2315, evdevCode: 63 }
-    ],
-    freeButtonsConfig: cloneFreeButtonsConfig(DEFAULT_FREE_BUTTONS_CONFIG)
+    id: profileId,
+    name: (name ?? raw.name ?? '导入方案').trim().slice(0, 40),
+    schemaVersion: INPUT_PROFILE_SCHEMA_VERSION,
+    cursorSpeed: clampNumber(raw.cursorSpeed, 0.1, 5, 1),
+    overlayOpacity: 70,
+    gamepadMappings: cloneGamepadMappings(DEFAULT_GAMEPAD_MAPPINGS),
+    elements: elements
   };
+}
+
+function exportBindingName(binding: InputBinding): string {
+  if (binding.kind === InputBindingKind.MOUSE) return evdevNameToBindingName('MOUSE', binding.code);
+  if (binding.kind === InputBindingKind.KEY) return evdevNameToBindingName('KEY', binding.code);
+  return 'NONE';
+}
+
+function exportBindingNames(element: ControlElement): string[] {
+  const names: string[] = [];
+  const slotCount = 4;
+  for (let slot = 0; slot < slotCount; slot++) {
+    if (element.type === ControlElementType.RANGE_BUTTON) {
+      const codes = element.keyList ?? [];
+      names.push(slot < codes.length ? evdevNameToBindingName('KEY', codes[slot]) : 'NONE');
+      continue;
+    }
+    if (element.type === ControlElementType.TRACKPAD) {
+      names.push('NONE');
+      continue;
+    }
+    const binding = (element.bindings ?? [])[slot];
+    names.push(binding ? exportBindingName(binding) : 'NONE');
+  }
+  return names;
+}
+
+/**
+ * 导出为 Winlator 兼容的 .icp JSON（标准字段子集；本项目扩展字段如
+ * 元素级透明度、可见性不导出）。
+ */
+export function exportProfileToIcpJson(profile: InputProfile): string {
+  const elements = (profile.elements ?? []).map((element: ControlElement): Object => ({
+    type: element.type,
+    shape: element.shape,
+    bindings: exportBindingNames(element),
+    scale: element.scale,
+    x: element.x,
+    y: element.y,
+    toggleSwitch: element.toggleSwitch,
+    text: element.text,
+    iconId: element.iconId ?? 0
+  }));
+  const payload = {
+    id: 0,
+    name: profile.name,
+    cursorSpeed: profile.cursorSpeed,
+    elements: elements
+  };
+  return JSON.stringify(payload);
+}
+
+function evdevNameToBindingName(kind: string, code: number): string {
+  if (kind === 'MOUSE') return bindingToEvdevName('MOUSE', code);
+  return bindingToEvdevName('KEY', code);
 }
 
 export function resolveDisplayMode(override: DisplayMode | null, defaultMode: DisplayMode): DisplayMode {
