@@ -342,13 +342,26 @@ export struct VirtualInputOverlay {
     }
   }
 
+  private rangeSlotTop(element: ControlElement): number {
+    const scale = element.scale ?? 1;
+    return (element.text.length > 0 ? 20 : 0) * scale;
+  }
+
+  private rangeSlotHeight(element: ControlElement): number {
+    const slots = element.keyList ?? [];
+    if (slots.length === 0) return 0;
+    const height = this.elementHeight(element);
+    const slotArea = Math.max(1, height - this.rangeSlotTop(element));
+    return slotArea / slots.length;
+  }
+
   private rangeIndexAt(element: ControlElement, y: number): number {
     const slots = element.keyList ?? [];
     if (slots.length === 0) return -1;
     const height = this.elementHeight(element);
     const center = this.elementCenter(element);
-    const relative = y - (center.y - height / 2);
-    const slot = Math.floor(relative / (height / slots.length));
+    const relative = y - (center.y - height / 2) - this.rangeSlotTop(element);
+    const slot = Math.floor(relative / this.rangeSlotHeight(element));
     return Math.max(0, Math.min(slots.length - 1, slot));
   }
 
@@ -852,16 +865,18 @@ export struct VirtualInputOverlay {
   @Builder
   private TrackpadElement(element: ControlElement) {
     Stack({ alignContent: Alignment.Center }) {
-      Text('鼠标').fontSize(12 * (element.scale ?? 1)).fontColor('#88FFFFFF')
+      Text('鼠标').fontSize(12 * (element.scale ?? 1))
+        .fontColor(this.isElementPressed(element.id) ? '#FFB9F6CA' : '#88FFFFFF')
       if (element.text.length > 0) {
         Text(element.text).fontSize(11 * (element.scale ?? 1))
-          .fontColor(TEXT_IDLE).margin({ top: 30 * (element.scale ?? 1) })
+          .fontColor(this.isElementPressed(element.id) ? '#FFB9F6CA' : TEXT_IDLE)
+          .margin({ top: 30 * (element.scale ?? 1) })
       }
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))
     .borderRadius(this.elementRadius(element))
-    .backgroundColor('#33404040')
-    .border({ width: 2, color: STROKE_COLOR })
+    .backgroundColor(this.isElementPressed(element.id) ? '#B04CAF50' : '#33404040')
+    .border({ width: 2, color: this.isElementPressed(element.id) ? '#FF4CAF50' : STROKE_COLOR })
     .opacity(this.elementOpacity(element))
     .hitTestBehavior(HitTestMode.None)
     .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
@@ -880,9 +895,9 @@ export struct VirtualInputOverlay {
           Text(this.keyLabel(code)).fontSize(10 * (element.scale ?? 1))
             .fontColor(this.rangeSelection(element.id) === index ? TEXT_PRESSED : TEXT_IDLE)
         }
-        .width('100%').height(22 * (element.scale ?? 1))
+        .width('100%').height(this.rangeSlotHeight(element))
         .backgroundColor(this.rangeSelection(element.id) === index ? FILL_PRESSED : '#44000000')
-        .position({ x: 0, y: (element.text.length > 0 ? 20 : 4) * (element.scale ?? 1) + index * 22 * (element.scale ?? 1) })
+        .position({ x: 0, y: this.rangeSlotTop(element) + index * this.rangeSlotHeight(element) })
       }, (code: number, index: number): string => element.id + '-' + code.toString() + '-' + index.toString())
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))
