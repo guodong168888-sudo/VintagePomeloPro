@@ -410,6 +410,8 @@ export interface ControlElement {
   keyList: number[];
   /** RANGE_BUTTON 方向：'vertical' 纵向（默认）/ 'horizontal' 横向。 */
   orientation: string;
+  /** STICK 输出模式：'keys' 方向键（默认）/ 'mouse' 鼠标视角。 */
+  outputMode: string;
 }
 
 export interface InputProfile {
@@ -509,7 +511,8 @@ export function createControlElement(
   scale?: number,
   toggleSwitch?: boolean,
   keyList?: number[],
-  orientation?: string): ControlElement {
+  orientation?: string,
+  outputMode?: string): ControlElement {
   const resolvedShape = shape ?? (type === ControlElementType.TRACKPAD || type === ControlElementType.RANGE_BUTTON
     ? ControlElementShape.ROUND_RECT : ControlElementShape.CIRCLE);
   return {
@@ -526,7 +529,8 @@ export function createControlElement(
     iconId: 0,
     visible: true,
     keyList: (keyList ?? []).map((code: number): number => code),
-    orientation: orientation ?? 'vertical'
+    orientation: orientation ?? 'vertical',
+    outputMode: outputMode ?? 'keys'
   };
 }
 
@@ -545,7 +549,8 @@ export function cloneControlElement(element: ControlElement): ControlElement {
     iconId: element.iconId ?? 0,
     visible: element.visible ?? true,
     keyList: (element.keyList ?? []).map((code: number): number => code),
-    orientation: element.orientation ?? 'vertical'
+    orientation: element.orientation ?? 'vertical',
+    outputMode: element.outputMode ?? 'keys'
   };
 }
 
@@ -623,7 +628,7 @@ function shooterTemplateElements(): ControlElement[] {
 }
 
 function actionTemplateElements(): ControlElement[] {
-  return [
+  const elements = [
     createControlElement(ControlElementType.STICK, 0.13, 0.74, '', dpadWASD()),
     createControlElement(ControlElementType.STICK, 0.76, 0.78, '', arrowBindings(), ControlElementShape.CIRCLE, 0.9),
     createControlElement(ControlElementType.BUTTON, 0.85, 0.70, 'A', [keyBinding(57)]),
@@ -636,6 +641,11 @@ function actionTemplateElements(): ControlElement[] {
     createControlElement(ControlElementType.BUTTON, 0.08, 0.88, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT),
     createControlElement(ControlElementType.BUTTON, 0.20, 0.88, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT)
   ];
+  // 视角摇杆默认输出鼠标视角。
+  if (elements.length > 1 && elements[1].type === ControlElementType.STICK) {
+    elements[1].outputMode = 'mouse';
+  }
+  return elements;
 }
 
 function templateElements(templateId: string): ControlElement[] {
@@ -783,6 +793,7 @@ interface IcpElementRaw {
   text?: string;
   iconId?: number;
   orientation?: string;
+  outputMode?: string;
 }
 
 interface IcpProfileRaw {
@@ -867,7 +878,8 @@ export function importProfileFromIcpJson(json: string, profileId: string, name?:
       iconId: 0,
       visible: true,
       keyList: keyList,
-      orientation: el.orientation === 'horizontal' ? 'horizontal' : 'vertical'
+      orientation: el.orientation === 'horizontal' ? 'horizontal' : 'vertical',
+      outputMode: el.outputMode === 'mouse' ? 'mouse' : 'keys'
     });
   }
   return {
@@ -921,7 +933,8 @@ export function exportProfileToIcpJson(profile: InputProfile): string {
     toggleSwitch: element.toggleSwitch,
     text: element.text,
     iconId: element.iconId ?? 0,
-    orientation: element.orientation ?? 'vertical'
+    orientation: element.orientation ?? 'vertical',
+    outputMode: element.outputMode ?? 'keys'
   }));
   const payload: IcpProfileRaw = {
     id: 0,

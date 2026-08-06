@@ -41,6 +41,7 @@ interface ElementPatch {
   bindings?: InputBinding[];
   keyList?: number[];
   orientation?: string;
+  outputMode?: string;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -305,7 +306,8 @@ struct InputLayoutEditor {
       iconId: element.iconId,
       visible: element.visible,
       keyList: patch.keyList ?? element.keyList,
-      orientation: patch.orientation ?? element.orientation ?? 'vertical'
+      orientation: patch.orientation ?? element.orientation ?? 'vertical',
+      outputMode: patch.outputMode ?? element.outputMode ?? 'keys'
     };
   }
 
@@ -678,6 +680,29 @@ struct InputLayoutEditor {
       if (this.selectedElement()?.type === ControlElementType.D_PAD ||
         this.selectedElement()?.type === ControlElementType.STICK) {
         Column({ space: 6 }) {
+          if (this.selectedElement()?.type === ControlElementType.STICK) {
+            Row({ space: 8 }) {
+              Text('输出').fontSize(11).fontColor('#FFFFFFAA')
+              Text('按键').fontSize(11)
+                .fontColor((this.selectedElement()?.outputMode ?? 'keys') === 'keys' ? '#FF64B5F6' : '#FFFFFF88')
+                .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+                .backgroundColor((this.selectedElement()?.outputMode ?? 'keys') === 'keys' ? '#335C8DFF' : '#18FFFFFF')
+                .borderRadius(12).border({ width: 1, color: '#44FFFFFF' })
+                .onClick((): void => {
+                  this.updateSelectedElement((element: ControlElement): ControlElement =>
+                    this.withElement(element, { outputMode: 'keys' }));
+                })
+              Text('鼠标视角').fontSize(11)
+                .fontColor(this.selectedElement()?.outputMode === 'mouse' ? '#FF64B5F6' : '#FFFFFF88')
+                .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+                .backgroundColor(this.selectedElement()?.outputMode === 'mouse' ? '#335C8DFF' : '#18FFFFFF')
+                .borderRadius(12).border({ width: 1, color: '#44FFFFFF' })
+                .onClick((): void => {
+                  this.updateSelectedElement((element: ControlElement): ControlElement =>
+                    this.withElement(element, { outputMode: 'mouse' }));
+                })
+            }.width('100%')
+          }
           Text('方向绑定（上/右/下/左）').fontSize(11).fontColor('#FFFFFFAA').width('100%')
           ForEach([0, 1, 2, 3], (slot: number): void => {
             Row({ space: 8 }) {

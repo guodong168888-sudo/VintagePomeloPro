@@ -86,6 +86,7 @@ export struct VirtualInputOverlay {
   @State private touchpadModeVisual: boolean = false;
   private activeElementTouches: Map<string, number> = new Map<string, number>();
   private touchOrigins: Map<string, OverlayPoint> = new Map<string, OverlayPoint>();
+  private stickLastDeltas: Map<string, OverlayPoint> = new Map<string, OverlayPoint>();
   private trackpadStates: Map<string, TrackpadState> = new Map<string, TrackpadState>();
   private editDragElementId: string = '';
   private editDragTouchId: number = -1;
@@ -466,6 +467,7 @@ export struct VirtualInputOverlay {
       if (this.activeElementTouches.has(id)) return;
       this.activeElementTouches.set(id, touch.id);
       this.touchOrigins.set(id, { x: Number(touch.x), y: Number(touch.y) });
+      this.stickLastDeltas.set(id, { x: 0, y: 0 });
       this.setStickState(id, 0, 0, true);
       return;
     }
@@ -481,13 +483,27 @@ export struct VirtualInputOverlay {
         dy = dy * radius / distance;
       }
       this.setStickState(id, dx, dy, true);
-      this.applyStickDirection(element, dx, dy, touch.id);
+      if (element.outputMode === 'mouse') {
+        // 鼠标视角：摇杆偏移增量 → 指针增量。偏移越大单次视角转动越快。
+        const last = this.stickLastDeltas.get(id) ?? { x: 0, y: 0 };
+        const rate = 0.9;
+        const deltaX = (dx - last.x) * rate;
+        const deltaY = (dy - last.y) * rate;
+        this.stickLastDeltas.set(id, { x: dx, y: dy });
+        if (deltaX !== 0 || deltaY !== 0) {
+          InputDispatcher.getInstance().pointerDelta(
+            'stick-mouse-' + id + '-' + touch.id.toString(), vp2px(deltaX), vp2px(deltaY));
+        }
+      } else {
+        this.applyStickDirection(element, dx, dy, touch.id);
+      }
       return;
     }
     if ((type === TouchType.Up || type === TouchType.Cancel) &&
       this.activeElementTouches.get(id) === touch.id) {
       this.activeElementTouches.delete(id);
       this.touchOrigins.delete(id);
+      this.stickLastDeltas.delete(id);
       this.releaseStickBindings(element, touch.id);
       this.setStickState(id, 0, 0, false);
     }
