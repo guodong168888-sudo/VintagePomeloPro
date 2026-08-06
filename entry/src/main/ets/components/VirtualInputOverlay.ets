@@ -3,6 +3,7 @@ import {
   ControlElement,
   ControlElementShape,
   ControlElementType,
+  InputBinding,
   InputBindingKind,
   InputProfile,
   createDefaultInputProfile,
@@ -157,7 +158,8 @@ export struct VirtualInputOverlay {
   }
 
   private elementContains(element: ControlElement, x: number, y: number): boolean {
-    const width = this.elementWidth(element);
+    const width = element.type === ControlElementType.RANGE_BUTTON ?
+      Math.max(this.elementWidth(element), 68 * (element.scale ?? 1)) : this.elementWidth(element);
     const height = this.elementHeight(element);
     const center = this.elementCenter(element);
     const left = center.x - width / 2;
@@ -198,6 +200,26 @@ export struct VirtualInputOverlay {
   private visibleElements(): ControlElement[] {
     return (this.profile.elements ?? []).filter((element: ControlElement): boolean =>
       element.visible || this.editMode);
+  }
+
+  private elementVisualKey(element: ControlElement): string {
+    const bindingParts: string[] = [];
+    (element.bindings ?? []).forEach((binding: InputBinding): void => {
+      bindingParts.push(binding.kind + ':' + binding.code.toString());
+    });
+    (element.keyList ?? []).forEach((code: number): void => {
+      bindingParts.push('k' + code.toString());
+    });
+    return element.id +
+      '|' + (element.x ?? 0).toFixed(3) +
+      '|' + (element.y ?? 0).toFixed(3) +
+      '|' + (element.scale ?? 1).toFixed(2) +
+      '|' + (element.opacity ?? -1).toString() +
+      '|' + (element.text ?? '') +
+      '|' + (element.shape ?? '') +
+      '|' + (element.toggleSwitch ? '1' : '0') +
+      '|' + (element.visible ? '1' : '0') +
+      '|' + bindingParts.join(',');
   }
 
   private isElementPressed(id: string): boolean {
@@ -372,7 +394,9 @@ export struct VirtualInputOverlay {
       const touch = event.changedTouches[index];
       if (element.type === ControlElementType.BUTTON) {
         this.handleButtonElementTouch(event.type, touch, element);
-      } else if (element.type === ControlElementType.D_PAD || element.type === ControlElementType.STICK) {
+      } else if (element.type === ControlElementType.D_PAD) {
+        this.handleDpadElementTouch(event.type, touch, element);
+      } else if (element.type === ControlElementType.STICK) {
         this.handleStickElementTouch(event.type, touch, element);
       } else if (element.type === ControlElementType.TRACKPAD) {
         this.handleTrackpadElementTouch(event.type, touch, element);
@@ -441,12 +465,82 @@ export struct VirtualInputOverlay {
     }
   }
 
+  private isDpadDirectionPressed(id: string, direction: string): boolean {
+    return this.pressedTokens.indexOf('|' + id + ':' + direction + '|') >= 0;
+  }
+
+  private setDpadDirectionPressed(id: string, direction: string, pressed: boolean): void {
+    const token = '|' + id + ':' + direction + '|';
+    if (pressed && !this.isDpadDirectionPressed(id, direction)) this.pressedTokens += token;
+    if (!pressed && this.isDpadDirectionPressed(id, direction)) {
+      this.pressedTokens = this.pressedTokens.replace(token, '');
+    }
+  }
+
+  private clearDpadDirection(id: string): void {
+    this.setDpadDirectionPressed(id, 'up', false);
+    this.setDpadDirectionPressed(id, 'down', false);
+    this.setDpadDirectionPressed(id, 'left', false);
+    this.setDpadDirectionPressed(id, 'right', false);
+  }
+
+  private setDpadSlot(element: ControlElement, slot: number, pressed: boolean, touchId: number): void {
+    const direction = slot === 0 ? 'up' : slot === 1 ? 'right' : slot === 2 ? 'down' : 'left';
+    if (this.isDpadDirectionPressed(element.id, direction) === pressed) return;
+    this.setDpadDirectionPressed(element.id, direction, pressed);
+    this.setDirectionSlot(element, slot, pressed, touchId);
+  }
+
+  private applyDpadDirection(element: ControlElement, x: number, y: number, touchId: number): void {
+    const center = this.elementCenter(element);
+    const dx = x - center.x;
+    const dy = y - center.y;
+    let up = false;
+    let down = false;
+    let left = false;
+    let right = false;
+    if (Math.abs(dx) > Math.abs(dy)) {
+      if (dx > 0) right = true;
+      else left = true;
+    } else {
+      if (dy > 0) down = true;
+      else up = true;
+    }
+    this.setDpadSlot(element, 0, up, touchId);
+    this.setDpadSlot(element, 1, right, touchId);
+    this.setDpadSlot(element, 2, down, touchId);
+    this.setDpadSlot(element, 3, left, touchId);
+  }
+
+  /** 方向键：按下即按触摸位置触发对应方向，移动换向，抬起释放。 */
+  private handleDpadElementTouch(type: TouchType, touch: TouchObject, element: ControlElement): void {
+    const id = element.id;
+    if (type === TouchType.Down) {
+      if (this.activeElementTouches.has(id)) return;
+      this.activeElementTouches.set(id, touch.id);
+      this.lastActionTouchAt = Date.now();
+      this.applyDpadDirection(element, Number(touch.x), Number(touch.y), touch.id);
+      return;
+    }
+    if (type === TouchType.Move && this.activeElementTouches.get(id) === touch.id) {
+      this.applyDpadDirection(element, Number(touch.x), Number(touch.y), touch.id);
+      return;
+    }
+    if ((type === TouchType.Up || type === TouchType.Cancel) &&
+      this.activeElementTouches.get(id) === touch.id) {
+      this.activeElementTouches.delete(id);
+      this.releaseStickBindings(element, touch.id);
+      this.clearDpadDirection(id);
+    }
+  }
+
   private handleTrackpadElementTouch(type: TouchType, touch: TouchObject, element: ControlElement): void {
     const id = element.id;
     if (type === TouchType.Down) {
       if (this.activeElementTouches.has(id)) return;
       this.activeElementTouches.set(id, touch.id);
       this.lastActionTouchAt = Date.now();
+      this.setElementPressed(id, true);
       this.trackpadStates.set(id, {
         startX: Number(touch.x), startY: Number(touch.y),
         lastX: Number(touch.x), lastY: Number(touch.y), moved: false
@@ -477,6 +571,7 @@ export struct VirtualInputOverlay {
       const state = this.trackpadStates.get(id);
       this.activeElementTouches.delete(id);
       this.trackpadStates.delete(id);
+      this.setElementPressed(id, false);
       if (type === TouchType.Up && state && !state.moved) {
         const source = 'trackpad-tap-' + id + '-' + touch.id.toString();
         InputDispatcher.getInstance().pointerDown(source, vp2px(Number(touch.x)), vp2px(Number(touch.y)), 272);
@@ -495,23 +590,23 @@ export struct VirtualInputOverlay {
       this.lastActionTouchAt = Date.now();
       const index = this.rangeIndexAt(element, Number(touch.y));
       this.setRangeSelection(id, index);
-      this.applyRangeBinding(element, index, true, touch.id);
       return;
     }
     if (type === TouchType.Move && this.activeElementTouches.get(id) === touch.id) {
       const next = this.rangeIndexAt(element, Number(touch.y));
-      const current = this.rangeSelection(id);
-      if (next !== current) {
-        this.applyRangeBinding(element, current, false, touch.id);
-        this.setRangeSelection(id, next);
-        this.applyRangeBinding(element, next, true, touch.id);
-      }
+      this.setRangeSelection(id, next);
       return;
     }
     if ((type === TouchType.Up || type === TouchType.Cancel) &&
       this.activeElementTouches.get(id) === touch.id) {
       this.activeElementTouches.delete(id);
-      this.applyRangeBinding(element, this.rangeSelection(id), false, touch.id);
+      if (type === TouchType.Up) {
+        const index = this.rangeSelection(id);
+        if (index >= 0) {
+          this.applyRangeBinding(element, index, true, touch.id);
+          this.applyRangeBinding(element, index, false, touch.id);
+        }
+      }
     }
   }
 
@@ -689,35 +784,35 @@ export struct VirtualInputOverlay {
     Stack() {
       Stack({ alignContent: Alignment.Center }) {
         Text('↑').fontSize(16 * (element.scale ?? 1)).fontWeight(FontWeight.Bold)
-          .fontColor(this.isElementPressed(element.id) ? TEXT_PRESSED : TEXT_IDLE)
+          .fontColor(this.isDpadDirectionPressed(element.id, 'up') ? TEXT_PRESSED : TEXT_IDLE)
       }
       .width(44 * (element.scale ?? 1)).height(44 * (element.scale ?? 1))
       .borderRadius(22 * (element.scale ?? 1))
-      .backgroundColor(this.isElementPressed(element.id) ? FILL_PRESSED : FILL_IDLE)
+      .backgroundColor(this.isDpadDirectionPressed(element.id, 'up') ? FILL_PRESSED : FILL_IDLE)
       .position({ x: this.elementWidth(element) / 2 - 22 * (element.scale ?? 1), y: 8 * (element.scale ?? 1) })
       Stack({ alignContent: Alignment.Center }) {
         Text('↓').fontSize(16 * (element.scale ?? 1)).fontWeight(FontWeight.Bold)
-          .fontColor(this.isElementPressed(element.id) ? TEXT_PRESSED : TEXT_IDLE)
+          .fontColor(this.isDpadDirectionPressed(element.id, 'down') ? TEXT_PRESSED : TEXT_IDLE)
       }
       .width(44 * (element.scale ?? 1)).height(44 * (element.scale ?? 1))
       .borderRadius(22 * (element.scale ?? 1))
-      .backgroundColor(this.isElementPressed(element.id) ? FILL_PRESSED : FILL_IDLE)
+      .backgroundColor(this.isDpadDirectionPressed(element.id, 'down') ? FILL_PRESSED : FILL_IDLE)
       .position({ x: this.elementWidth(element) / 2 - 22 * (element.scale ?? 1), y: this.elementHeight(element) - 52 * (element.scale ?? 1) })
       Stack({ alignContent: Alignment.Center }) {
         Text('←').fontSize(16 * (element.scale ?? 1)).fontWeight(FontWeight.Bold)
-          .fontColor(this.isElementPressed(element.id) ? TEXT_PRESSED : TEXT_IDLE)
+          .fontColor(this.isDpadDirectionPressed(element.id, 'left') ? TEXT_PRESSED : TEXT_IDLE)
       }
       .width(44 * (element.scale ?? 1)).height(44 * (element.scale ?? 1))
       .borderRadius(22 * (element.scale ?? 1))
-      .backgroundColor(this.isElementPressed(element.id) ? FILL_PRESSED : FILL_IDLE)
+      .backgroundColor(this.isDpadDirectionPressed(element.id, 'left') ? FILL_PRESSED : FILL_IDLE)
       .position({ x: 8 * (element.scale ?? 1), y: this.elementHeight(element) / 2 - 22 * (element.scale ?? 1) })
       Stack({ alignContent: Alignment.Center }) {
         Text('→').fontSize(16 * (element.scale ?? 1)).fontWeight(FontWeight.Bold)
-          .fontColor(this.isElementPressed(element.id) ? TEXT_PRESSED : TEXT_IDLE)
+          .fontColor(this.isDpadDirectionPressed(element.id, 'right') ? TEXT_PRESSED : TEXT_IDLE)
       }
       .width(44 * (element.scale ?? 1)).height(44 * (element.scale ?? 1))
       .borderRadius(22 * (element.scale ?? 1))
-      .backgroundColor(this.isElementPressed(element.id) ? FILL_PRESSED : FILL_IDLE)
+      .backgroundColor(this.isDpadDirectionPressed(element.id, 'right') ? FILL_PRESSED : FILL_IDLE)
       .position({ x: this.elementWidth(element) - 52 * (element.scale ?? 1), y: this.elementHeight(element) / 2 - 22 * (element.scale ?? 1) })
       Stack({ alignContent: Alignment.Center }) {
         Circle().width(20 * (element.scale ?? 1)).height(20 * (element.scale ?? 1)).fill('#66404040')
@@ -726,8 +821,8 @@ export struct VirtualInputOverlay {
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))
     .borderRadius(this.elementRadius(element))
-    .backgroundColor('#33404040')
-    .border({ width: 2, color: STROKE_COLOR })
+    .backgroundColor(this.isElementPressed(element.id) ? '#664CAF50' : '#33404040')
+    .border({ width: 2, color: this.isElementPressed(element.id) ? '#FF4CAF50' : STROKE_COLOR })
     .opacity(this.elementOpacity(element))
     .hitTestBehavior(HitTestMode.None)
     .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
@@ -1267,9 +1362,7 @@ export struct VirtualInputOverlay {
       if (this.overlayW > 0 && this.overlayH > 0 && (this.controlsVisibleVisual || this.editMode)) {
         ForEach(this.visibleElements(), (element: ControlElement): void => {
           this.ElementView(element)
-        }, (element: ControlElement): string =>
-          element.id + '|' + (element.x ?? 0).toFixed(3) + '|' + (element.y ?? 0).toFixed(3) +
-          '|' + (element.scale ?? 1).toFixed(2))
+        }, (element: ControlElement): string => this.elementVisualKey(element))
       }
       if (!this.hideToolbar) this.Toolbar()
     }
