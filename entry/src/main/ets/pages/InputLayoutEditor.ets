@@ -75,6 +75,10 @@ struct InputLayoutEditor {
   @State private pickerTargetSlot: number = -1;
   @State private pickerTargetKeyList: boolean = false;
   @State private customKeyText: string = '';
+  @State private panelX: number = -1;
+  @State private panelY: number = 64;
+  @State private toolbarX: number = -1;
+  @State private toolbarY: number = 16;
   @State private returnAbilityName: string = '';
   @State private returnSessionId: string = '';
   @State private returnToplevelId: string = '0';
@@ -83,6 +87,16 @@ struct InputLayoutEditor {
   @State private safeAreaLeft: number = 0;
   @State private safeAreaRight: number = 0;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+  private panelDragStartX: number = 0;
+  private panelDragStartY: number = 0;
+  private panelDragTouchId: number = -1;
+  private panelTouchStartX: number = 0;
+  private panelTouchStartY: number = 0;
+  private toolbarDragStartX: number = 0;
+  private toolbarDragStartY: number = 0;
+  private toolbarDragTouchId: number = -1;
+  private toolbarTouchStartX: number = 0;
+  private toolbarTouchStartY: number = 0;
   private originalOrientation: window.Orientation = window.Orientation.UNSPECIFIED;
   private originalLayoutFullScreen: boolean = false;
   private hasOriginalWindowLayout: boolean = false;
@@ -293,27 +307,6 @@ struct InputLayoutEditor {
     };
   }
 
-  /** 画布使用窗口内可用区域（顶部提示栏与底部操作栏之间，右侧留给属性面板）。 */
-  private canvasHeight(): number {
-    return Math.max(240, this.previewH - 240);
-  }
-
-  private canvasWidth(): number {
-    const reserved = 300;
-    const maxWidth = Math.max(300, this.previewW - reserved - 48);
-    return Math.max(160, maxWidth);
-  }
-
-  private canvasLeft(): number {
-    const reserved = 300;
-    const freeWidth = Math.max(0, this.previewW - reserved);
-    return Math.max(12, (freeWidth - this.canvasWidth()) / 2 + 12);
-  }
-
-  private canvasTop(): number {
-    return Math.max(140, (this.previewH - this.canvasHeight()) / 2);
-  }
-
   private elementPixelWidth(element: ControlElement): number {
     if (element.type === ControlElementType.TRACKPAD) return 150 * (element.scale ?? 1);
     if (element.type === ControlElementType.RANGE_BUTTON) return 44 * (element.scale ?? 1);
@@ -331,8 +324,8 @@ struct InputLayoutEditor {
   private elementsOverlap(left: ControlElement, right: ControlElement): boolean {
     const halfWidth = (this.elementPixelWidth(left) + this.elementPixelWidth(right)) / 2;
     const halfHeight = (this.elementPixelHeight(left) + this.elementPixelHeight(right)) / 2;
-    const dx = Math.abs(left.x - right.x) * this.canvasWidth();
-    const dy = Math.abs(left.y - right.y) * this.canvasHeight();
+    const dx = Math.abs(left.x - right.x) * this.previewW;
+    const dy = Math.abs(left.y - right.y) * this.previewH;
     return dx < halfWidth && dy < halfHeight;
   }
 
@@ -349,6 +342,91 @@ struct InputLayoutEditor {
       }
     }
     return '';
+  }
+
+  private panelPositionX(): number {
+    return this.panelX >= 0 ? this.panelX : Math.max(8, this.previewW - 288);
+  }
+
+  private panelPositionY(): number {
+    return this.panelY >= 0 ? this.panelY : 64;
+  }
+
+  private beginPanelDrag(): void {
+    this.panelX = this.panelPositionX();
+    this.panelY = this.panelPositionY();
+    this.panelDragStartX = this.panelX;
+    this.panelDragStartY = this.panelY;
+  }
+
+  private movePanel(offsetX: number, offsetY: number): void {
+    const maxX = Math.max(8, this.previewW - 288);
+    const maxY = Math.max(8, this.previewH - 120);
+    this.panelX = Math.max(8, Math.min(maxX, this.panelDragStartX + offsetX));
+    this.panelY = Math.max(8, Math.min(maxY, this.panelDragStartY + offsetY));
+  }
+
+  private handlePanelHeaderTouch(event: TouchEvent): void {
+    const touch = event.changedTouches[0];
+    if (!touch) return;
+    if (event.type === TouchType.Down) {
+      this.panelDragTouchId = touch.id;
+      this.panelTouchStartX = Number(touch.x);
+      this.panelTouchStartY = Number(touch.y);
+      this.beginPanelDrag();
+      return;
+    }
+    if (event.type === TouchType.Move && this.panelDragTouchId === touch.id) {
+      this.movePanel(Number(touch.x) - this.panelTouchStartX,
+        Number(touch.y) - this.panelTouchStartY);
+      return;
+    }
+    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+      if (this.panelDragTouchId === touch.id) this.panelDragTouchId = -1;
+    }
+  }
+
+  private toolbarPositionX(): number {
+    if (this.toolbarX >= 0) return this.toolbarX;
+    return Math.max(8, (this.previewW - 520) / 2);
+  }
+
+  private toolbarPositionY(): number {
+    return this.toolbarY >= 0 ? this.toolbarY : 16;
+  }
+
+  private beginToolbarDrag(): void {
+    this.toolbarX = this.toolbarPositionX();
+    this.toolbarY = this.toolbarPositionY();
+    this.toolbarDragStartX = this.toolbarX;
+    this.toolbarDragStartY = this.toolbarY;
+  }
+
+  private moveToolbar(offsetX: number, offsetY: number): void {
+    const maxX = Math.max(8, this.previewW - 740);
+    const maxY = Math.max(8, this.previewH - 140);
+    this.toolbarX = Math.max(8, Math.min(maxX, this.toolbarDragStartX + offsetX));
+    this.toolbarY = Math.max(8, Math.min(maxY, this.toolbarDragStartY + offsetY));
+  }
+
+  private handleToolbarHandleTouch(event: TouchEvent): void {
+    const touch = event.changedTouches[0];
+    if (!touch) return;
+    if (event.type === TouchType.Down) {
+      this.toolbarDragTouchId = touch.id;
+      this.toolbarTouchStartX = Number(touch.x);
+      this.toolbarTouchStartY = Number(touch.y);
+      this.beginToolbarDrag();
+      return;
+    }
+    if (event.type === TouchType.Move && this.toolbarDragTouchId === touch.id) {
+      this.moveToolbar(Number(touch.x) - this.toolbarTouchStartX,
+        Number(touch.y) - this.toolbarTouchStartY);
+      return;
+    }
+    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+      if (this.toolbarDragTouchId === touch.id) this.toolbarDragTouchId = -1;
+    }
   }
 
   private defaultBindings(type: ControlElementType): InputBinding[] {
@@ -534,49 +612,45 @@ struct InputLayoutEditor {
   // ---- 编辑器 UI ----
 
   @Builder
-  private FloatingButton(icon: string, accent: string, action: () => void, id: string, size: number = 38) {
-    Text(icon).fontSize(size >= 44 ? 18 : 15).fontColor(accent).width(size).height(size)
-      .textAlign(TextAlign.Center)
-      .backgroundColor('#E8181818').borderRadius(size / 2).border({ width: 1.5, color: accent })
-      .shadow({ radius: 4, color: '#88000000' })
-      .id(id).onClick(action)
+  @Builder
+  private AddChip(label: string, accent: string, action: () => void, id: string) {
+    Text(label).fontSize(11).fontColor(accent).padding({ left: 9, right: 9, top: 5, bottom: 5 })
+      .backgroundColor('#E8262626').borderRadius(13).border({ width: 1, color: '#33FFFFFF' })
+      .id(id).hitTestBehavior(HitTestMode.Block).onClick(action)
   }
 
   @Builder
-  private ToolbarChip(label: string, accent: string, action: () => void, id: string) {
-    Text(label).fontSize(12).fontColor('#FFFFFFFF').padding({ left: 12, right: 12, top: 7, bottom: 7 })
-      .backgroundColor('#E8181818').borderRadius(16).border({ width: 1, color: accent })
-      .id(id).onClick(action)
+  private ToolbarIconButton(icon: string, accent: string, action: () => void, id: string, size: number = 30) {
+    Text(icon).fontSize(14).fontColor(accent).width(size).height(size).textAlign(TextAlign.Center)
+      .backgroundColor('#E8262626').borderRadius(size / 2).border({ width: 1, color: '#33FFFFFF' })
+      .id(id).hitTestBehavior(HitTestMode.Block).onClick(action)
   }
 
   @Builder
-  private AddElementBar() {
-    Row({ space: 8 }) {
-      Text('添加').fontSize(12).fontColor('#FFFFFF88')
-      this.ToolbarChip('按钮', '#FF2196F3', (): void => this.addElement(ControlElementType.BUTTON), 'editor-add-button')
-      this.ToolbarChip('方向键', '#FF4CAF50', (): void => this.addElement(ControlElementType.D_PAD), 'editor-add-dpad')
-      this.ToolbarChip('摇杆', '#FF8BC34A', (): void => this.addElement(ControlElementType.STICK), 'editor-add-stick')
-      this.ToolbarChip('触摸板', '#FFFFB74D', (): void => this.addElement(ControlElementType.TRACKPAD), 'editor-add-trackpad')
-      this.ToolbarChip('滚动键', '#FF64B5F6', (): void => this.addElement(ControlElementType.RANGE_BUTTON), 'editor-add-range')
+  private ToolbarContainer() {
+    Row({ space: 6 }) {
+      Text('≡').fontSize(15).fontColor('#FFFFFFAA').width(28).height(28).textAlign(TextAlign.Center)
+        .backgroundColor('#33262626').borderRadius(14)
+        .id('editor-toolbar-handle')
+        .hitTestBehavior(HitTestMode.Block)
+        .onTouch((event: TouchEvent): void => this.handleToolbarHandleTouch(event))
+      Row().width(1).height(24).backgroundColor('#33FFFFFF')
+      this.AddChip('键', '#FF64B5F6', (): void => this.addElement(ControlElementType.BUTTON), 'editor-add-button')
+      this.AddChip('方向', '#FF4CAF50', (): void => this.addElement(ControlElementType.D_PAD), 'editor-add-dpad')
+      this.AddChip('摇杆', '#FF8BC34A', (): void => this.addElement(ControlElementType.STICK), 'editor-add-stick')
+      this.AddChip('触摸板', '#FFFFB74D', (): void => this.addElement(ControlElementType.TRACKPAD), 'editor-add-trackpad')
+      this.AddChip('滚动键', '#FFAB47BC', (): void => this.addElement(ControlElementType.RANGE_BUTTON), 'editor-add-range')
+      Row().width(1).height(24).backgroundColor('#33FFFFFF')
+      this.ToolbarIconButton('✕', '#FFFF5252', (): void => { this.finishEditor(); }, 'input-layout-back')
+      this.ToolbarIconButton('↺', '#FFFFB74D', (): void => { this.reset(); }, 'input-layout-reset')
+      this.ToolbarIconButton('⧉', '#FFAB47BC', (): void => { this.duplicateSelectedElement(); }, 'input-layout-duplicate')
+      this.ToolbarIconButton('删', '#FFFF5252', (): void => { this.removeSelectedElement(); }, 'input-layout-delete')
+      this.ToolbarIconButton('✓', '#FFFFFFFF', (): void => { this.save(); }, 'input-layout-save', 32)
     }
-    .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-    .backgroundColor('#AA111111').borderRadius(20).border({ width: 1, color: '#44FFFFFF' })
-  }
-
-  @Builder
-  private ActionBar() {
-    Row({ space: 8 }) {
-      this.FloatingButton('✕', '#FFFF5252', (): void => { this.finishEditor(); }, 'input-layout-back')
-      this.FloatingButton('↺', '#FFFFB74D', (): void => { this.reset(); }, 'input-layout-reset')
-      this.FloatingButton('⧉', '#FFAB47BC', (): void => { this.duplicateSelectedElement(); }, 'input-layout-duplicate')
-      this.FloatingButton('🗑', '#FFFF5252', (): void => { this.removeSelectedElement(); }, 'input-layout-delete')
-      Text('✓').fontSize(18).fontColor('#FFFFFFFF').width(44).height(44).textAlign(TextAlign.Center)
-        .backgroundColor('#FF2979FF').borderRadius(22).border({ width: 1.5, color: '#FFFFFFFF' })
-        .shadow({ radius: 6, color: '#66000000' })
-        .id('input-layout-save').onClick((): void => { this.save(); })
-    }
-    .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-    .backgroundColor('#AA111111').borderRadius(22).border({ width: 1, color: '#44FFFFFF' })
+    .padding({ left: 8, right: 8, top: 5, bottom: 5 })
+    .backgroundColor('#D914141C').borderRadius(20).border({ width: 1, color: '#44FFFFFF' })
+    .position({ x: this.toolbarPositionX(), y: this.toolbarPositionY() })
+    .zIndex(130).id('editor-toolbar')
   }
 
   @Builder
@@ -647,18 +721,21 @@ struct InputLayoutEditor {
   @Builder
   private PropertyPanel() {
     if (this.selectedElementId.length > 0) {
-      Scroll() {
-        Column({ space: 10 }) {
-          Row() {
-            Row({ space: 7 }) {
-              Text('▣').fontSize(12).fontColor('#FF64B5F6').fontWeight(FontWeight.Bold)
-              Text('元素设置 · ' + elementTypeLabel(this.selectedElement()?.type ?? ControlElementType.BUTTON)).fontSize(13)
-                .fontColor('#FFFFFFFF').fontWeight(FontWeight.Medium)
-            }
-            .layoutWeight(1)
-            Text('✕').fontSize(14).fontColor('#FFFF5252').onClick((): void => { this.showPropertyPanel = false; })
+      Column() {
+        Row() {
+          Row({ space: 7 }) {
+            Text('▣').fontSize(12).fontColor('#FF64B5F6').fontWeight(FontWeight.Bold)
+            Text('元素设置 · ' + elementTypeLabel(this.selectedElement()?.type ?? ControlElementType.BUTTON)).fontSize(13)
+              .fontColor('#FFFFFFFF').fontWeight(FontWeight.Medium)
           }
-          .width('100%').height(28)
+          .layoutWeight(1)
+          Text('✕').fontSize(14).fontColor('#FFFF5252').onClick((): void => { this.showPropertyPanel = false; })
+        }
+        .width('100%').height(34).padding({ left: 12, right: 12 })
+        .hitTestBehavior(HitTestMode.Block)
+        .onTouch((event: TouchEvent): void => this.handlePanelHeaderTouch(event))
+        Scroll() {
+          Column({ space: 10 }) {
           if (this.overlapWarning().length > 0) {
             Text(this.overlapWarning()).fontSize(11).fontColor('#FFFF5252').width('100%')
           }
@@ -728,15 +805,16 @@ struct InputLayoutEditor {
           this.BindingSlots()
           Text('提示：拖动元素调整位置，双指捏合缩放；删除/复制按钮在下方操作栏。')
             .fontSize(10).fontColor('#FFFFFF88').width('100%')
+          }
+          .width('100%').padding(12)
         }
-        .width('100%').padding(14)
+        .constraintSize({ maxHeight: Math.max(200, this.previewH - 200) })
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
       }
       .width(280)
-      .constraintSize({ maxHeight: Math.max(200, this.previewH - 150) })
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
       .backgroundColor('#EE111111').borderRadius(14).border({ width: 1, color: '#44FFFFFF' })
-      .position({ x: Math.max(8, this.previewW - 288), y: 64 }).zIndex(100).id('vintage-layout-config')
+      .position({ x: this.panelPositionX(), y: this.panelPositionY() }).zIndex(100).id('vintage-layout-config')
     }
   }
 
@@ -790,44 +868,22 @@ struct InputLayoutEditor {
       }
       Stack() {
         Column().width('100%').height('100%').backgroundColor('#FF1A1A2E')
-        Stack() {
-          VirtualInputOverlay({
-            profile: this.profile,
-            renderRevision: this.previewRevision,
-            interactive: false,
-            hideToolbar: true,
-            editMode: true,
-            selectedElementId: this.selectedElementId,
-            onElementMove: (id: string, x: number, y: number): void => this.moveElement(id, x, y),
-            onElementScale: (id: string, scale: number): void => this.scaleElement(id, scale),
-            onElementSelected: (id: string): void => {
-              this.selectedElementId = id;
-              this.showPropertyPanel = id.length > 0;
-            }
-          })
-            .width('100%').height('100%')
-          Text('当前画面画布')
-            .fontSize(10).fontColor('#FFFFFF66').padding({ left: 8, right: 8, top: 4, bottom: 4 })
-            .backgroundColor('#44000000').borderRadius(6)
-            .position({ x: 8, y: 6 }).id('editor-canvas-label')
-        }
-        .width(this.canvasWidth()).height(this.canvasHeight())
-        .border({ width: 1, color: '#33FFFFFF' }).borderRadius(8)
-        .position({ x: this.canvasLeft(), y: this.canvasTop() })
-        .id('editor-canvas')
-        Column({ space: 6 }) {
-          Text('点按选中 · 拖动移动 · 双指缩放 · 位置与缩放实时预览')
-            .fontSize(10).fontColor('#FFFFFF88').padding({ left: 8, right: 8, top: 4, bottom: 4 })
-            .backgroundColor('#66000000').borderRadius(6)
-            .id('editor-hint')
-        }
-        .position({ x: 16, y: 14 }).alignItems(HorizontalAlign.Start)
-        Row({ space: 12 }) {
-          this.AddElementBar()
-          this.ActionBar()
-        }
-        .position({ x: '50%', y: '100%' }).translate({ x: '-50%', y: -64 })
-        .zIndex(120)
+        VirtualInputOverlay({
+          profile: this.profile,
+          renderRevision: this.previewRevision,
+          interactive: false,
+          hideToolbar: true,
+          editMode: true,
+          selectedElementId: this.selectedElementId,
+          onElementMove: (id: string, x: number, y: number): void => this.moveElement(id, x, y),
+          onElementScale: (id: string, scale: number): void => this.scaleElement(id, scale),
+          onElementSelected: (id: string): void => {
+            this.selectedElementId = id;
+            this.showPropertyPanel = id.length > 0;
+          }
+        })
+          .width('100%').height('100%')
+        this.ToolbarContainer()
         if (this.showPropertyPanel && this.selectedElementId.length > 0) {
           this.PropertyPanel()
         }
