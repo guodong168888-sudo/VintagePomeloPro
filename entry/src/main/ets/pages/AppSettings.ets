@@ -404,33 +404,6 @@ struct AppSettingsPage {
     });
   }
 
-  private async openKeyMapping(): Promise<void> {
-    const profileId = this.profileEditorId();
-    this.value = {
-      appId: this.value.appId,
-      customTitle: this.value.customTitle,
-      customCover: this.value.customCover,
-      favorite: this.value.favorite,
-      box64Preset: this.value.box64Preset,
-      executable: this.value.executable,
-      arguments: this.value.arguments,
-      workingDirectory: this.value.workingDirectory,
-      displayModeOverride: this.value.displayModeOverride,
-      inputProfileId: profileId,
-      prefixId: this.value.prefixId
-    };
-    await AppSettingsStore.getInstance().saveAppSettings(this.value);
-    router.pushUrl({
-      url: 'pages/AdvancedKeyMapping',
-      params: {
-        appId: this.value.appId,
-        profileId: profileId,
-        profileName: this.profileEditorName(),
-        baseProfileId: this.globalProfileId()
-      }
-    });
-  }
-
   private async useGlobalInputProfile(): Promise<void> {
     this.value = {
       appId: this.value.appId,
@@ -558,22 +531,15 @@ struct AppSettingsPage {
             Text('输入映射').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
             Text('桌面模式始终使用系统设置中的桌面全局方案；这里的应用专用方案在启动单个程序时生效。')
               .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
-            Text(this.currentProfileId() === 'default' ? '当前跟随桌面全局输入方案' : '当前使用应用专用键鼠手柄布局')
+            Text(this.currentProfileId() === 'default' ? '当前跟随桌面全局输入方案' : '当前使用应用专用输入方案')
               .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
-            Button('编辑虚拟按键 / 虚拟鼠标 / 手柄映射')
+            Button('编辑应用专用输入方案')
               .width('100%')
               .height(48)
               .backgroundColor($r('app.color.search_background'))
               .fontColor($r('app.color.text_primary'))
               .id('app-settings-edit-input-profile')
               .onClick(() => this.editInputProfile())
-            Button('编辑按键映射与自由按键')
-              .width('100%')
-              .height(48)
-              .backgroundColor($r('app.color.search_background'))
-              .fontColor($r('app.color.text_primary'))
-              .id('app-settings-open-key-mapping')
-              .onClick((): void => { this.openKeyMapping(); })
             if (this.currentProfileId() !== 'default') {
               Button('恢复使用全局输入方案')
                 .width('100%')

@@ -14,10 +14,11 @@ import {
   EngineState,
   GlobalSettings,
   InputProfile,
+  INPUT_TEMPLATES,
+  InputTemplate,
   ThemeMode,
   ViewMode,
   VirtualMouseConfig,
-  VirtualKeyColorScheme,
   ScreenOrientationSetting,
   box64PresetDescription,
   box64PresetLabel,
@@ -84,6 +85,7 @@ struct SystemSettingsPage {
   @State private engineBusy: boolean = false;
   @State private engineOperationMessage: string = '';
   @State private inputProfiles: InputProfile[] = [];
+  @State private showTemplatePicker: boolean = false;
   @State private statusBarHeightVp: number = 0;
   @State private titleContentTopInsetVp: number = 40;
   @State private navBarInsetVp: number = 0;
@@ -747,6 +749,65 @@ struct SystemSettingsPage {
     promptAction.showToast({ message: '已保存并切换到 ' + profile.name });
   }
 
+  private async createProfileFromTemplate(templateId: string): Promise<void> {
+    const service = InputProfileService.getInstance();
+    const template = INPUT_TEMPLATES.find((item: InputTemplate): boolean => item.id === templateId);
+    const profile = await service.createProfileFromTemplate('模板方案', templateId);
+    this.inputProfiles = service.getDesktopProfiles();
+    this.selectDesktopProfile(profile.id);
+    promptAction.showToast({ message: '已创建 ' + profile.name + '（' + (template?.name ?? '通用') + ' 模板）' });
+  }
+
+  private async importInputProfile(): Promise<void> {
+    try {
+      const documentPicker = new picker.DocumentViewPicker(this.context);
+      const result = await documentPicker.select({ maxSelectNumber: 1 });
+      if (!result || result.length === 0) return;
+      const uri = result[0].uri;
+      const file = fs.openSync(uri, fs.OpenMode.READ_ONLY);
+      let content = '';
+      try {
+        content = fs.readTextSync(file.fd);
+      } finally {
+        fs.closeSync(file);
+      }
+      const service = InputProfileService.getInstance();
+      const profile = await service.importProfileFromIcp(content);
+      this.inputProfiles = service.getDesktopProfiles();
+      this.selectDesktopProfile(profile.id);
+      promptAction.showToast({ message: '已导入 ' + profile.name + '（' +
+        profile.elements.length.toString() + ' 个控件）' });
+    } catch (_) {
+      promptAction.showToast({ message: '导入失败：请选择有效的 .icp / JSON 文件' });
+    }
+  }
+
+  private async exportCurrentInputProfile(): Promise<void> {
+    try {
+      const service = InputProfileService.getInstance();
+      const path = await service.exportProfileToFile(this.settings.desktopInputProfileId || 'default');
+      promptAction.showToast({ message: '已导出：' + path });
+    } catch (_) {
+      promptAction.showToast({ message: '导出失败：请检查 Download 目录是否可写' });
+    }
+  }
+
+  private resetDefaultInputProfile(): void {
+    AlertDialog.show({
+      title: '重置默认输入方案',
+      message: '默认输入方案将恢复为通用模板，当前默认方案的修改会丢失。',
+      primaryButton: { value: '取消', action: (): void => {} },
+      secondaryButton: { value: '重置', fontColor: '#D94848', action: (): void => {
+        InputProfileService.getInstance().resetDefaultProfile().then((): void => {
+          this.inputProfiles = InputProfileService.getInstance().getDesktopProfiles();
+          promptAction.showToast({ message: '默认方案已重置为通用模板' });
+        }).catch((): void => {
+          promptAction.showToast({ message: '重置失败' });
+        });
+      } }
+    });
+  }
+
   private restoreDefaults(): void {
     const defaults = createDefaultGlobalSettings();
     this.settings = defaults;
@@ -908,35 +969,7 @@ struct SystemSettingsPage {
   private selectedProfileName(): string {
     const selected = this.inputProfiles.find((profile: InputProfile): boolean =>
       profile.id === this.settings.desktopInputProfileId);
-    return selected?.name ?? 'Vintage 默认手柄布局';
-  }
-
-  private selectedProfileColorScheme(): VirtualKeyColorScheme {
-    const selected = this.inputProfiles.find((profile: InputProfile): boolean =>
-      profile.id === this.settings.desktopInputProfileId);
-    return selected?.virtualKeyConfig.colorScheme ?? VirtualKeyColorScheme.DEFAULT;
-  }
-
-  private async updateProfileColorScheme(colorScheme: VirtualKeyColorScheme): Promise<void> {
-    const service = InputProfileService.getInstance();
-    const profile = service.getProfile(this.settings.desktopInputProfileId || 'default');
-    profile.virtualKeyConfig.colorScheme = colorScheme;
-    await service.saveProfile(profile);
-    this.inputProfiles = service.getDesktopProfiles();
-  }
-
-  @Builder
-  private InputColorSchemeChoice(label: string, colorScheme: VirtualKeyColorScheme) {
-    Button(label)
-      .layoutWeight(1)
-      .height(44)
-      .borderRadius(14)
-      .fontSize(13)
-      .fontColor(this.selectedProfileColorScheme() === colorScheme ? '#FFFFFFFF' : $r('app.color.text_primary'))
-      .backgroundColor(this.selectedProfileColorScheme() === colorScheme ?
-        $r('app.color.accent') : $r('app.color.search_background'))
-      .id('input-color-scheme-' + colorScheme)
-      .onClick((): void => { this.updateProfileColorScheme(colorScheme); })
+    return selected?.name ?? '默认输入方案';
   }
 
   @Builder
@@ -967,7 +1000,7 @@ struct SystemSettingsPage {
   private DesktopInputProfiles() {
     Column({ space: 9 }) {
       Text('桌面模式输入方案').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
-      Text('桌面模式可同时运行多个程序，因此统一使用这里选择的全局方案；单个程序可在应用设置中使用专用方案。')
+      Text('桌面模式可同时运行多个程序，因此统一使用这里选择的全局方案；支持从模板新建、导入导出 .icp 预设。')
         .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
       ForEach(this.inputProfiles, (profile: InputProfile): void => {
         this.InputProfileChoice(profile)
@@ -977,6 +1010,51 @@ struct SystemSettingsPage {
         .backgroundColor($r('app.color.selected_background')).fontColor($r('app.color.accent'))
         .id('save-desktop-input-profile')
         .onClick((): void => { this.saveDesktopProfileCopy(); })
+      if (this.showTemplatePicker) {
+        Column({ space: 8 }) {
+          Text('选择模板').fontSize(12).fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary')).width('100%')
+          Row({ space: 8 }) {
+            ForEach(INPUT_TEMPLATES, (template: InputTemplate): void => {
+              Text(template.name)
+                .layoutWeight(1).height(40).textAlign(TextAlign.Center).fontSize(13)
+                .fontColor('#FFFFFFFF')
+                .backgroundColor($r('app.color.selected_background'))
+                .borderRadius(12).border({ width: 1, color: '#44FFFFFF' })
+                .id('template-choice-' + template.id)
+                .onClick((): void => { this.createProfileFromTemplate(template.id); })
+            }, (template: InputTemplate): string => template.id)
+          }.width('100%')
+          Text('取消').fontSize(12).fontColor($r('app.color.text_secondary'))
+            .onClick((): void => { this.showTemplatePicker = false; })
+        }
+        .width('100%').padding(10)
+        .backgroundColor($r('app.color.search_background')).borderRadius(12)
+      }
+      Row({ space: 8 }) {
+        Button('从模板新建').layoutWeight(1).height(44).borderRadius(12)
+          .backgroundColor($r('app.color.selected_background')).fontColor($r('app.color.accent'))
+          .fontSize(12)
+          .id('create-input-profile-template')
+          .onClick((): void => { this.showTemplatePicker = !this.showTemplatePicker; })
+        Button('导入方案').layoutWeight(1).height(44).borderRadius(12)
+          .backgroundColor($r('app.color.selected_background')).fontColor($r('app.color.accent'))
+          .fontSize(12)
+          .id('import-input-profile')
+          .onClick((): void => { this.importInputProfile(); })
+      }.width('100%')
+      Row({ space: 8 }) {
+        Button('导出当前方案').layoutWeight(1).height(44).borderRadius(12)
+          .backgroundColor($r('app.color.search_background')).fontColor($r('app.color.text_primary'))
+          .fontSize(12)
+          .id('export-input-profile')
+          .onClick((): void => { this.exportCurrentInputProfile(); })
+        Button('重置默认').layoutWeight(1).height(44).borderRadius(12)
+          .backgroundColor($r('app.color.search_background')).fontColor('#D94848')
+          .fontSize(12)
+          .id('reset-default-input-profile')
+          .onClick((): void => { this.resetDefaultInputProfile(); })
+      }.width('100%')
     }
     .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
   }
@@ -990,7 +1068,7 @@ struct SystemSettingsPage {
       .width(48).height(48).borderRadius(16).backgroundColor($r('app.color.selected_background'))
       Column({ space: 4 }) {
         Text('编辑当前桌面方案布局').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
-        Text(this.selectedProfileName() + '：设置方向、ABXY、肩键与辅助键的位置、大小和透明度').fontSize(11).fontColor($r('app.color.text_secondary')).maxLines(2)
+        Text(this.selectedProfileName() + '：在画布上自由摆放按钮、摇杆、方向键与触摸板，逐元素设置绑定、形状与透明度').fontSize(11).fontColor($r('app.color.text_secondary')).maxLines(2)
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
@@ -1000,33 +1078,6 @@ struct SystemSettingsPage {
     .id('open-input-layout-editor')
     .onClick((): void => { router.pushUrl({
       url: 'pages/InputLayoutEditor',
-      params: {
-        profileId: this.settings.desktopInputProfileId || 'default',
-        profileName: this.selectedProfileName(),
-        baseProfileId: this.settings.desktopInputProfileId || 'default'
-      }
-    }); })
-  }
-
-  @Builder
-  private KeyMappingEntry() {
-    Row({ space: 14 }) {
-      Stack({ alignContent: Alignment.Center }) {
-        SymbolGlyph($r('sys.symbol.keyboard')).fontSize(22).fontColor([$r('app.color.accent')])
-      }
-      .width(48).height(48).borderRadius(16).backgroundColor($r('app.color.selected_background'))
-      Column({ space: 4 }) {
-        Text('当前桌面方案按键映射').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
-        Text(this.selectedProfileName() + '：修改虚拟按键实际键值，并配置固定手柄或自由按键。').fontSize(11).fontColor($r('app.color.text_secondary')).maxLines(2)
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-      SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(18).fontColor([$r('app.color.text_secondary')])
-    }
-    .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
-    .id('open-global-key-mapping')
-    .onClick((): void => { router.pushUrl({
-      url: 'pages/AdvancedKeyMapping',
       params: {
         profileId: this.settings.desktopInputProfileId || 'default',
         profileName: this.selectedProfileName(),
@@ -1173,17 +1224,6 @@ struct SystemSettingsPage {
             this.SwitchRow('显示虚拟按键', '只控制十字键、摇杆、ABXY 和肩键；全屏鼠标与右上角控制栏不受影响', this.settings.showVirtualControls, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, value))
             this.SwitchRow('外设接管时隐藏按键', '检测到实体键盘、鼠标或手柄操作后，仅隐藏虚拟按键', this.settings.autoHideVirtualControls, (value: boolean): void => this.update(this.settings.defaultDisplayMode, this.settings.viewMode, this.settings.useGlassEffect, this.settings.usePageBackground, this.settings.showVirtualControls, value))
             Column({ space: 10 }) {
-              Text('虚拟按键配色').fontSize(14).fontWeight(FontWeight.Medium)
-                .fontColor($r('app.color.text_primary')).width('100%')
-              Text('应用到当前桌面输入方案；单个程序也可在应用设置中使用专用方案。')
-                .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
-              Row({ space: 8 }) {
-                this.InputColorSchemeChoice('经典蓝色', VirtualKeyColorScheme.DEFAULT)
-                this.InputColorSchemeChoice('高对比白色', VirtualKeyColorScheme.WHITE)
-              }.width('100%')
-            }
-            .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
-            Column({ space: 10 }) {
               Text('控制栏方向').fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
               Text('自动会根据横竖屏切换；自动隐藏会在控制栏收起 3 秒后完全隐藏，点击右上角热区即可唤出。')
                 .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
@@ -1239,7 +1279,6 @@ struct SystemSettingsPage {
              })
           this.DesktopInputProfiles()
           this.InputLayoutEntry()
-          this.KeyMappingEntry()
         }
         .width('100%')
         .padding(this.cardPadding())
