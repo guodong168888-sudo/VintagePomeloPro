@@ -3,10 +3,13 @@ import {
   ControlElement,
   ControlElementShape,
   ControlElementType,
+  InputLayoutForm,
   InputBindingKind,
   InputProfile,
   cloneInputProfile,
   createDefaultInputProfile,
+  elementsForForm,
+  resolveInputLayoutForm,
   resolveVirtualJoystickDirection
 } from '../model/AppModels';
 import { InputDispatcher } from '../service/InputDispatcher';
@@ -59,6 +62,8 @@ export struct VirtualInputOverlay {
   @Prop @Watch('onTouchpadModeChanged') touchpadMode: boolean = false;
   /** 编辑器模式：不注入按键，元素可拖动/缩放并支持选中框。 */
   @Prop editMode: boolean = false;
+  /** 编辑模式下强制渲染的断点形态（默认平板）。 */
+  @Prop editForm: InputLayoutForm = InputLayoutForm.TABLET;
   @Prop selectedElementId: string = '';
   onOpenLayoutEditor: () => void = (): void => {};
   onOpenKeyMappingEditor: () => void = (): void => {};
@@ -167,7 +172,8 @@ export struct VirtualInputOverlay {
   }
 
   private elementAt(x: number, y: number): ControlElement | null {
-    const elements = this.renderedProfile.elements;
+    const form = this.editMode ? this.editForm : resolveInputLayoutForm(this.overlayW);
+    const elements = elementsForForm(this.renderedProfile, form);
     for (let index = elements.length - 1; index >= 0; index--) {
       const element = elements[index];
       if (element.visible && this.elementContains(element, x, y)) return element;
@@ -176,7 +182,8 @@ export struct VirtualInputOverlay {
   }
 
   private elementById(id: string): ControlElement | null {
-    const elements = this.renderedProfile.elements;
+    const form = this.editMode ? this.editForm : resolveInputLayoutForm(this.overlayW);
+    const elements = elementsForForm(this.renderedProfile, form);
     for (let index = 0; index < elements.length; index++) {
       if (elements[index].id === id) return elements[index];
     }
@@ -191,7 +198,8 @@ export struct VirtualInputOverlay {
   }
 
   private visibleElements(): ControlElement[] {
-    return this.renderedProfile.elements.filter((element: ControlElement): boolean =>
+    const form = this.editMode ? this.editForm : resolveInputLayoutForm(this.overlayW);
+    return elementsForForm(this.renderedProfile, form).filter((element: ControlElement): boolean =>
       element.visible || this.editMode);
   }
 

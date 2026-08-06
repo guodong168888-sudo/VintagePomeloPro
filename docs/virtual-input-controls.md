@@ -31,7 +31,10 @@ interface InputProfile {
   cursorSpeed: number;        // 触摸板指针速度倍率 0.1-5.0
   overlayOpacity: number;     // 方案级透明度 0-100
   gamepadMappings: GamepadButtonMapping[]; // 实体手柄映射（原样保留）
-  elements: ControlElement[];
+  elementsPhone: ControlElement[];   // 手机（<720vp）竖屏友好排布
+  elementsTablet: ControlElement[];  // 平板（720-1280vp）横屏友好排布
+  elementsDesktop: ControlElement[]; // PC（>=1280vp）精简覆盖
+  elements?: ControlElement[];       // 旧 v6 单元素集兼容（加载后复制到三套）
 }
 
 interface ControlElement {
@@ -51,6 +54,20 @@ interface ControlElement {
 }
 ```
 
+## 断点形态适配
+
+输入方案按屏幕宽度断点分成三种形态，与 `BreakpointSystem`
+（xs/sm/md/lg/xl）对齐：
+
+| 形态 | 断点 | 说明 |
+| --- | --- | --- |
+| 手机 | xs/sm（<720vp） | 竖屏友好：控件聚拢、scale 0.8-0.9 |
+| 平板 | md/lg（720-1280vp） | 横屏友好：完整布局 |
+| PC | xl（>=1280vp） | 配合实体键鼠的精简覆盖（触摸板+少量键） |
+
+覆盖层按当前窗口宽度自动选择形态；编辑器可切换三种形态分别排布。
+导入 `.icp` 时三套填充同一份，导出时取当前形态一份。
+
 绑定槽位语义：
 
 - `BUTTON`：`bindings` 最多 4 个，按下时同时注入全部键/鼠标按钮。
@@ -64,14 +81,17 @@ interface ControlElement {
 元素含 `type/shape/bindings[4]/scale/x/y/toggleSwitch/text/iconId`），
 写入 `Download/com.vintage.pomelopro/input_profiles/<name>.icp`。
 本项目扩展字段（元素级透明度、可见性、keyList）不导出。
+导出默认取平板形态，系统设置导出时按当前窗口断点取对应形态。
 
 导入接受纯 Winlator `.icp` 与本项目导出文件：未知元素类型跳过，
 未知字段忽略；`KEY_* / MOUSE_* / NONE` 名称经 `EvdevKeyNames` 映射，
-无法识别的绑定名转为 `NONE`。
+无法识别的绑定名转为 `NONE`。导入结果填充全部三种形态，之后可在
+编辑器里分别调整。
 
 ## 模板
 
-随包三个模板（`AppModels.ets` 工厂）：
+随包三个模板（`AppModels.ets` 工厂），每种模板都包含 手机/平板/PC
+三套初始排布：
 
 | 模板 | 内容 |
 | --- | --- |
@@ -83,7 +103,8 @@ interface ControlElement {
 
 全屏画布编辑器（`InputLayoutEditor.ets`）：
 
-- 点按选中元素，单指拖动移动，双指捏合缩放。
+- 点按选中元素，单指拖动移动，双指捏合缩放；顶部切换 手机/平板/PC
+  三种形态分别排布，画布按当前编辑形态渲染。
 - 底部操作栏：添加 按钮/方向键/摇杆/触摸板/滚动键；保存/退出/重置/
   复制/删除。
 - 属性面板：文字标签、形状、开关模式、缩放、透明度（继承/自定义）、
