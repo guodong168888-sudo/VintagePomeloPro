@@ -438,7 +438,9 @@ struct InputLayoutEditor {
   }
 
   private addElement(type: ControlElementType): void {
-    const element = createControlElement(type, 0.5, 0.5, elementTypeLabel(type), this.defaultBindings(type));
+    const keyList = type === ControlElementType.RANGE_BUTTON ? [2, 3, 4, 5, 6] : [];
+    const element = createControlElement(type, 0.5, 0.5, elementTypeLabel(type), this.defaultBindings(type),
+      undefined, 1, false, keyList);
     this.updateProfile((elements: ControlElement[]): ControlElement[] => {
       const next = elements.slice();
       next.push(element);

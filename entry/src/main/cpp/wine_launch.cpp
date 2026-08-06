@@ -616,19 +616,12 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
     }
     else
     {
-        // 非桌面模式: 启动 explorer 文件管理器窗口 — 与 Index.ets 手动启动
-        // explorer (runWineProgram → SpawnWineProgram) 走完全相同的 broker
-        // 路径 (绝对路径 + per-process env + broker 通道)。早期 NCP 直启
-        // 裸名 "wine explorer" 在非桌面模式被 Wine 当作 shell 启动, 不创建
-        // 文件管理器窗口。
-        ProgramOptions options;
-        options.windowsExePath = "C:\\windows\\explorer.exe";
-        options.prefixMode = (p->prefixDir == WINE_SMOKE_PREFIX) ? "clean" : "reuse";
-        options.d3dBackend = p->d3dBackend;
-        options.automationMode = false;
-        int32_t exPid = SpawnWineProgram(options);
-        OH_LOG_INFO(LOG_APP, "[Launch-Async] explorer window pid=%{public}d (broker path)",
-                    exPid);
+        // 非桌面模式 (PC/受管窗口/单窗口): 不自动启动 explorer 文件管理器窗口。
+        // master phase-2 合并曾在此自动弹出 explorer, 导致 PC 上每次引擎启动
+        // 都多弹一个 explorer 窗口; 用户需要文件管理时用"文件资源管理器"卡片
+        // 手动打开 (Index.ets 手动启动走相同的 broker 路径)。
+        OH_LOG_INFO(LOG_APP,
+                    "[Launch-Async] non-desktop engine ready; explorer window intentionally not auto-started");
     }
     return true;
 }

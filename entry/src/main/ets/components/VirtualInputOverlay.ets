@@ -150,6 +150,7 @@ export struct VirtualInputOverlay {
   private elementRadius(element: ControlElement): number {
     if (element.shape === ControlElementShape.ROUND_RECT) return Math.min(this.elementWidth(element), this.elementHeight(element)) * 0.28;
     if (element.shape === ControlElementShape.RECT) return 4;
+    if (element.shape === ControlElementShape.SQUARE) return 6;
     return Math.min(this.elementWidth(element), this.elementHeight(element)) / 2;
   }
 

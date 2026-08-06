@@ -105,6 +105,31 @@ static bool IsBrokerWineserverRequest(const char* entryParamsRaw)
     return false;
 }
 
+/**
+ * Wine 的 win32u (winstation.c get_desktop_window) 在每次会话中，当默认
+ * 桌面还没有窗口时，会自动以 "explorer.exe /desktop" 启动 shell。这个
+ * 无路径的自启在 PC/受管窗口模式下每次引擎启动都会多弹一个 explorer
+ * 窗口。这里抑制它：用户需要文件管理时通过"文件资源管理器"卡片手动
+ * 打开（带 Z:\ 路径，不匹配本条件）。
+ */
+static bool IsAutoShellExplorerRequest(const char* entryParamsRaw)
+{
+    if (!entryParamsRaw || !entryParamsRaw[0]) return false;
+    if (ParseProcessName(entryParamsRaw) != "explorer.exe") return false;
+
+    const std::string params = entryParamsRaw;
+    size_t exePos = params.find("explorer.exe");
+    if (exePos == std::string::npos) return false;
+    size_t p = exePos + strlen("explorer.exe");
+    while (p < params.size() && params[p] == '|') p++;
+    size_t end = params.find('|', p);
+    std::string arg = params.substr(p, end == std::string::npos ? std::string::npos : end - p);
+    // 自动 shell 参数是裸 /desktop（无 = 无路径）；带路径的是用户打开文件夹。
+    if (arg == "/desktop") return true;
+    return arg.rfind("/desktop", 0) == 0 && arg.find('=') == std::string::npos &&
+        arg.size() <= 16;
+}
+
 // 处理单个请求: recvmsg(entryParams + fd) → StartNativeChildProcess → sendmsg(childPid, status)
 static void HandleRequest(int conn_fd)
 {
@@ -166,6 +191,16 @@ static void HandleRequest(int conn_fd)
 
     OH_LOG_INFO(LOG_APP, "[Broker] request entryParams=%{public}s fds=%{public}s",
                 entryParamsRaw, fdsLine ? fdsLine : "(none)");
+
+    // 抑制 Wine 自动启动的 explorer shell（无路径 /desktop），避免 PC/受管
+    // 窗口模式每次引擎启动都多弹一个 explorer 窗口。
+    if (IsAutoShellExplorerRequest(entryParamsRaw)) {
+        OH_LOG_INFO(LOG_APP, "[Broker] suppress auto explorer shell request (desktop-less host)");
+        int32_t suppressed[2] = { -1, -1 };
+        send(conn_fd, suppressed, sizeof(suppressed), MSG_NOSIGNAL);
+        close(conn_fd);
+        return;
+    }
 
     // 3) 提取 fd (SCM_RIGHTS, 可能多个)
     int recvFds[kMaxFds];
