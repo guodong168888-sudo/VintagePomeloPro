@@ -30,6 +30,18 @@ interface PickerOption {
   code: number;
 }
 
+interface ElementPatch {
+  x?: number;
+  y?: number;
+  scale?: number;
+  text?: string;
+  shape?: ControlElementShape;
+  toggleSwitch?: boolean;
+  opacity?: number;
+  bindings?: InputBinding[];
+  keyList?: number[];
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -247,13 +259,13 @@ struct InputLayoutEditor {
   private moveElement(id: string, x: number, y: number): void {
     this.updateProfile((elements: ControlElement[]): ControlElement[] =>
       elements.map((element: ControlElement): ControlElement =>
-        element.id === id ? { ...element, x: x, y: y } : element));
+        element.id === id ? this.withElement(element, { x: x, y: y }) : element));
   }
 
   private scaleElement(id: string, scale: number): void {
     this.updateProfile((elements: ControlElement[]): ControlElement[] =>
       elements.map((element: ControlElement): ControlElement =>
-        element.id === id ? { ...element, scale: scale } : element));
+        element.id === id ? this.withElement(element, { scale: scale }) : element));
   }
 
   private updateSelectedElement(mutator: (element: ControlElement) => ControlElement): void {
@@ -261,6 +273,24 @@ struct InputLayoutEditor {
     this.updateProfile((elements: ControlElement[]): ControlElement[] =>
       elements.map((element: ControlElement): ControlElement =>
         element.id === id ? mutator(element) : element));
+  }
+
+  private withElement(element: ControlElement, patch: ElementPatch): ControlElement {
+    return {
+      id: element.id,
+      type: element.type,
+      shape: patch.shape ?? element.shape,
+      x: patch.x ?? element.x,
+      y: patch.y ?? element.y,
+      scale: patch.scale ?? element.scale,
+      opacity: patch.opacity ?? element.opacity,
+      bindings: patch.bindings ?? element.bindings,
+      toggleSwitch: patch.toggleSwitch ?? element.toggleSwitch,
+      text: patch.text ?? element.text,
+      iconId: element.iconId,
+      visible: element.visible,
+      keyList: patch.keyList ?? element.keyList
+    };
   }
 
   private defaultBindings(type: ControlElementType): InputBinding[] {
@@ -348,7 +378,7 @@ struct InputLayoutEditor {
         bindings.push({ kind: InputBindingKind.NONE, code: 0 });
       }
       bindings[slotIndex] = binding;
-      return { ...element, bindings: bindings };
+      return this.withElement(element, { bindings: bindings });
     });
   }
 
@@ -358,14 +388,20 @@ struct InputLayoutEditor {
       if (keyList.indexOf(code) >= 0 || keyList.length >= 8) return element;
       const next = keyList.slice();
       next.push(code);
-      return { ...element, keyList: next, bindings: next.length > 0 ? [keyBinding(next[0])] : [] };
+      return this.withElement(element, {
+        keyList: next,
+        bindings: next.length > 0 ? [keyBinding(next[0])] : []
+      });
     });
   }
 
   private removeRangeKey(code: number): void {
     this.updateSelectedElement((element: ControlElement): ControlElement => {
       const keyList = (element.keyList ?? []).filter((value: number): boolean => value !== code);
-      return { ...element, keyList: keyList, bindings: keyList.length > 0 ? [keyBinding(keyList[0])] : [] };
+      return this.withElement(element, {
+        keyList: keyList,
+        bindings: keyList.length > 0 ? [keyBinding(keyList[0])] : []
+      });
     });
   }
 
@@ -487,13 +523,12 @@ struct InputLayoutEditor {
 
   @Builder
   private ShapeChip(label: string, shape: ControlElementShape) {
-    const selected = this.selectedElement()?.shape === shape;
-    Text(label).fontSize(11).fontColor(selected ? '#FFFFFFFF' : '#FFFFFF99')
+    Text(label).fontSize(11).fontColor(this.selectedElement()?.shape === shape ? '#FFFFFFFF' : '#FFFFFF99')
       .padding({ left: 9, right: 9, top: 6, bottom: 6 })
-      .backgroundColor(selected ? '#335C8DFF' : '#18FFFFFF')
-      .borderRadius(14).border({ width: 1, color: selected ? '#FF64B5F6' : '#33FFFFFF' })
+      .backgroundColor(this.selectedElement()?.shape === shape ? '#335C8DFF' : '#18FFFFFF')
+      .borderRadius(14).border({ width: 1, color: this.selectedElement()?.shape === shape ? '#FF64B5F6' : '#33FFFFFF' })
       .onClick((): void => {
-        this.updateSelectedElement((element: ControlElement): ControlElement => ({ ...element, shape: shape }));
+        this.updateSelectedElement((element: ControlElement): ControlElement => this.withElement(element, { shape: shape }));
       })
   }
 
@@ -572,7 +607,7 @@ struct InputLayoutEditor {
             .backgroundColor('#22FFFFFF').borderRadius(8)
             .maxLength(12)
             .onChange((value: string): void => {
-              this.updateSelectedElement((current: ControlElement): ControlElement => ({ ...current, text: value }));
+              this.updateSelectedElement((current: ControlElement): ControlElement => this.withElement(current, { text: value }));
             })
           Text('形状').fontSize(11).fontColor('#FFFFFFAA').width('100%')
           Row({ space: 8 }) {
@@ -592,7 +627,7 @@ struct InputLayoutEditor {
                 .borderRadius(12).border({ width: 1, color: '#44FFFFFF' })
                 .onClick((): void => {
                   this.updateSelectedElement((current: ControlElement): ControlElement =>
-                    ({ ...current, toggleSwitch: !current.toggleSwitch }));
+                    this.withElement(current, { toggleSwitch: !current.toggleSwitch }));
                 })
             }.width('100%')
           }
@@ -616,7 +651,7 @@ struct InputLayoutEditor {
               .borderRadius(12).border({ width: 1, color: '#44FFFFFF' })
               .onClick((): void => {
                 this.updateSelectedElement((current: ControlElement): ControlElement =>
-                  ({ ...current, opacity: current.opacity >= 0 ? -1 : 70 }));
+                  this.withElement(current, { opacity: current.opacity >= 0 ? -1 : 70 }));
               })
           }.width('100%')
           if ((this.selectedElement()?.opacity ?? -1) >= 0) {
@@ -625,7 +660,7 @@ struct InputLayoutEditor {
               .onChange((value: number, mode: SliderChangeMode): void => {
                 if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
                   this.updateSelectedElement((current: ControlElement): ControlElement =>
-                    ({ ...current, opacity: value }));
+                    this.withElement(current, { opacity: value }));
                 }
               })
           }

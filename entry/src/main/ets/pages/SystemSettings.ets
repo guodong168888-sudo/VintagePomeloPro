@@ -763,14 +763,8 @@ struct SystemSettingsPage {
       const documentPicker = new picker.DocumentViewPicker(this.context);
       const result = await documentPicker.select({ maxSelectNumber: 1 });
       if (!result || result.length === 0) return;
-      const uri = result[0].uri;
-      const file = fs.openSync(uri, fs.OpenMode.READ_ONLY);
-      let content = '';
-      try {
-        content = fs.readTextSync(file.fd);
-      } finally {
-        fs.closeSync(file);
-      }
+      const uri = result[0];
+      const content = fs.readTextSync(uri);
       const service = InputProfileService.getInstance();
       const profile = await service.importProfileFromIcp(content);
       this.inputProfiles = service.getDesktopProfiles();

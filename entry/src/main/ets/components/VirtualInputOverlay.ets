@@ -254,34 +254,37 @@ export struct VirtualInputOverlay {
     return 'el-' + element.id + '-' + slot + '-' + touchId.toString();
   }
 
-  private pressBinding(element: ControlElement, slot: string, bindingIndex: number, touchId: number): void {
+  private pressBinding(element: ControlElement, slot: string, bindingIndex: number, touchId: number,
+    pointerX: number, pointerY: number): void {
     const binding = (element.bindings ?? [])[bindingIndex];
     if (!binding || binding.kind === InputBindingKind.NONE || binding.code <= 0) return;
     const source = this.bindingSource(element, slot, touchId);
     if (binding.kind === InputBindingKind.MOUSE) {
-      InputDispatcher.getInstance().pointerDown(source, 0, 0, binding.code);
+      InputDispatcher.getInstance().pointerDown(source, pointerX, pointerY, binding.code);
     } else {
       InputDispatcher.getInstance().pressKey(source, binding.code);
     }
   }
 
-  private releaseBinding(element: ControlElement, slot: string, bindingIndex: number, touchId: number): void {
+  private releaseBinding(element: ControlElement, slot: string, bindingIndex: number, touchId: number,
+    pointerX: number, pointerY: number): void {
     const binding = (element.bindings ?? [])[bindingIndex];
     if (!binding || binding.kind === InputBindingKind.NONE || binding.code <= 0) return;
     const source = this.bindingSource(element, slot, touchId);
     if (binding.kind === InputBindingKind.MOUSE) {
-      InputDispatcher.getInstance().pointerUp(source, 0, 0, binding.code);
+      InputDispatcher.getInstance().pointerUp(source, pointerX, pointerY, binding.code);
     } else {
       InputDispatcher.getInstance().releaseKey(source, binding.code);
     }
     InputDispatcher.getInstance().releaseSource(source);
   }
 
-  private applyButtonBindings(element: ControlElement, pressed: boolean, touchId: number): void {
+  private applyButtonBindings(element: ControlElement, pressed: boolean, touchId: number,
+    pointerX: number, pointerY: number): void {
     const bindings = element.bindings ?? [];
     for (let index = 0; index < bindings.length; index++) {
-      if (pressed) this.pressBinding(element, 'b' + index.toString(), index, touchId);
-      else this.releaseBinding(element, 'b' + index.toString(), index, touchId);
+      if (pressed) this.pressBinding(element, 'b' + index.toString(), index, touchId, pointerX, pointerY);
+      else this.releaseBinding(element, 'b' + index.toString(), index, touchId, pointerX, pointerY);
     }
   }
 
@@ -335,7 +338,7 @@ export struct VirtualInputOverlay {
 
   private releaseElementBindings(element: ControlElement, touchId: number): void {
     if (element.type === ControlElementType.BUTTON) {
-      this.applyButtonBindings(element, false, touchId);
+      this.applyButtonBindings(element, false, touchId, 0, 0);
     } else if (element.type === ControlElementType.D_PAD || element.type === ControlElementType.STICK) {
       this.releaseStickBindings(element, touchId);
     } else if (element.type === ControlElementType.RANGE_BUTTON) {
@@ -382,10 +385,10 @@ export struct VirtualInputOverlay {
       this.lastActionTouchAt = Date.now();
       if (element.toggleSwitch) {
         const next = !this.isElementPressed(id);
-        this.applyButtonBindings(element, next, touch.id);
+        this.applyButtonBindings(element, next, touch.id, vp2px(Number(touch.x)), vp2px(Number(touch.y)));
         this.setElementPressed(id, next);
       } else {
-        this.applyButtonBindings(element, true, touch.id);
+        this.applyButtonBindings(element, true, touch.id, vp2px(Number(touch.x)), vp2px(Number(touch.y)));
         this.setElementPressed(id, true);
       }
       return;
@@ -394,7 +397,7 @@ export struct VirtualInputOverlay {
       this.activeElementTouches.get(id) === touch.id) {
       this.activeElementTouches.delete(id);
       if (this.isElementPressed(id)) {
-        this.applyButtonBindings(element, false, touch.id);
+        this.applyButtonBindings(element, false, touch.id, vp2px(Number(touch.x)), vp2px(Number(touch.y)));
         this.setElementPressed(id, false);
       }
     }
@@ -512,6 +515,7 @@ export struct VirtualInputOverlay {
     if (!this.hideToolbar && this.handleToolbarOverlayTouch(event)) return;
     if (this.editMode) {
       event.stopPropagation();
+      if (event.type === TouchType.Down) this.onElementSelected('');
       return;
     }
     if (!this.interactive || !this.controlsVisible) {
@@ -561,7 +565,7 @@ export struct VirtualInputOverlay {
       event.stopPropagation();
       this.mouseElementId = target.id;
       if (target.type === ControlElementType.BUTTON) {
-        this.applyButtonBindings(target, true, -100);
+        this.applyButtonBindings(target, true, -100, vp2px(x), vp2px(y));
         this.setElementPressed(target.id, true);
       } else {
         const index = this.rangeIndexAt(target, y);
@@ -576,7 +580,7 @@ export struct VirtualInputOverlay {
       this.mouseElementId = '';
       if (target) {
         if (target.type === ControlElementType.BUTTON) {
-          this.applyButtonBindings(target, false, -100);
+          this.applyButtonBindings(target, false, -100, vp2px(x), vp2px(y));
           this.setElementPressed(target.id, false);
         } else {
           this.applyRangeBinding(target, this.rangeSelection(target.id), false, -100);
@@ -624,7 +628,6 @@ export struct VirtualInputOverlay {
       }))
     .onClick((event: ClickEvent): void => {
       if (this.editMode) {
-        event.stopPropagation();
         this.onElementSelected(element.id);
       }
     })
@@ -698,7 +701,6 @@ export struct VirtualInputOverlay {
       }))
     .onClick((event: ClickEvent): void => {
       if (this.editMode) {
-        event.stopPropagation();
         this.onElementSelected(element.id);
       }
     })
@@ -741,7 +743,6 @@ export struct VirtualInputOverlay {
       }))
     .onClick((event: ClickEvent): void => {
       if (this.editMode) {
-        event.stopPropagation();
         this.onElementSelected(element.id);
       }
     })
@@ -784,7 +785,6 @@ export struct VirtualInputOverlay {
       }))
     .onClick((event: ClickEvent): void => {
       if (this.editMode) {
-        event.stopPropagation();
         this.onElementSelected(element.id);
       }
     })
@@ -836,7 +836,6 @@ export struct VirtualInputOverlay {
       }))
     .onClick((event: ClickEvent): void => {
       if (this.editMode) {
-        event.stopPropagation();
         this.onElementSelected(element.id);
       }
     })
@@ -1320,12 +1319,6 @@ export struct VirtualInputOverlay {
     .onTouch((event: TouchEvent): void => this.handleOverlayTouch(event))
     .onMouse((event: MouseEvent): void => this.handleOverlayMouse(event))
     .onAxisEvent((event?: AxisEvent): void => this.onUnhandledAxis(event))
-    .onClick((event: ClickEvent): void => {
-      if (this.editMode) {
-        event.stopPropagation();
-        this.onElementSelected('');
-      }
-    })
     .onAreaChange((_oldValue: Area, area: Area): void => {
       this.overlayW = area.width as number;
       this.overlayH = area.height as number;

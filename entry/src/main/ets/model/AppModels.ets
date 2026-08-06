@@ -645,6 +645,118 @@ export function createDefaultInputProfile(): InputProfile {
   return createInputProfileFromTemplate('default', '默认输入方案', 'default');
 }
 
+export function createDefaultGlobalSettings(): GlobalSettings {
+  return {
+    defaultDisplayMode: DisplayMode.DESKTOP,
+    desktopOrientation: ScreenOrientationSetting.SENSOR_LANDSCAPE,
+    desktopWindowMode: DesktopWindowMode.FULLSCREEN,
+    keepScreenOn: true,
+    box64Preset: BOX64_PRESET_DEFAULT,
+    desktopInputProfileId: 'default',
+    viewMode: ViewMode.GRID,
+    themeMode: ThemeMode.SYSTEM,
+    useGlassEffect: true,
+    usePageBackground: false,
+    pageBackgroundUri: '',
+    virtualInputEnabled: true,
+    showVirtualControls: false,
+    autoHideVirtualControls: false,
+    controlBarDirection: ControlBarDirection.AUTO,
+    controlBarPositionX: 1,
+    controlBarPositionY: 0,
+    virtualMouseConfig: cloneVirtualMouseConfig(DEFAULT_VIRTUAL_MOUSE_CONFIG),
+    controlOpacity: 72,
+    gamepadDeadzone: 18,
+    outputScale: 100,
+    d3dRendererPreference: D3DRendererPreference.DXVK
+  };
+}
+
+export function resolveInputProfileId(appProfileId: string, desktopProfileId: string): string {
+  const appValue = (appProfileId ?? '').trim();
+  if (appValue.length > 0 && appValue !== 'default') return appValue;
+  const desktopValue = (desktopProfileId ?? '').trim();
+  return desktopValue.length > 0 ? desktopValue : 'default';
+}
+
+export function createDefaultAppSettings(appId: string): AppSettings {
+  return {
+    appId: appId,
+    customTitle: '',
+    customCover: '',
+    favorite: false,
+    box64Preset: BOX64_PRESET_DEFAULT,
+    executable: '',
+    arguments: [],
+    workingDirectory: '',
+    displayModeOverride: null,
+    inputProfileId: 'default',
+    prefixId: 'default'
+  };
+}
+
+export function normalizeLaunchPath(path: string): string {
+  return path.trim().replace(/\\/g, '/').replace(/\/+/g, '/').toLowerCase();
+}
+
+/**
+ * Wine maps the app-owned Download library to Z:\, so a program started
+ * from Explorer is reported as Z:\games\... while the catalog stores the
+ * same file as /storage/Users/currentUser/Download/<bundle>/games/....
+ * Collapse only those two app-library forms; arbitrary C:\Games paths must
+ * remain distinct from the app-owned games directory.
+ */
+export function normalizeCatalogLaunchIdentity(path: string): string {
+  const normalized = normalizeLaunchPath(path);
+  const gamesMarker = '/games/';
+  if (normalized.startsWith('z:/games/')) return normalized.substring(3);
+  if (normalized.startsWith('/storage/users/currentuser/download/')) {
+    const markerIndex = normalized.indexOf(gamesMarker);
+    if (markerIndex >= 0) return normalized.substring(markerIndex + 1);
+  }
+  return normalized;
+}
+
+/**
+ * Merge ArkTS-owned sessions with the native Wine process registry.  A native
+ * path is used only when it identifies one catalog card unambiguously.
+ */
+export function resolveRunningAppIds(apps: AppDescriptor[], sessionAppIds: Set<string>,
+  nativeRunningPaths: Set<string>): Set<string> {
+  const result: Set<string> = new Set<string>();
+  sessionAppIds.forEach((appId: string): void => { result.add(appId); });
+
+  const normalizedNativePaths: Set<string> = new Set<string>();
+  nativeRunningPaths.forEach((path: string): void => {
+    const normalized = normalizeCatalogLaunchIdentity(path);
+    if (normalized.length > 0) normalizedNativePaths.add(normalized);
+  });
+
+  const catalogPathCounts: Map<string, number> = new Map<string, number>();
+  apps.forEach((app: AppDescriptor): void => {
+    const normalized = normalizeCatalogLaunchIdentity(app.launchTarget.executable);
+    if (normalized.length > 0) {
+      catalogPathCounts.set(normalized, (catalogPathCounts.get(normalized) ?? 0) + 1);
+    }
+  });
+  apps.forEach((app: AppDescriptor): void => {
+    const normalized = normalizeCatalogLaunchIdentity(app.launchTarget.executable);
+    if (normalized.length > 0 && catalogPathCounts.get(normalized) === 1 &&
+      normalizedNativePaths.has(normalized)) result.add(app.id);
+  });
+  return result;
+}
+
+export function stableAppId(source: AppSource, path: string): string {
+  const value = source + ':' + normalizeLaunchPath(path);
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return source + '-' + (hash >>> 0).toString(16).padStart(8, '0');
+}
+
 interface IcpElementRaw {
   type?: string;
   shape?: string;
@@ -658,6 +770,7 @@ interface IcpElementRaw {
 }
 
 interface IcpProfileRaw {
+  id?: number;
   name?: string;
   cursorSpeed?: number;
   elements?: IcpElementRaw[];
@@ -781,7 +894,7 @@ function exportBindingNames(element: ControlElement): string[] {
  * 元素级透明度、可见性不导出）。
  */
 export function exportProfileToIcpJson(profile: InputProfile): string {
-  const elements = (profile.elements ?? []).map((element: ControlElement): Object => ({
+  const elements = (profile.elements ?? []).map((element: ControlElement): IcpElementRaw => ({
     type: element.type,
     shape: element.shape,
     bindings: exportBindingNames(element),
@@ -792,7 +905,7 @@ export function exportProfileToIcpJson(profile: InputProfile): string {
     text: element.text,
     iconId: element.iconId ?? 0
   }));
-  const payload = {
+  const payload: IcpProfileRaw = {
     id: 0,
     name: profile.name,
     cursorSpeed: profile.cursorSpeed,
