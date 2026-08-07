@@ -406,16 +406,7 @@ std::string ReadNapiString(napi_env env, napi_value value) {
 
 } // namespace
 
-napi_value ExtractFontZip(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value args[2] = {};
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    if (argc < 2) return nullptr;
-
-    const std::string zipPath = ReadNapiString(env, args[0]);
-    const std::string outDir = ReadNapiString(env, args[1]);
-    const FontZipResult r = ExtractFontZipImpl(zipPath, outDir);
-
+napi_value MakeFontZipResultObject(napi_env env, const FontZipResult& r) {
     napi_value result;
     napi_create_object(env, &result);
     napi_value val;
@@ -430,4 +421,61 @@ napi_value ExtractFontZip(napi_env env, napi_callback_info info) {
     napi_create_string_utf8(env, r.error.c_str(), NAPI_AUTO_LENGTH, &val);
     napi_set_named_property(env, result, "error", val);
     return result;
+}
+
+/**
+ * 异步解压：ExtractFontZipImpl 在 napi async work 的后台线程执行，
+ * 主线程不会被大字体包阻塞，避免 AppFreeze/ANR 杀进程。
+ */
+struct FontZipWorkContext {
+    napi_async_work work = nullptr;
+    napi_deferred deferred = nullptr;
+    std::string zipPath;
+    std::string outDir;
+    FontZipResult result;
+};
+
+static void FontZipExecute(napi_env env, void* data) {
+    auto* ctx = static_cast<FontZipWorkContext*>(data);
+    ctx->result = ExtractFontZipImpl(ctx->zipPath, ctx->outDir);
+}
+
+static void FontZipComplete(napi_env env, napi_status status, void* data) {
+    auto* ctx = static_cast<FontZipWorkContext*>(data);
+    napi_value result = MakeFontZipResultObject(env, ctx->result);
+    napi_resolve_deferred(env, ctx->deferred, result);
+    napi_delete_async_work(env, ctx->work);
+    delete ctx;
+}
+
+napi_value ExtractFontZipAsync(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2] = {};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 2) return nullptr;
+
+    auto* ctx = new FontZipWorkContext();
+    ctx->zipPath = ReadNapiString(env, args[0]);
+    ctx->outDir = ReadNapiString(env, args[1]);
+
+    napi_value promise;
+    napi_create_promise(env, &ctx->deferred, &promise);
+    napi_value resourceName;
+    napi_create_string_utf8(env, "ExtractFontZip", NAPI_AUTO_LENGTH, &resourceName);
+    napi_create_async_work(env, nullptr, resourceName,
+        FontZipExecute, FontZipComplete, ctx, &ctx->work);
+    napi_queue_async_work(env, ctx->work);
+    return promise;
+}
+
+napi_value ExtractFontZip(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2] = {};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 2) return nullptr;
+
+    const std::string zipPath = ReadNapiString(env, args[0]);
+    const std::string outDir = ReadNapiString(env, args[1]);
+    const FontZipResult r = ExtractFontZipImpl(zipPath, outDir);
+    return MakeFontZipResultObject(env, r);
 }

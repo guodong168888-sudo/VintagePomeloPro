@@ -10,3 +10,9 @@
  * 返回 { ok, fonts, bad, firstBadExt, error }。
  */
 napi_value ExtractFontZip(napi_env env, napi_callback_info info);
+
+/**
+ * 异步版：解压在后台线程执行，返回 Promise<FontZipExtractResult>，
+ * 避免大字体包在 UI 线程同步解压导致 AppFreeze/ANR。
+ */
+napi_value ExtractFontZipAsync(napi_env env, napi_callback_info info);

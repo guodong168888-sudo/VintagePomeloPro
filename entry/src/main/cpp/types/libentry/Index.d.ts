@@ -55,6 +55,8 @@ export interface FontZipExtractResult {
 }
 /** 解压字体 ZIP 到 outDir, 落盘一律使用 ASCII 安全名 (font-NNN.ext)。 */
 export const extractFontZip: (zipPath: string, outDir: string) => FontZipExtractResult;
+/** 异步解压（后台线程执行，避免 UI 线程 ANR），返回 Promise。 */
+export const extractFontZipAsync: (zipPath: string, outDir: string) => Promise<FontZipExtractResult>;
 export interface GuestProgramOptions {
   executablePath: string;
   argv: string[];

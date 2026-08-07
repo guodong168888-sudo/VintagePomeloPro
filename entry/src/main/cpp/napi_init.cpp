@@ -1000,6 +1000,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"activateWineSession", nullptr, ActivateWineSession, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runWineProgram", nullptr, RunWineProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"extractFontZip", nullptr, ExtractFontZip, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"extractFontZipAsync", nullptr, ExtractFontZipAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runGuestProgram", nullptr, RunGuestProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runHostProgram", nullptr, RunHostProgram, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runHostReplay", nullptr, RunHostReplay, nullptr, nullptr, nullptr, napi_default, nullptr},

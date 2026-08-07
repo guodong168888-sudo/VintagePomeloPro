@@ -473,16 +473,16 @@ struct SystemSettingsPage {
       await new Promise<void>((resolve: () => void) => setTimeout(resolve, 30));
       // picker 返回 file:// URI, 先经 fs 打开再复制到应用缓存, 解压用真实路径。
       const srcFile = fs.openSync(selected[0], fs.OpenMode.READ_ONLY);
-      fs.copyFileSync(srcFile.fd, cacheZip);
+      await fs.copyFile(srcFile.fd, cacheZip);
       fs.closeSync(srcFile);
-      fs.mkdirSync(tmpDir, true);
+      await fs.mkdir(tmpDir, true);
       this.fontImportStage = '正在解压字体包…';
       await new Promise<void>((resolve: () => void) => setTimeout(resolve, 30));
-      // native 解压: 原始条目名只参与扩展名/魔数判断, 落盘一律用
-      // ASCII 安全名 (font-NNN.ext), 彻底规避中文/GBK 文件名编码问题。
+      // native 异步解压: 后台线程执行, 避免大字体包阻塞 UI 线程导致
+      // AppFreeze/ANR 杀进程。原始条目名只参与扩展名/魔数判断。
       let result: FontZipExtractResult;
       try {
-        result = testNapi.extractFontZip(cacheZip, tmpDir) as FontZipExtractResult;
+        result = await testNapi.extractFontZipAsync(cacheZip, tmpDir) as FontZipExtractResult;
       } catch (_) {
         promptAction.showDialog({
           title: '解压失败',
@@ -521,7 +521,7 @@ struct SystemSettingsPage {
         return;
       }
       // native 落盘的 font-NNN.ext 均为合法字体, 直接列目录即可。
-      const fonts: string[] = fs.listFileSync(tmpDir);
+      const fonts: string[] = await fs.listFile(tmpDir);
       if (fonts.length === 0) {
         promptAction.showDialog({
           title: '字体包无效',
@@ -545,7 +545,7 @@ struct SystemSettingsPage {
         primaryButton: {
           value: '取消',
           action: (): void => {
-            this.removeDirRecursive(tmpDir);
+            this.removeDirRecursive(tmpDir).catch((): void => {});
             try { fs.unlinkSync(cacheZip); } catch (_) {}
             this.fontImporting = false;
           }
@@ -575,12 +575,11 @@ struct SystemSettingsPage {
       this.fontImportStage = '正在清除旧字体…';
       await new Promise<void>((resolve: () => void) => setTimeout(resolve, 30));
       await this.removeDirRecursive(fontsDir);
-      fs.mkdirSync(fontsDir, true);
+      await fs.mkdir(fontsDir, true);
       for (let index = 0; index < fonts.length; index++) {
-        fs.copyFileSync(tmpDir + '/' + fonts[index], fontsDir + '/' + fonts[index]);
+        await fs.copyFile(tmpDir + '/' + fonts[index], fontsDir + '/' + fonts[index]);
         this.fontImportProgress = Math.round((index + 1) / fonts.length * 100);
         this.fontImportStage = '正在写入字体 ' + (index + 1) + '/' + fonts.length;
-        // 让出主线程, 进度 UI 才能逐项刷新。
         await new Promise<void>((resolve: () => void) => setTimeout(resolve, 16));
       }
       await this.removeDirRecursive(tmpDir);
@@ -611,6 +610,8 @@ struct SystemSettingsPage {
 
   /** 导入字体后辅助用户做 App 级重启, 让 Wine 重新扫描 C:\windows\Fonts。 */
   private async restartAppAfterImport(): Promise<void> {
+    // restartApp 是原子化服务 (atomicservice) 专用 API；普通应用调用可能
+    // 不受支持而失败。先尝试，失败则关闭应用，用户重新打开后字体生效。
     try {
       const want: Want = {
         bundleName: 'com.vintage.pomelopro',
@@ -618,26 +619,35 @@ struct SystemSettingsPage {
       };
       await this.context.restartApp(want);
     } catch (_) {
-      promptAction.showToast({ message: '自动重启失败，请手动关闭应用后重新打开' });
+      try {
+        await this.context.terminateSelf();
+      } catch (_) {
+        promptAction.showToast({ message: '自动重启失败，请手动关闭应用后重新打开' });
+      }
     }
   }
 
   private async removeDirRecursive(path: string): Promise<void> {
     try {
-      if (!fs.accessSync(path)) return;
-      const entries = fs.listFileSync(path);
+      try {
+        await fs.access(path);
+      } catch (_) {
+        return;
+      }
+      const entries = await fs.listFile(path);
       for (const entry of entries) {
         const full = path + '/' + entry;
         try {
-          if (fs.statSync(full).isDirectory()) {
+          const stat = await fs.stat(full);
+          if (stat.isDirectory()) {
             await this.removeDirRecursive(full);
           } else {
-            fs.unlinkSync(full);
+            await fs.unlink(full);
           }
         } catch (_) {
         }
       }
-      fs.rmdirSync(path);
+      await fs.rmdir(path);
     } catch (_) {
     }
   }
