@@ -157,6 +157,13 @@ void WaylandServer::RaiseToplevel(uint32_t id, bool userInitiated) {
         toplevelMgr_.AddToZOrder(taskbarId_);
     }
     MarkDesktopRootDirtyLocked();
+    // PC 单窗口 (managed) 模式: Wine 内部 Z 序提升 (非 ArkTS 发起) 时
+    // 通知 ArkTS 同步提升对应的系统窗口, 避免黑窗口等其它 toplevel 的
+    // Ability 层叠盖住被 raise 的游戏窗口。ArkTS 发起的 raise 不回环
+    // (userInitiated=true), Pad 合成模式不发送 (OhosWindowPerToplevel=false)。
+    if (Policy().OhosWindowPerToplevel() && !userInitiated) {
+        FireToplevelEvent(id, "raise");
+    }
 }
 
 // -- 交互式窗口移动 (xdg_toplevel.move) --

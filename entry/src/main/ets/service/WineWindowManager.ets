@@ -51,6 +51,7 @@ export class WineWindowManager {
   private abilityContexts: Map<number, common.UIAbilityContext> = new Map();
   // toplevelId -> window.Window (用于直接操作 resize/title)
   private windows: Map<number, window.Window> = new Map();
+  private lastRaiseAt: Map<number, number> = new Map();
   // toplevelId -> window.WindowStage (用于创建 popup 子窗口)
   private windowStages: Map<number, window.WindowStage> = new Map();
   // toplevelId -> 已销毁标记 (用于竞态检测)
@@ -296,6 +297,7 @@ export class WineWindowManager {
     this.abilityContexts.delete(toplevelId);
     this.windows.delete(toplevelId);
     this.windowStages.delete(toplevelId);
+    this.lastRaiseAt.delete(toplevelId);
     this.pendingEvents.delete(toplevelId);
     this.pendingStarts.delete(toplevelId);
     this.surfaceSizes.delete(toplevelId);
@@ -328,6 +330,23 @@ export class WineWindowManager {
 
   getWindow(toplevelId: number): window.Window | undefined {
     return this.windows.get(toplevelId);
+  }
+
+  /**
+   * PC 单窗口模式: Wine 内部 Z 序提升某 toplevel 时, 同步提升对应的
+   * 系统 Ability 窗口, 避免其它窗口 (黑框等) 层叠盖住被 raise 的窗口。
+   * 300ms 节流防止游戏频繁切换窗口时连续 raise。
+   */
+  private raiseManagedWindow(id: number): void {
+    const now = Date.now();
+    const last = this.lastRaiseAt.get(id) ?? 0;
+    if (now - last < 300) return;
+    this.lastRaiseAt.set(id, now);
+    const win = this.getWindow(id);
+    if (!win) return;
+    win.raiseToAppTop().catch((err: Error) => {
+      hilog.warn(DOMAIN, TAG, '[MW] raise window #%{public}d failed: %{public}s', id, JSON.stringify(err));
+    });
   }
 
   // -- loadContent 回调: 窗口装饰就绪后校准标题栏高度 + 重设标题 --
@@ -444,6 +463,11 @@ export class WineWindowManager {
       case 'destroyed':
         hilog.info(DOMAIN, TAG, '[MW] -> onToplevelDestroyed(#%{public}d)', id);
         this.onToplevelDestroyed(id);
+        break;
+      case 'raise':
+        if (!this.isDesktopMode) {
+          this.raiseManagedWindow(id);
+        }
         break;
       case 'surface':
         // Desktop 模式: 非 root toplevel 事件跳过
