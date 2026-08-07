@@ -161,7 +161,9 @@ void WaylandServer::RaiseToplevel(uint32_t id, bool userInitiated) {
     // 通知 ArkTS 同步提升对应的系统窗口, 避免黑窗口等其它 toplevel 的
     // Ability 层叠盖住被 raise 的游戏窗口。ArkTS 发起的 raise 不回环
     // (userInitiated=true), Pad 合成模式不发送 (OhosWindowPerToplevel=false)。
-    if (Policy().OhosWindowPerToplevel() && !userInitiated) {
+    // 全屏窗口不发送: 全屏 Ability 由系统置顶, 无需 (且不应) 再 raiseToAppTop,
+    // 避免抢焦点/层级变化干扰全屏状态与输入坐标。
+    if (Policy().OhosWindowPerToplevel() && !userInitiated && !raisedFullscreen) {
         FireToplevelEvent(id, "raise");
     }
 }

@@ -57,6 +57,12 @@ export class WineWindowManager {
   private destroyed: Set<number> = new Set();
   // 正在启动中的 toplevel (防止重复 startAbility)
   private pendingStarts: Set<number> = new Set();
+  // 已完成 loadContent (窗口已显示) 的 toplevel
+  private loadedWindows: Set<number> = new Set();
+  // raise 事件先于 Ability 窗口注册到达时的待提升集合
+  // (第二次打开等场景: Wine 内部 raise 可能在 startAbility 完成前到达,
+  // 直接丢弃会让新窗口停留在旧层级, 表现为"鼠标点不到/坐标错位")
+  private pendingRaises: Set<number> = new Set();
   // 窗口就绪前到达的 pending 事件
   private pendingEvents: Map<number, Array<[string, string]>> = new Map();
   // toplevelId -> surface 物理尺寸 (用于标题栏高度校准)
@@ -296,8 +302,10 @@ export class WineWindowManager {
     this.abilityContexts.delete(toplevelId);
     this.windows.delete(toplevelId);
     this.windowStages.delete(toplevelId);
+    this.loadedWindows.delete(toplevelId);
     this.pendingEvents.delete(toplevelId);
     this.pendingStarts.delete(toplevelId);
+    this.pendingRaises.delete(toplevelId);
     this.surfaceSizes.delete(toplevelId);
     this.lastResizeTargetH.delete(toplevelId);
     this.lastResizeWineDim.delete(toplevelId);
@@ -347,6 +355,28 @@ export class WineWindowManager {
   onAfterLoadContent(toplevelId: number): void {
     const win = this.windows.get(toplevelId);
     if (!win) return;
+    this.loadedWindows.add(toplevelId);
+
+    // 窗口加载完成 (已显示) 后:
+    // 1) 补发窗口注册前到达的 raise 请求;
+    // 2) 窗口模式 (非全屏) 的窗口总是主动提升到系统顶层一次。
+    //    原因: 第二次打开窗口时 Wine 内部不触发 raise 事件 (RaiseToplevel
+    //    只发生在全屏切换/会话激活), ArkTS 收不到 "raise", 新窗口停留在
+    //    AMS 默认层级, 系统焦点留在桌面 → 表现为"窗口打开了但鼠标/键盘
+    //    交互不完整"。首次打开由 AMS 默认置前, 第二次起必须显式 raise。
+    if (this.pendingRaises.has(toplevelId)) {
+      this.pendingRaises.delete(toplevelId);
+      hilog.info(DOMAIN, TAG, '[MW] onAfterLoadContent #%{public}d: apply pending raise', toplevelId);
+      this.raiseManagedWindow(toplevelId);
+    } else if (!this.isDesktopMode) {
+      // 全屏窗口不主动 raise: 全屏 Ability 由系统置顶, raise 可能破坏
+      // 全屏状态与坐标映射 (与 C++ RaiseToplevel 的 !raisedFullscreen 一致)。
+      // 此时窗口可能尚未进入全屏 (游戏启动后才 set_fullscreen), 无法从
+      // ArkTS 侧可靠判断, 故只对"未收到任何 raise 事件"的新窗口补一次;
+      // 若窗口随后进入全屏, C++ 侧不再转发 raise, 不会再次干扰。
+      hilog.info(DOMAIN, TAG, '[MW] onAfterLoadContent #%{public}d: raise newly loaded window', toplevelId);
+      this.raiseManagedWindow(toplevelId);
+    }
 
     // 1. 通过 API 获取标题栏高度 (必须在 loadContent 之后)
     //    getWindowDecorHeight 只返回标题栏文本区, 不含窗口边框。
@@ -460,7 +490,14 @@ export class WineWindowManager {
         break;
       case 'raise':
         if (!this.isDesktopMode) {
-          this.raiseManagedWindow(id);
+          if (this.loadedWindows.has(id)) {
+            this.raiseManagedWindow(id);
+          } else {
+            // 窗口尚未完成加载 (Ability 启动竞态): 记入待提升集合,
+            // 由 onAfterLoadContent 在窗口显示后补发。
+            this.pendingRaises.add(id);
+            hilog.info(DOMAIN, TAG, '[MW] raise #%{public}d before window loaded → queued', id);
+          }
         }
         break;
       case 'surface':
