@@ -24,8 +24,10 @@ constexpr uint32_t kEocdSig = 0x06054b50;
 constexpr uint32_t kCentralSig = 0x02014b50;
 constexpr uint32_t kLocalSig = 0x04034b50;
 // 单个条目压缩数据 / 解压后上限, 防 zip bomb 与超大 TTC。
-constexpr size_t kMaxEntryBytes = 512u * 1024u * 1024u;
-constexpr size_t kMaxUncompBytes = 256u * 1024u * 1024u;
+// 收紧到 128MB/64MB: 正常字体单文件通常 < 64MB, 一次性 inflate 分配
+// 过大内存会在低内存设备上 OOM 闪退 (native 崩溃无法被 ArkTS catch)。
+constexpr size_t kMaxEntryBytes = 128u * 1024u * 1024u;
+constexpr size_t kMaxUncompBytes = 64u * 1024u * 1024u;
 
 struct FontZipResult {
     bool ok = false;

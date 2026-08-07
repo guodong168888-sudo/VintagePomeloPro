@@ -272,11 +272,16 @@ export struct VirtualInputOverlay {
   }
 
   private setRangeSelection(id: string, index: number): void {
-    const pattern = '|' + id + ':\\d+\\|';
     let tokens = this.rangeTokens;
-    try {
-      tokens = tokens.replace(new RegExp(pattern, 'g'), '');
-    } catch (_) {
+    // 用字符串方式删除该元素旧的选区 token，避免 RegExp 中未转义的
+    // '|'（正则“或”语义）导致旧 token 残留、indexOf 恒取第一个。
+    const prefix = '|' + id + ':';
+    let start = tokens.indexOf(prefix);
+    while (start >= 0) {
+      const valueEnd = tokens.indexOf('|', start + prefix.length);
+      if (valueEnd < 0) break;
+      tokens = tokens.substring(0, start) + tokens.substring(valueEnd);
+      start = tokens.indexOf(prefix);
     }
     if (index >= 0) tokens += '|' + id + ':' + index.toString() + '|';
     this.rangeTokens = tokens;
