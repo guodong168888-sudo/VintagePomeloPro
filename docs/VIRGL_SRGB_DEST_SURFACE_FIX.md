@@ -1,8 +1,13 @@
-# VirGL sRGB 偏色修复：dest_surface_srgb_control 组合的硬件编码
+# VirGL sRGB 偏色修复：统一回退（禁用硬件 sRGB 编码）
 
 本文档记录旧柚Pro（VintagePomeloPro）在 Maleoon 920/935 等 GPU 上
-VirGL（vrend/GLES 路径）画面偏黑的根因与修复，供其他代码线参照移植。
-修复原则：**按能力（扩展/格式组合）切换实现，不写死 GPU 型号**。
+VirGL（vrend/GLES 路径）画面偏黑/偏白的根因、两阶段修复与最终决策，
+供其他代码线参照移植。
+
+**最终决策（2026-08-08）**：无条件清除 `feat_srgb_write_control`，
+统一回退到 Maleoon 910（无硬件 sRGB 编码）的行为，所有游戏颜色与 910
+一致。代码中保留 FIXME 注释，未来再按 guest 采样语义实现硬件加速兼容
+（见第 7 节 memo）。
 
 ## 1. 问题现象
 
@@ -63,9 +68,35 @@ surf_fmt=R8G8B8X8_UNORM  res_fmt=R8G8B8X8_SRGB  supports_view=1  use_srgb=0
 910 上没有该 GL 扩展，cap 不上报，guest 全部用 UNORM/UNORM 组合，因此
 “误打误撞”颜色正常；920/935 有扩展反而触发错误路径。
 
+### 3.3 阶段一验证暴露的语义冲突（最终回退的原因）
+
+阶段一（组合编码 + 硬件编码）在 9020 上：灰色的果实、仙剑4 颜色正常，
+但**仙剑5 偏白**。对比两游戏 sampler view 完全一致：
+
+```
+SRGB 纹理 + UNORM view + GL_SKIP_DECODE_EXT
+```
+
+消费者语义却相反：
+
+- 仙剑5：按线性 L 消费纹理内容，期望存储里是不编码的线性值 →
+  组合编码后得到 f(L)，再被当作 L 使用 → 偏白。
+- 仙剑4：在 sRGB 空间合成，期望存储里是编码值 f(L) →
+  组合编码后正常。
+
+vrend 无法从 view 格式区分两类游戏：全局 sampler DECODE 会让仙剑4 偏黑，
+组合编码会让仙剑5 偏白；协议中现有 `srgb_decode` 只表达采样侧意图，
+也表达不了“内容编码意图”。因此硬件编码与 guest wined3d 语义存在根本冲突，
+最终选择统一回退。
+
 ## 4. 修复内容
 
-全部改动位于 `thirdparty/virglrenderer/src/vrend/`，能力驱动，不依赖 GPU 型号。
+全部改动位于 `thirdparty/virglrenderer/src/vrend/`。
+
+> 阶段一（vrend f9c35d7，已放弃）：组合编码 + 硬件编码，见 4.1–4.3。
+> 阶段二（最终）：无条件清除 `feat_srgb_write_control`，统一回退，见 4.4。
+> 阶段一代码仍保留在源码中（因 feat 清除永不触发），关键位置已加
+> `FIXME(硬件加速参考)` 注释，供未来恢复硬件加速时参考。
 
 ### 4.1 创建 sRGB 视图（`vrend_create_surface`）
 
@@ -126,32 +157,61 @@ guest 回落格式匹配 + shader 编码路径（与 910 行为一致）。
 shader 手动编码/手动 clear 转换在 `egl_image_srgb_import=true` 时跳过，
 避免“硬件编码 + shader 编码”双编码偏黑。
 
+### 4.4 最终方案：无条件清除 feat（阶段二）
+
+`vrend_renderer_init()` 中无条件执行：
+
+```c
+/* FIXME: 硬件 sRGB 编码 (GL_EXT_sRGB_write_control) 在 Maleoon 920/935
+ * 上与 guest (wined3d) 的 sRGB 语义冲突（详见本文档 3.3）。
+ * 当前统一按 Maleoon 910 的行为处理：清除 feat，host 不编码，
+ * SRGB 纹理内容保持线性 L，所有游戏与 910 一致（正常）。
+ * 未来若要兼容硬件加速，需按 guest 采样语义精确决定内容编码，
+ * 或扩展协议传递明确的 srgb_decode 意图。 */
+clear_feature(feat_srgb_write_control);
+```
+
+效果：guest 不再启用 `dest_surface_srgb_control`，回到格式匹配 +
+shader 手动编码路径，与 9010 行为完全一致。阶段一的 sRGB view /
+framebuffer `use_srgb` / EGL sRGB import 代码全部保留但不会触发。
+
 ## 5. 验证结果
 
-9020（Maleoon 920）修复后 framebuffer 状态日志：
+9020（Maleoon 920）统一回退后：
 
-```
-use_srgb=1  surf_fmt=R8G8B8X8_UNORM  res_fmt=R8G8B8X8_SRGB  supports_view=1
-use_srgb=0  surf_fmt=B8G8R8A8_UNORM  res_fmt=B8G8R8A8_UNORM  supports_view=1
-```
+- 仙剑5：不再偏白，颜色正常；
+- 仙剑4：不再偏黑，颜色正常；
+- 灰色的果实：不再偏黑，颜色正常；
+- 与 9010（Maleoon 910）行为一致。
 
-- 第一行：dest_srgb_control 组合 → `GL_FRAMEBUFFER_SRGB_EXT` 硬件编码生效。
-- 第二行：纯 UNORM 组合 → 不需要编码，`use_srgb=0`，行为正确。
-
-游戏画面颜色恢复正常，且走的是 **GPU 硬件 sRGB 编码路径**（无 shader 软件
-编码、无性能回退）。
+代价：需要编码的内容走 shader 手动编码（与 910 相同），无硬件 sRGB 编码，
+功能正确优先。
 
 ## 6. 移植注意事项
 
-- 修复逻辑以 `feat_srgb_write_control` 和格式组合为条件，**不要**按
+- **最终修复只有一处**：`vrend_renderer_init()` 无条件
+  `clear_feature(feat_srgb_write_control)`（含 FIXME 注释）。不要按
   `GL_RENDERER`/`GL_VENDOR` 字符串或 GPU 型号分支。
-- 未来更强的新 GPU 若同时支持 `GL_EXT_sRGB_write_control` 与
-  `EGL_EXT_image_gl_colorspace`，会自动走硬件编码；只有扩展确实缺失时才
-  回落软件路径。
-- 若其他代码线不包含 EGL image 导入路径，第 4.3 节可只保留
-  `feat_srgb_write_control` 的格式组合判断（4.1/4.2），EGL 相关条件按
-  `#ifdef HAVE_EPOXY_EGL_H` 保护。
+- 阶段一 4.1–4.3 是已放弃的历史实现，可不移植；若保留，须同步保留
+  `FIXME(硬件加速参考)` 注释，避免后续误以为硬件编码已启用。
 - 若 guest 侧 Mesa 版本不同，请确认 `VIRGL_CAP_SRGB_WRITE_CONTROL` 上报后
-  guest 确实会创建 UNORM surface + SRGB 资源（可用 framebuffer 状态日志核对
-  `surf_fmt/res_fmt`），再决定是否需要同样处理反向组合
-  （SRGB surface + UNORM 资源，该组合现有代码已由 SRGB view + use_srgb 覆盖）。
+  guest 会创建 UNORM surface + SRGB 资源；回退后该组合不再出现。
+
+## 7. FIXME / 未来硬件加速兼容策略（memo）
+
+当前统一禁用硬件 sRGB 编码，根因是 guest（wined3d）对同一
+“SRGB 纹理 + UNORM view + SKIP_DECODE”组合存在两种相反的内容语义：
+仙剑5 按线性 L 消费、仙剑4 在 sRGB 空间合成；vrend 无法从 view 格式区分，
+现有 `srgb_decode` 只表达采样侧意图，表达不了内容编码意图。
+
+未来若恢复硬件加速，可选方向：
+
+1. 扩展协议：传递明确的“内容编码意图”（结合 view / 采样语义），host 据此
+   决定 framebuffer 编码方式，只对语义明确的 draw 启用硬件编码。
+2. host 侧按 draw 动态切换 `GL_FRAMEBUFFER_SRGB_EXT` 与 sampler
+   `GL_SKIP_DECODE_EXT`/`GL_DECODE_EXT`，避免双编码。
+3. 在上层（guest Mesa / wined3d）统一内容格式约定，避免同一纹理被两种
+   语义消费。
+
+启用条件（必须全部通过）：9010/9020/9030 全系回归 仙剑4、仙剑5、
+灰色的果实 颜色正常；不能只按 GPU 型号开关。
