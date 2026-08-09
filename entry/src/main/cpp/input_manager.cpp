@@ -109,6 +109,10 @@ void InputManager::Shutdown() {
     keyboardFocusedToplevel_ = 0;
     keyboardFocusedSurface_ = nullptr;
     keyboardEntered_ = false;
+    hasLastLocal_ = false;
+    lastRelativeToplevel_ = 0;
+    lastRelativeSurface_ = nullptr;
+    relativeSpaceEpoch_.fetch_add(1);
     display_ = nullptr;
 
     OH_LOG_INFO(LOG_APP, "[Input] shutdown OK");
@@ -193,7 +197,14 @@ void InputManager::ResetPointerEnter() {
     pointerFocusedToplevel_ = 0;
     pointerFocusedSurface_ = nullptr;
     pointerEnterSerial_ = 0;
+    InvalidateRelativePointerBaseline("pointer-enter-reset");
     OH_LOG_INFO(LOG_APP, "[Input] ResetPointerEnter OK");
+}
+
+void InputManager::InvalidateRelativePointerBaseline(const char* reason) {
+    const uint64_t epoch = relativeSpaceEpoch_.fetch_add(1) + 1;
+    OH_LOG_INFO(LOG_APP, "[Input] relative baseline invalidated epoch=%{public}llu reason=%{public}s",
+                static_cast<unsigned long long>(epoch), reason ? reason : "unknown");
 }
 
 void InputManager::ResetKeyboardEnter() {
@@ -384,26 +395,43 @@ void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double p
         // PC 模式: wx/wy 即窗口局部坐标, 无需额外变换
     }
 
-    // 相对指针增量 (zwp_relative_pointer_v1): wine 相对模式 (隐藏光标 + 约束,
-    // wayland_pointer.c needs_relative) 丢弃绝对 motion, 光标位置 = 基线 +
-    // 增量累积。host 不做模式判断 — 绝对 motion 照常注入 (相对模式下被 wine
-    // 丢弃), 同时把注入坐标 (surface 局部空间) 差分出增量, 有 relative 对象
-    // 就入队 REL_MOTION 转发。对象存在 ⇔ wine 判定当前为相对模式。
-    // 基准只在 MOVE 时更新: PRESS/RELEASE 不发增量也不该移动基准, 否则按下
-    // 瞬间的坐标跳变会污染后续增量 (wine 侧位置并未因 press 变化)。
+    // 相对输入只按当前 surface 所属 client 判定，且只在同一坐标空间内差分。
+    // fullscreen/遮罩/目标 surface 或 relative-pointer 生命周期变化时，第一帧
+    // 仅重建基准，不能把坐标系跳变量注入成鼠标移动。
+    wl_resource* relativeSurface = targetSurf ? targetSurf : ws->GetSurfaceForToplevel(tl);
+    const bool relativeActive =
+        PointerExtras::GetInstance()->HasRelativePointerForSurface(relativeSurface);
     if (action == ACT_MOVE) {
         const double localX = wl_fixed_to_double(wx);
         const double localY = wl_fixed_to_double(wy);
-        if (hasLastLocal_) {
+        const uint64_t epoch = relativeSpaceEpoch_.load();
+        const bool sameSpace = relativeActive && hasLastLocal_ &&
+            lastRelativeToplevel_ == tl && lastRelativeSurface_ == relativeSurface &&
+            lastRelativeSpaceEpoch_ == epoch;
+        if (sameSpace) {
             const double dx = localX - lastLocalX_;
             const double dy = localY - lastLocalY_;
-            if ((dx != 0 || dy != 0) && PointerExtras::GetInstance()->HasRelativePointer())
-                Enqueue(InputEvent::REL_MOTION, 0, nullptr,
+            if (dx != 0 || dy != 0)
+                Enqueue(InputEvent::REL_MOTION, 0, relativeSurface,
                         wl_fixed_from_double(dx), wl_fixed_from_double(dy), 0, 0);
+        } else if (relativeActive) {
+            OH_LOG_INFO(LOG_APP,
+                        "[Input] relative baseline rebase tl=%{public}u surf=%{public}p epoch=%{public}llu",
+                        tl, static_cast<void*>(relativeSurface),
+                        static_cast<unsigned long long>(epoch));
         }
-        lastLocalX_ = localX;
-        lastLocalY_ = localY;
-        hasLastLocal_ = true;
+        if (relativeActive) {
+            lastLocalX_ = localX;
+            lastLocalY_ = localY;
+            lastRelativeToplevel_ = tl;
+            lastRelativeSurface_ = relativeSurface;
+            lastRelativeSpaceEpoch_ = epoch;
+            hasLastLocal_ = true;
+        } else {
+            hasLastLocal_ = false;
+            lastRelativeToplevel_ = 0;
+            lastRelativeSurface_ = nullptr;
+        }
     }
 
 
@@ -432,7 +460,7 @@ void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double p
             // → motion_internal, 相对模式只丢弃 motion 不丢弃 enter) — 点击
             // 瞬间游戏内光标瞬移到设备绝对位置 (实测偏移量 = 光标距屏幕
             // 中心的偏移)。相对模式聚焦持续有效, 无需重发 enter。
-            const bool relSkipEnter = PointerExtras::GetInstance()->HasRelativePointer() &&
+            const bool relSkipEnter = relativeActive &&
                                       pointerFocusedSurface_.load() != nullptr;
             if (!relSkipEnter) {
                 wl_resource* surf = targetSurf ? targetSurf : ws->GetSurfaceForToplevel(tl);
@@ -753,7 +781,7 @@ void InputManager::FlushQueue() {
                 if (ev.state == WL_POINTER_BUTTON_STATE_RELEASED)
                     WaylandServer::GetInstance()->EndMoveGrab();
                 InjectPointerButton(ev.btn_or_key, ev.state); break;
-            case InputEvent::REL_MOTION:  InjectRelativeMotion(ev.x, ev.y); break;
+            case InputEvent::REL_MOTION:  InjectRelativeMotion(ev.surface, ev.x, ev.y); break;
             case InputEvent::PTR_AXIS:    InjectPointerAxis(ev.axis, ev.axis_value); break;
             case InputEvent::KBD_ENTER:   InjectKeyboardEnter(ev.tl, ev.surface); break;
             case InputEvent::KBD_LEAVE:   InjectKeyboardLeave(); break;
@@ -807,12 +835,12 @@ void InputManager::InjectPointerEnter(uint32_t tl, wl_resource* surface, wl_fixe
     OH_LOG_INFO(LOG_APP, "[Input] InjectEnter OK sent=%{public}d", nSent);
 }
 
-void InputManager::InjectRelativeMotion(wl_fixed_t dx, wl_fixed_t dy) {
+void InputManager::InjectRelativeMotion(wl_resource* surface, wl_fixed_t dx, wl_fixed_t dy) {
     // 相对模式增量转发 (zwp_relative_pointer_v1)。wine 侧收到后累积进
     // wineserver 光标位置 (wayland_pointer.c relative_pointer_v1_relative_motion)。
     // 无 relative 对象 (绝对模式) 时 PointerExtras 内部空转。
     PointerExtras::GetInstance()->SendRelativeMotion(
-        wl_fixed_to_double(dx), wl_fixed_to_double(dy));
+        surface, wl_fixed_to_double(dx), wl_fixed_to_double(dy));
 }
 
 void InputManager::InjectPointerMotion(wl_fixed_t sx, wl_fixed_t sy) {

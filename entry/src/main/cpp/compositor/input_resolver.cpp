@@ -119,6 +119,17 @@ bool InputResolver::FindInputTargetAt(int x, int y, InputTarget& out)
             // 是 Wine 虚拟屏幕坐标 → 走 root, Wine explorer 内部处理点击分发
             if (layer.w <= 0 || layer.h <= 0) continue;
             const auto& sl = *layer.sub;
+            // Wine 的 OpenGL/Vulkan/软解码客户区 surface 是仅用于呈现的
+            // subsurface，并显式设置 empty input region（winewayland:
+            // "Let parent handle all pointer events"）。若仍按子 surface 命中，
+            // compositor 会先减一次客户区/标题栏偏移，而 Wine 收到 enter 后
+            // 又以该 HWND 的父 wayland_surface 坐标解释，鼠标就稳定偏上。
+            // 空输入区域必须穿透到下面的父 toplevel；真正的菜单 subsurface
+            // 没有该标记，仍保持独立 surface 命中与局部坐标。
+            auto* subData = sl.surface
+                ? static_cast<SurfaceData*>(wl_resource_get_user_data(sl.surface))
+                : nullptr;
+            if (subData && subData->inputRegionEmpty) continue;
             if (fsOk && layer.toplevelId == fullscreenId) {
                 // 主全屏窗口的 subsurface 绘制在窗口内容之上, 先命中 (同一
                 // fit 变换, 与渲染 blitSubsurface 全屏分支同几何)

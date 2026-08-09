@@ -219,8 +219,14 @@ struct InputOverlayPage {
     event.stopPropagation();
     for (let index = 0; index < event.changedTouches.length; index++) {
       const touch = event.changedTouches[index];
-      const x = vp2px(touch.x);
-      const y = vp2px(touch.y);
+      // This page lives in a retained transparent subwindow and the event can
+      // bubble from any virtual-control child. touch.x/y are relative to that
+      // hit component, so their origin changes with the child/layout that won
+      // hit testing. The overlay window itself is kept pixel-aligned with the
+      // Wine XComponent; windowX/windowY therefore provide the stable input
+      // space expected by native hit testing and letterbox unmapping.
+      const x = vp2px(touch.windowX);
+      const y = vp2px(touch.windowY);
       const source = this.directSource(touch.id);
       if (event.type === TouchType.Down) {
         this.directTouches.set(touch.id, {
@@ -540,8 +546,11 @@ struct InputOverlayPage {
     if (!this.eventGate.shouldHandleMouse(event.source, event.sourceTool)) return;
     event.stopPropagation();
     const source = 'external-mouse';
-    const x = vp2px(event.x);
-    const y = vp2px(event.y);
+    // MouseEvent.x/y are component-local too. Using the overlay-window
+    // coordinates keeps physical mouse input in the same space as direct
+    // touch, regardless of which transparent control forwarded the event.
+    const x = vp2px(event.windowX);
+    const y = vp2px(event.windowY);
     const button = mapMouseButton(event.button);
     if (event.action === MouseAction.Press) {
       if (button === 272) {

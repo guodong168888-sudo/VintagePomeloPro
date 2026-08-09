@@ -57,12 +57,12 @@ export class WineWindowManager {
   private destroyed: Set<number> = new Set();
   // 正在启动中的 toplevel (防止重复 startAbility)
   private pendingStarts: Set<number> = new Set();
-  // 已完成 loadContent (窗口已显示) 的 toplevel
+  // 系统窗口加载状态与 Wine 全屏状态分开记录。fullscreen 事件经常早于
+  // Ability/loadContent 到达，不能在 onAfterLoadContent 时猜测窗口模式。
   private loadedWindows: Set<number> = new Set();
-  // raise 事件先于 Ability 窗口注册到达时的待提升集合
-  // (第二次打开等场景: Wine 内部 raise 可能在 startAbility 完成前到达,
-  // 直接丢弃会让新窗口停留在旧层级, 表现为"鼠标点不到/坐标错位")
+  private fullscreenWindows: Set<number> = new Set();
   private pendingRaises: Set<number> = new Set();
+  private deferredRaiseTimers: Map<number, number> = new Map();
   // 窗口就绪前到达的 pending 事件
   private pendingEvents: Map<number, Array<[string, string]>> = new Map();
   // toplevelId -> surface 物理尺寸 (用于标题栏高度校准)
@@ -162,6 +162,11 @@ export class WineWindowManager {
     this.desktopAbilityForeground = false;
     this.desktopAbilityRootId = 0;
     this.destroyed.clear();
+    this.deferredRaiseTimers.forEach((timer: number): void => clearTimeout(timer));
+    this.deferredRaiseTimers.clear();
+    this.loadedWindows.clear();
+    this.fullscreenWindows.clear();
+    this.pendingRaises.clear();
     testNapi.setDesktopMode(this.isDesktopMode);
     hilog.info(DOMAIN, TAG, '[MW] setPresentationMode=%{public}s nativeDesktop=%{public}s',
       mode, this.isDesktopMode ? 'yes' : 'no');
@@ -303,9 +308,11 @@ export class WineWindowManager {
     this.windows.delete(toplevelId);
     this.windowStages.delete(toplevelId);
     this.loadedWindows.delete(toplevelId);
+    this.fullscreenWindows.delete(toplevelId);
+    this.pendingRaises.delete(toplevelId);
+    this.cancelDeferredRaise(toplevelId);
     this.pendingEvents.delete(toplevelId);
     this.pendingStarts.delete(toplevelId);
-    this.pendingRaises.delete(toplevelId);
     this.surfaceSizes.delete(toplevelId);
     this.lastResizeTargetH.delete(toplevelId);
     this.lastResizeWineDim.delete(toplevelId);
@@ -338,12 +345,39 @@ export class WineWindowManager {
     return this.windows.get(toplevelId);
   }
 
+  private cancelDeferredRaise(id: number): void {
+    const timer = this.deferredRaiseTimers.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.deferredRaiseTimers.delete(id);
+    }
+  }
+
   /**
-   * PC 单窗口模式: Wine 内部 Z 序提升某 toplevel 时, 同步提升对应的
-   * 系统 Ability 窗口, 避免其它窗口 (黑框等) 层叠盖住被 raise 的窗口。
-   * raiseToAppTop 幂等, Z 序每次变化都即时同步, 不做节流。
+   * Wine fullscreen 通常先于 Ability 注册到达。新窗口的系统层级提升延迟一
+   * 小段时间，并在执行前重新检查 fullscreen，避免 loadContent 与
+   * set_fullscreen 竞态造成窗口几何突变和鼠标坐标漂移。
    */
+  private scheduleManagedRaise(id: number, reason: string): void {
+    this.cancelDeferredRaise(id);
+    const timer = setTimeout((): void => {
+      this.deferredRaiseTimers.delete(id);
+      if (this.isDesktopMode || this.destroyed.has(id) || !this.loadedWindows.has(id) ||
+          this.fullscreenWindows.has(id)) {
+        hilog.info(DOMAIN, TAG,
+          '[MW] deferred raise #%{public}d skipped reason=%{public}s fullscreen=%{public}s loaded=%{public}s',
+          id, reason, this.fullscreenWindows.has(id) ? 'yes' : 'no',
+          this.loadedWindows.has(id) ? 'yes' : 'no');
+        return;
+      }
+      hilog.info(DOMAIN, TAG, '[MW] deferred raise #%{public}d apply reason=%{public}s', id, reason);
+      this.raiseManagedWindow(id);
+    }, 250);
+    this.deferredRaiseTimers.set(id, timer);
+  }
+
   private raiseManagedWindow(id: number): void {
+    if (this.fullscreenWindows.has(id)) return;
     const win = this.getWindow(id);
     if (!win) return;
     win.raiseToAppTop().catch((err: Error) => {
@@ -357,25 +391,15 @@ export class WineWindowManager {
     if (!win) return;
     this.loadedWindows.add(toplevelId);
 
-    // 窗口加载完成 (已显示) 后:
-    // 1) 补发窗口注册前到达的 raise 请求;
-    // 2) 窗口模式 (非全屏) 的窗口总是主动提升到系统顶层一次。
-    //    原因: 第二次打开窗口时 Wine 内部不触发 raise 事件 (RaiseToplevel
-    //    只发生在全屏切换/会话激活), ArkTS 收不到 "raise", 新窗口停留在
-    //    AMS 默认层级, 系统焦点留在桌面 → 表现为"窗口打开了但鼠标/键盘
-    //    交互不完整"。首次打开由 AMS 默认置前, 第二次起必须显式 raise。
-    if (this.pendingRaises.has(toplevelId)) {
+    if (this.fullscreenWindows.has(toplevelId)) {
       this.pendingRaises.delete(toplevelId);
-      hilog.info(DOMAIN, TAG, '[MW] onAfterLoadContent #%{public}d: apply pending raise', toplevelId);
-      this.raiseManagedWindow(toplevelId);
+      hilog.info(DOMAIN, TAG, '[MW] onAfterLoadContent #%{public}d: fullscreen, skip system raise', toplevelId);
+    } else if (this.pendingRaises.delete(toplevelId)) {
+      this.scheduleManagedRaise(toplevelId, 'pending-wine-raise');
     } else if (!this.isDesktopMode) {
-      // 全屏窗口不主动 raise: 全屏 Ability 由系统置顶, raise 可能破坏
-      // 全屏状态与坐标映射 (与 C++ RaiseToplevel 的 !raisedFullscreen 一致)。
-      // 此时窗口可能尚未进入全屏 (游戏启动后才 set_fullscreen), 无法从
-      // ArkTS 侧可靠判断, 故只对"未收到任何 raise 事件"的新窗口补一次;
-      // 若窗口随后进入全屏, C++ 侧不再转发 raise, 不会再次干扰。
-      hilog.info(DOMAIN, TAG, '[MW] onAfterLoadContent #%{public}d: raise newly loaded window', toplevelId);
-      this.raiseManagedWindow(toplevelId);
+      // 第二次打开窗口时 Wine 可能不再发 raise；延迟补一次，并让随后到达的
+      // fullscreen 事件有机会取消它。
+      this.scheduleManagedRaise(toplevelId, 'new-window-focus');
     }
 
     // 1. 通过 API 获取标题栏高度 (必须在 loadContent 之后)
@@ -488,15 +512,23 @@ export class WineWindowManager {
         hilog.info(DOMAIN, TAG, '[MW] -> onToplevelDestroyed(#%{public}d)', id);
         this.onToplevelDestroyed(id);
         break;
+      case 'fullscreen':
+        this.fullscreenWindows.add(id);
+        this.pendingRaises.delete(id);
+        this.cancelDeferredRaise(id);
+        hilog.info(DOMAIN, TAG, '[MW] fullscreen #%{public}d: cancel managed raise', id);
+        break;
+      case 'unfullscreen':
+        this.fullscreenWindows.delete(id);
+        hilog.info(DOMAIN, TAG, '[MW] unfullscreen #%{public}d', id);
+        break;
       case 'raise':
-        if (!this.isDesktopMode) {
+        if (!this.isDesktopMode && !this.fullscreenWindows.has(id)) {
           if (this.loadedWindows.has(id)) {
-            this.raiseManagedWindow(id);
+            this.scheduleManagedRaise(id, 'wine-z-order');
           } else {
-            // 窗口尚未完成加载 (Ability 启动竞态): 记入待提升集合,
-            // 由 onAfterLoadContent 在窗口显示后补发。
             this.pendingRaises.add(id);
-            hilog.info(DOMAIN, TAG, '[MW] raise #%{public}d before window loaded → queued', id);
+            hilog.info(DOMAIN, TAG, '[MW] raise #%{public}d before loadContent -> queued', id);
           }
         }
         break;

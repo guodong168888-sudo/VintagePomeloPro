@@ -50,7 +50,7 @@ public:
     // -- Wayland 线程注入 (由 FlushQueue 调用) --
     void InjectPointerEnter(uint32_t tl, wl_resource* surface, wl_fixed_t sx, wl_fixed_t sy);
     void InjectPointerMotion(wl_fixed_t sx, wl_fixed_t sy);
-    void InjectRelativeMotion(wl_fixed_t dx, wl_fixed_t dy);
+    void InjectRelativeMotion(wl_resource* surface, wl_fixed_t dx, wl_fixed_t dy);
     void InjectPointerButton(uint32_t button, uint32_t state);
     void InjectPointerAxis(int axis, wl_fixed_t value);
     void InjectPointerLeave();
@@ -61,6 +61,9 @@ public:
 
     // -- 状态重置 (Seat resource destroy 时调用) --
     void ResetPointerEnter();
+    // fullscreen/遮罩切换会改变物理坐标到 surface 局部坐标的映射。递增 epoch
+    // 让下一帧相对输入只重建基准、不发送坐标系跳变量。
+    void InvalidateRelativePointerBaseline(const char* reason);
     void ResetKeyboardEnter();
 
     // surface 销毁时重置焦点, 防止后续 Inject*Leave 引用已销毁的 surface
@@ -168,13 +171,18 @@ private:
     /*
      * 相对指针增量基准 (zwp_relative_pointer_v1): wine 相对模式 (隐藏光标 +
      * 约束, wayland_pointer.c needs_relative) 丢弃绝对 motion, 光标位置 =
-     * 基线 + 增量累积。host 不做模式判断 — 始终发绝对 motion, 同时把注入
-     * 坐标序列差分出增量, 有 relative 对象就入队 REL_MOTION。
+     * 基线 + 增量累积。host 只为当前 surface 所属 client 的 relative-pointer
+     * 生成 REL_MOTION；surface、toplevel 或坐标空间 epoch 改变时，首帧仅重建
+     * 基线，避免把全屏/遮罩切换造成的坐标跳变误当成鼠标增量。
      * 增量在 surface 局部坐标空间 (与绝对 motion 同空间, 见 SendPointerEvent)。
      * 仅 SendPointerEvent 所在线程 (ArkTS NAPI) 访问, 无需加锁。
      */
     double lastLocalX_ = 0, lastLocalY_ = 0;
     bool hasLastLocal_ = false;
+    uint32_t lastRelativeToplevel_ = 0;
+    wl_resource* lastRelativeSurface_ = nullptr;
+    uint64_t lastRelativeSpaceEpoch_ = 0;
+    std::atomic<uint64_t> relativeSpaceEpoch_{1};
 
     // 最近一次按下时刻 (ACT_RELEASE 的脉冲拉伸计时, 见 input_manager.cpp)
     std::atomic<uint32_t> lastPressMs_{0};

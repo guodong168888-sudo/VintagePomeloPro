@@ -157,12 +157,9 @@ void WaylandServer::RaiseToplevel(uint32_t id, bool userInitiated) {
         toplevelMgr_.AddToZOrder(taskbarId_);
     }
     MarkDesktopRootDirtyLocked();
-    // PC 单窗口 (managed) 模式: Wine 内部 Z 序提升 (非 ArkTS 发起) 时
-    // 通知 ArkTS 同步提升对应的系统窗口, 避免黑窗口等其它 toplevel 的
-    // Ability 层叠盖住被 raise 的游戏窗口。ArkTS 发起的 raise 不回环
-    // (userInitiated=true), Pad 合成模式不发送 (OhosWindowPerToplevel=false)。
-    // 全屏窗口不发送: 全屏 Ability 由系统置顶, 无需 (且不应) 再 raiseToAppTop,
-    // 避免抢焦点/层级变化干扰全屏状态与输入坐标。
+    // Managed-window 模式需要同步 Wine 与系统窗口的层序。全屏窗口由系统
+    // 置顶，额外 raiseToAppTop 会改变窗口几何/安全区并污染输入坐标，因此
+    // 只转发明确的非全屏、非 ArkTS 回环 raise。
     if (Policy().OhosWindowPerToplevel() && !userInitiated && !raisedFullscreen) {
         FireToplevelEvent(id, "raise");
     }
@@ -341,13 +338,17 @@ void WaylandServer::SetToplevelMaximized(uint32_t id) {
 void WaylandServer::SetToplevelFullscreen(uint32_t id, bool on) {
     OH_LOG_INFO(LOG_APP, "[MW] SetToplevelFullscreen id=%{public}u on=%{public}s",
                 id, on ? "yes" : "no");
-    auto lk = toplevelMgr_.Lock();
-    // Ensure 建档语义同 SetToplevelMinimized: pre-commit 全屏同样记录状态。
-    // 状态转换 (置位 + 锚定 + preFs 快照 + 不变式断言) 收在
-    // ToplevelState::ApplyFullscreen
-    auto& st = toplevelMgr_.EnsureToplevelLocked(id);
-    st.ApplyFullscreen(on);
-    MarkDesktopRootDirtyLocked();
+    {
+        auto lk = toplevelMgr_.Lock();
+        // Ensure 建档语义同 SetToplevelMinimized: pre-commit 全屏同样记录状态。
+        // 状态转换 (置位 + 锚定 + preFs 快照 + 不变式断言) 收在
+        // ToplevelState::ApplyFullscreen
+        auto& st = toplevelMgr_.EnsureToplevelLocked(id);
+        st.ApplyFullscreen(on);
+        MarkDesktopRootDirtyLocked();
+    }
+    InputManager::GetInstance()->InvalidateRelativePointerBaseline(
+        on ? "fullscreen-enter" : "fullscreen-exit");
 }
 
 void WaylandServer::ForceToplevelRedraw(uint32_t id) {

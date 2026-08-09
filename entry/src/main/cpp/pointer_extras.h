@@ -40,11 +40,11 @@ public:
     // surface 已销毁的约束条目视为不存在 (惰性失效)
     ConstraintType ConstraintFor(wl_resource* surface);
 
-    // 相对指针增量广播: wine 有 relative_pointer 对象时把输入增量发过去。
-    // 对象存在 ⇔ wine 判定当前为相对模式 (隐藏光标 + 约束); 无对象 = 绝对
-    // 模式, 此函数空转。Wayland 线程调用 (事件发送必须在该线程)。
-    void SendRelativeMotion(double dx, double dy);
-    bool HasRelativePointer() const;
+    // 只查询/发送给当前输入 surface 所属 Wayland client。多个 Wine 窗口可
+    // 短暂并存 relative_pointer 对象，按全局“是否存在”判断会把旧窗口的
+    // 相对模式误套到新窗口，造成光标漂移。
+    void SendRelativeMotion(wl_resource* surface, double dx, double dy);
+    bool HasRelativePointerForSurface(wl_resource* surface) const;
 
     // -- 协议接口实现 (public: wl 接口表在类外初始化, 与 wayland_server.h 同例) --
     // zwp_pointer_constraints_v1
@@ -80,12 +80,17 @@ private:
         double hintX = 0, hintY = 0;
     };
 
-    // mutable: const 查询接口 (HasRelativePointer) 也要锁
+    struct RelativePointer {
+        wl_resource* resource = nullptr;
+        wl_resource* pointer = nullptr;
+        wl_client* client = nullptr;
+    };
+
+    // mutable: const 查询接口也要锁
     mutable std::mutex mutex_;
     std::vector<Constraint> constraints_;
-    // 已创建的 zwp_relative_pointer_v1 对象 (wine 相对模式时存在, 至多一个:
-    // wine 用 process_wayland.pointer.wl_pointer 固定绑定; 多对象时全部广播)
-    std::vector<wl_resource*> relativePointers_;
+    // 同一 client 可短暂存在多个对象；只向当前输入 surface 的 client 广播。
+    std::vector<RelativePointer> relativePointers_;
 
     // 约束资源析构共通处理: 摘掉条目, 如有 hint 则把逻辑指针移到 hint
     static void OnConstraintResourceDestroyed(wl_resource* r);

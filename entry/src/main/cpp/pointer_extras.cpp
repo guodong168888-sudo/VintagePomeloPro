@@ -214,38 +214,56 @@ void PointerExtras::relmgr_get_relative_pointer(wl_client* client, wl_resource*,
     wl_resource* res = wl_resource_create(client, &zwp_relative_pointer_v1_interface, 1, id);
     wl_resource_set_implementation(res, &kRelativeImpl, nullptr,
         [](wl_resource* r) { OnRelativePointerDestroyed(r); });
+    size_t total = 0;
     {
         std::lock_guard<std::mutex> lk(self->mutex_);
-        self->relativePointers_.push_back(res);
+        self->relativePointers_.push_back({res, pointer, client});
+        total = self->relativePointers_.size();
     }
     OH_LOG_INFO(LOG_APP, "[PtrExt] relative_pointer created (bind ptr=%{public}p, total=%{public}zu)",
-                static_cast<void*>(pointer), self->relativePointers_.size());
+                static_cast<void*>(pointer), total);
+    InputManager::GetInstance()->InvalidateRelativePointerBaseline("relative-pointer-created");
 }
 
 void PointerExtras::OnRelativePointerDestroyed(wl_resource* r) {
     auto* self = GetInstance();
-    std::lock_guard<std::mutex> lk(self->mutex_);
-    auto& v = self->relativePointers_;
-    v.erase(std::remove(v.begin(), v.end(), r), v.end());
-    OH_LOG_INFO(LOG_APP, "[PtrExt] relative_pointer destroyed (remaining=%{public}zu)", v.size());
+    size_t remaining = 0;
+    {
+        std::lock_guard<std::mutex> lk(self->mutex_);
+        auto& v = self->relativePointers_;
+        v.erase(std::remove_if(v.begin(), v.end(),
+                               [r](const RelativePointer& entry) {
+                                   return entry.resource == r;
+                               }), v.end());
+        remaining = v.size();
+    }
+    OH_LOG_INFO(LOG_APP, "[PtrExt] relative_pointer destroyed (remaining=%{public}zu)", remaining);
+    InputManager::GetInstance()->InvalidateRelativePointerBaseline("relative-pointer-destroyed");
 }
 
-bool PointerExtras::HasRelativePointer() const {
+bool PointerExtras::HasRelativePointerForSurface(wl_resource* surface) const {
+    if (!surface || !WaylandServer::GetInstance()->IsSurfaceAlive(surface)) return false;
+    wl_client* client = wl_resource_get_client(surface);
     std::lock_guard<std::mutex> lk(mutex_);
-    return !relativePointers_.empty();
+    return std::any_of(relativePointers_.begin(), relativePointers_.end(),
+                       [client](const RelativePointer& entry) {
+                           return entry.client == client;
+                       });
 }
 
-void PointerExtras::SendRelativeMotion(double dx, double dy) {
+void PointerExtras::SendRelativeMotion(wl_resource* surface, double dx, double dy) {
+    if (!surface || !WaylandServer::GetInstance()->IsSurfaceAlive(surface)) return;
+    wl_client* client = wl_resource_get_client(surface);
     std::lock_guard<std::mutex> lk(mutex_);
-    if (relativePointers_.empty()) return;
     // 无加速输入设备: unaccel = accel 同值; utime 用单调时钟微秒 (wine 侧
     // 只读增量, 不读时间戳, 发 0 亦可 — 保留时间供诊断)
     const uint64_t us = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
     const wl_fixed_t fdx = wl_fixed_from_double(dx);
     const wl_fixed_t fdy = wl_fixed_from_double(dy);
-    for (auto* res : relativePointers_) {
-        zwp_relative_pointer_v1_send_relative_motion(res,
+    for (const auto& entry : relativePointers_) {
+        if (entry.client != client) continue;
+        zwp_relative_pointer_v1_send_relative_motion(entry.resource,
             static_cast<uint32_t>(us >> 32), static_cast<uint32_t>(us & 0xffffffffu),
             fdx, fdy, fdx, fdy);
     }
