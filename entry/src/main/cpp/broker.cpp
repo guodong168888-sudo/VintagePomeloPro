@@ -362,8 +362,9 @@ static void BrokerThreadFunc()
             OH_LOG_ERROR(LOG_APP, "[Broker] accept() failed: %{public}s", strerror(errno));
             break;
         }
-        // 处理请求（同步：每个请求一个接一个处理）
-        HandleRequest(conn_fd);
+        // 每个连接独立线程处理：一个 appspawn 慢请求不再阻塞其它程序启动，
+        // 客户端 recv 总能等到自己这条请求的回应（成功或明确失败）。
+        std::thread([](int fd) { HandleRequest(fd); }, conn_fd).detach();
     }
 
     close(server_fd);

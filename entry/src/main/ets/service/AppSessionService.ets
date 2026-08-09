@@ -47,6 +47,7 @@ export class AppSessionService {
   private context: common.UIAbilityContext | null = null;
   private sessions: Map<string, RuntimeSession> = new Map<string, RuntimeSession>();
   private pendingToplevels: PendingToplevelAssociation[] = [];
+  private desktopRootWaiters: Array<(session: RuntimeSession | null) => void> = [];
 
   static getInstance(): AppSessionService {
     if (!AppSessionService.instance) AppSessionService.instance = new AppSessionService();
@@ -59,6 +60,12 @@ export class AppSessionService {
       (sessionId: string, clientPid: number, toplevelId: number): void => {
         this.associateToplevel(sessionId, clientPid, toplevelId);
       });
+    // 引擎明确失败/停止是桌面根等待的终止信号：条件被破坏，立即放行等待者。
+    WineEngineService.getInstance().subscribe((state: EngineState): void => {
+      if (state === EngineState.ERROR || state === EngineState.STOPPED) {
+        this.settleDesktopRootWaiters(null);
+      }
+    });
   }
 
   resolveMode(app: AppDescriptor, settings: GlobalSettings): DisplayMode {
@@ -138,7 +145,7 @@ export class AppSessionService {
       // 首次启动时 native launch thread 正在创建 explorer，不能抢跑出第二个 shell。
       if (!wasDesktopReady) return this.ensureDesktopSession();
       // 已就绪引擎也给短暂的 surface 重建留出时间；稳定缺 root 才恢复 shell。
-      const settlingDesktop = await this.waitForDesktopRoot(8);
+      const settlingDesktop = await this.waitForDesktopRoot();
       if (settlingDesktop && settlingDesktop.toplevelId > 0) return settlingDesktop;
       const restarted = engine.restartDesktopShell();
       if (!restarted || restarted.pid <= 0) return null;
@@ -180,7 +187,7 @@ export class AppSessionService {
         // 首次启动：native launch 线程正在创建 explorer，不能抢跑第二个 shell。
         desktopSession = await this.ensureDesktopSession();
       } else {
-        const settling = await this.waitForDesktopRoot(8);
+        const settling = await this.waitForDesktopRoot();
         desktopSession = (settling && settling.toplevelId > 0) ? settling : null;
         if (!desktopSession) {
           const restarted = engine.restartDesktopShell();
@@ -419,6 +426,9 @@ export class AppSessionService {
       if (matched.pid <= 0 && clientPid > 0) matched.pid = clientPid;
       if (sessionId === DESKTOP_SESSION_ID || matched.toplevelId === 0) matched.toplevelId = toplevelId;
       matched.state = SessionState.RUNNING;
+      if (sessionId === DESKTOP_SESSION_ID && matched.toplevelId > 0) {
+        this.settleDesktopRootWaiters(matched);
+      }
     } else if (toplevelId > 0) {
       this.pendingToplevels.push({ sessionId: sessionId, clientPid: clientPid, toplevelId: toplevelId });
       if (this.pendingToplevels.length > 16) this.pendingToplevels.shift();
@@ -448,15 +458,15 @@ export class AppSessionService {
   }
 
   private async ensureDesktopSession(): Promise<RuntimeSession | null> {
-    // On ARM phones/tablets the first Explorer surface can arrive well after
-    // appspawn accepted the process, especially during first prefix setup or
-    // a slow Explorer desktop-root handoff. Ten seconds made the first card fail while a retry a
-    // moment later succeeded. Keep the wait bounded but cover the slow path.
-    return this.waitForDesktopRoot(120);
+    // 桌面根注册事件或引擎失败信号是唯二的终止条件；首次 prefix 初始化慢
+    // 只会让等待更久，不会把“还在正常初始化”误判成失败。
+    return this.waitForDesktopRoot();
   }
 
-  /** 等待 explorer surface 关联为 desktop root；不创建或重置任何 Wine 资源。 */
-  private async waitForDesktopRoot(rounds: number): Promise<RuntimeSession | null> {
+  /** 等待 explorer surface 关联为 desktop root；不创建或重置任何 Wine 资源。
+   *  事件驱动：root 注册（created 事件或状态同步发现）即成功放行，引擎
+   *  ERROR/STOPPED 即明确失败；不依赖固定秒数轮询。 */
+  private async waitForDesktopRoot(): Promise<RuntimeSession | null> {
     const existing = this.sessions.get(DESKTOP_SESSION_ID) ?? null;
     if (existing && existing.toplevelId > 0) {
       if (!WineWindowManager.getInstance().isDesktopAbilityForeground(existing.toplevelId)) await this.resume(existing);
@@ -467,18 +477,26 @@ export class AppSessionService {
       if (!WineWindowManager.getInstance().isDesktopAbilityForeground(session.toplevelId)) await this.resume(session);
       return session;
     }
-    const pending = session;
-    for (let index = 0; index < rounds; index++) {
-      await new Promise<void>((resolve: () => void): void => {
-        setTimeout((): void => resolve(), 250);
-      });
-      session = this.syncDesktopSessionFromNative();
-      if (session && session.toplevelId > 0) {
-        if (!WineWindowManager.getInstance().isDesktopAbilityForeground(session.toplevelId)) await this.resume(session);
-        return session;
+    return new Promise<RuntimeSession | null>((resolve: (result: RuntimeSession | null) => void): void => {
+      const finish = (result: RuntimeSession | null): void => {
+        const index = this.desktopRootWaiters.indexOf(finish);
+        if (index >= 0) this.desktopRootWaiters.splice(index, 1);
+        resolve(result);
+      };
+      this.desktopRootWaiters.push(finish);
+      // 订阅后再查一次，避免 root 在“检查”与“订阅”之间注册而漏掉事件。
+      const recheck = this.syncDesktopSessionFromNative();
+      if (recheck && recheck.toplevelId > 0) {
+        finish(recheck);
+        return;
       }
-    }
-    return session ?? pending ?? null;
+      const engineState = WineEngineService.getInstance().getState();
+      if (engineState !== EngineState.READY &&
+        engineState !== EngineState.PREPARING &&
+        engineState !== EngineState.SWITCHING) {
+        finish(null);
+      }
+    });
   }
 
   private syncDesktopSessionFromNative(): RuntimeSession | null {
@@ -497,7 +515,15 @@ export class AppSessionService {
       this.sessions.delete(DESKTOP_SESSION_ID);
       return null;
     }
-    return this.upsertDesktopSession(nativeSession.toplevelId, nativeSession.pid);
+    const session = this.upsertDesktopSession(nativeSession.toplevelId, nativeSession.pid);
+    if (session.toplevelId > 0) this.settleDesktopRootWaiters(session);
+    return session;
+  }
+
+  private settleDesktopRootWaiters(session: RuntimeSession | null): void {
+    const waiters = this.desktopRootWaiters;
+    this.desktopRootWaiters = [];
+    waiters.forEach((resolve: (result: RuntimeSession | null) => void): void => resolve(session));
   }
 
   private upsertDesktopSession(toplevelId: number, pid: number): RuntimeSession {

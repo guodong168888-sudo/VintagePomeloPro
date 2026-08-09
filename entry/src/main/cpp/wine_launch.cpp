@@ -398,8 +398,27 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
         return false;
     }
 
+    // 图形栈必须是真实前置条件：VirGL receiver 未激活时继续启动只会得到一个
+    // 无法渲染的桌面/窗口。直接报告具体原因，而不是在 SHM 回退里带病运行。
+    // EnsureStarted 已同步等待 vtest socket（上限 4s），因此 GetState 的结果
+    // 就是当前真实条件：Virgl=就绪，Shm+lastError=具体缺失项。
+    {
+        auto& gb = winehua::GraphicsBroker::GetInstance();
+        const winehua::GraphicsBackendState gfxState = gb.GetState();
+        if (gfxState.active != winehua::GraphicsBackend::Virgl) {
+            OH_LOG_ERROR(LOG_APP,
+                         "[Launch-Async] graphics backend unavailable: active=%{public}s error=%{public}s",
+                         winehua::GraphicsBroker::BackendName(gfxState.active),
+                         gfxState.lastError.c_str());
+            if (gStateTsfn)
+                napi_call_threadsafe_function(gStateTsfn, strdup("wine-failed"), napi_tsfn_blocking);
+            return false;
+        }
+    }
+
     // -- wineserver via NCP --
     // wineserver 走 WineserverMain 入口 (wine_child.cpp), __env= 覆盖会被解析
+    int32_t wsChildPid = -1;
     {
         std::string wsEntryParams = p->homeDir + "|" + p->winehuaBin + "|wineserver|-f|-p";
         OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver args=%{public}s", wsEntryParams.c_str());
@@ -407,7 +426,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
         wsArgs.entryParams = const_cast<char*>(wsEntryParams.c_str());
         NativeChildProcess_Options wsOpts = {};
         wsOpts.isolationMode = NCP_ISOLATION_MODE_NORMAL;
-        int32_t wsChildPid = -1;
+        wsChildPid = -1;
         auto wsRet = OH_Ability_StartNativeChildProcess(
             "libwine_child.so:WineserverMain", wsArgs, wsOpts, &wsChildPid);
         if (wsRet != NCP_NO_ERROR) {
@@ -600,18 +619,50 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
             AddProcess(exPid, "@engine/explorer", -1, "@engine/explorer");
         }
         ws->PromotePendingDesktopRoot();
-        /* StartNativeChildProcess returning only means that appspawn accepted
-         * the Explorer request. On a warm prefix the child can still need
-         * several seconds to connect to wineserver and commit its desktop
-         * surface. Do not publish wine-ready until that stable launch boundary
-         * exists, otherwise an automatic game can race Wine's own bootstrap
-         * and die before DXGI initialization. */
-        if (exRet == NCP_NO_ERROR &&
-            !WaitFor("explorer desktop root", [ws]() {
-                return ws->GetDesktopRootToplevelId() != 0;
-            }, 15000, 100)) {
-            OH_LOG_WARN(LOG_APP, "[Launch-Async] explorer desktop root not ready; "
-                        "continuing after bounded readiness wait");
+        if (exRet != NCP_NO_ERROR) {
+            OH_LOG_ERROR(LOG_APP, "[Launch-Async] explorer desktop spawn failed ret=%{public}d",
+                         (int)exRet);
+            if (gStateTsfn)
+                napi_call_threadsafe_function(gStateTsfn, strdup("wine-failed"), napi_tsfn_blocking);
+            return false;
+        }
+        /* 桌面根是 wine-ready 的真实前置条件，不用固定秒数判定成功/失败：
+         * - root toplevel 注册 → 条件满足，立即放行；
+         * - explorer 或 wineserver 核心进程死亡 → 条件被破坏，明确失败；
+         * 仅“进程活着但 root 永不注册”这种无法用布尔条件表达的挂死由看门狗
+         * 兜底（不作为成功/失败判定依据，只防永久卡死）。 */
+        {
+            constexpr int kRootCheckIntervalMs = 100;
+            constexpr int kRootWatchdogMs = 10 * 60 * 1000;
+            int waitedMs = 0;
+            while (ws->GetDesktopRootToplevelId() == 0) {
+                if (!IsProcessAliveNotZombie(exPid)) {
+                    OH_LOG_ERROR(LOG_APP,
+                                 "[Launch-Async] explorer desktop died before registering desktop root");
+                    if (gStateTsfn)
+                        napi_call_threadsafe_function(gStateTsfn, strdup("wine-failed"), napi_tsfn_blocking);
+                    return false;
+                }
+                if (wsChildPid > 0 && !IsProcessAliveNotZombie(wsChildPid)) {
+                    OH_LOG_ERROR(LOG_APP,
+                                 "[Launch-Async] wineserver died before explorer registered desktop root");
+                    if (gStateTsfn)
+                        napi_call_threadsafe_function(gStateTsfn, strdup("wineserver-failed"), napi_tsfn_blocking);
+                    return false;
+                }
+                if (waitedMs >= kRootWatchdogMs) {
+                    OH_LOG_ERROR(LOG_APP,
+                                 "[Launch-Async] explorer alive but desktop root never registered (%d s), abort",
+                                 waitedMs / 1000);
+                    if (gStateTsfn)
+                        napi_call_threadsafe_function(gStateTsfn, strdup("wine-failed"), napi_tsfn_blocking);
+                    return false;
+                }
+                usleep(kRootCheckIntervalMs * 1000);
+                waitedMs += kRootCheckIntervalMs;
+            }
+            OH_LOG_INFO(LOG_APP, "[Launch-Async] explorer desktop root ready tl=%{public}d",
+                        ws->GetDesktopRootToplevelId());
         }
     }
     else

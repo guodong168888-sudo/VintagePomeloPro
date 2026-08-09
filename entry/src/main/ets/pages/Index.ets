@@ -99,7 +99,10 @@ struct Index {
   private refreshTimer: number = -1;
   private disposeWindowInsetObserver: (() => void) | null = null;
   private catalogInitialized: boolean = false;
-  private launchInProgress: boolean = false;
+  // 启动请求串行队列：后续点击加入队列，条件满足（会话建立/明确失败）后
+  // 依次放行，不再用“正在处理上一次启动”拒绝用户，也不会被一次未完成的
+  // 启动永久锁死（每次启动都以真实事件终止）。
+  private launchChain: Promise<void> = Promise.resolve();
 
   private isPhone(): boolean {
     return DeviceCapabilityPolicy.isPhoneDevice() || this.breakpoint === 'xs' || this.breakpoint === 'sm';
@@ -494,14 +497,10 @@ struct Index {
     return coverHeight + 71 + 16;
   }
 
-  private async launch(app: AppDescriptor): Promise<void> {
-    if (this.launchInProgress) {
-      promptAction.showToast({ message: '正在处理上一次启动，请稍候' });
-      return;
-    }
+  private launch(app: AppDescriptor): Promise<void> {
     if (!app.available) {
       this.openAppSettings(app, true);
-      return;
+      return Promise.resolve();
     }
     const conflict = AppSessionService.getInstance().getLaunchConflict(app, this.settings);
     if (conflict !== LaunchConflictKind.NONE) {
@@ -515,13 +514,20 @@ struct Index {
           action: (): void => { this.switchAndLaunch(app); }
         }
       });
-      return;
+      return Promise.resolve();
     }
-    await this.doLaunch(app, false);
+    return this.enqueueLaunch(app, false);
   }
 
-  private async switchAndLaunch(app: AppDescriptor): Promise<void> {
-    await this.doLaunch(app, true);
+  private switchAndLaunch(app: AppDescriptor): Promise<void> {
+    return this.enqueueLaunch(app, true);
+  }
+
+  private enqueueLaunch(app: AppDescriptor, switchMode: boolean): Promise<void> {
+    const run = this.launchChain.then((): Promise<void> => this.doLaunch(app, switchMode));
+    // 单次启动失败不能污染队列：后续点击仍按序执行。
+    this.launchChain = run.catch((): void => {});
+    return run;
   }
 
   private async doLaunch(app: AppDescriptor, switchMode: boolean): Promise<void> {
@@ -535,8 +541,6 @@ struct Index {
       this.refreshRunningState();
       return;
     }
-    if (this.launchInProgress) return;
-    this.launchInProgress = true;
     let session: RuntimeSession | null = null;
     try {
       if (switchMode) {
@@ -555,7 +559,6 @@ struct Index {
     } catch (_) {
       promptAction.showToast({ message: '程序启动异常，请稍后重试' });
     } finally {
-      this.launchInProgress = false;
       this.refreshRunningState();
     }
   }
