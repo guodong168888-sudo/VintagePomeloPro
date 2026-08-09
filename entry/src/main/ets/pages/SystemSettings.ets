@@ -1924,7 +1924,7 @@ struct SystemSettingsPage {
           .borderRadius(20)
           .shadow({ radius: 24, color: '#66000000', offsetX: 0, offsetY: 10 })
           .hitTestBehavior(HitTestMode.Block)
-          .id('wine-engine-progress-panel')
+          .id('wine-engine-settings-progress-panel')
         }
         .width('100%').height('100%')
         .alignContent(Alignment.Center)
