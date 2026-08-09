@@ -6,6 +6,24 @@
 
 > **同步基线标记**：最新合并到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `1036ada`）。下次同步先 `git log 1036ada..origin/master --oneline`，避免重复合并。
 
+### 2026-08-09 版本 1.1.7：sRGB、游戏鼠标与虚拟输入方案
+
+- 上游核对：`git fetch origin` 后 WineHua `master` 仍为 `1036ada`，本轮没有新的
+  WineHua 主仓提交需要合并。
+- VirGL：通用修复提交到 `winehua/virglrenderer`
+  `fix/vrend-srgb-write-policy` @ `f49d7da6`；父仓 `a8c9d68` 更新 gitlink。
+  策略由首个相关 framebuffer 一次性选择 RGBA preserve 或 XRGB 软件编码，后到
+  的无关附件不能反向污染。无游戏、路径、GPU 或设备特判。
+- 游戏鼠标：`b8167cf` 统一 overlay window 坐标；empty-input 呈现 subsurface
+  穿透父 toplevel；relative-pointer 按 client/surface 路由并在坐标空间切换时
+  首帧 rebase；fullscreen 取消/延迟系统窗口 raise。
+- 虚拟输入：`7b1c391` 增加通用、全键盘、RPG、射击、动作五套模板；方案弹窗、
+  新建命名、重命名/删除、自适应手机/平板布局，以及 Shift/Ctrl 锁定模式。
+- 验证：输入模型测试通过；宿主几何 52 项通过；Docker ARM64 API 23 HAP 构建
+  成功并覆盖安装；用户真机确认 PAL4、PAL5（含房屋材质）、灰色的果实、游戏内
+  鼠标和新输入方案均正常。完整维护边界见
+  `PRIVATE_1_1_7_RELEASE_AND_MERGE_MEMO.md`。
+
 ### 2026-08-06 合成器 Layer 重构全链合并（d9c667e..1036ada + 先前暂缓链）
 
 - 分支：`feature/20260803-master-sync`（基于 1.1.5 前 `ac788e0`）。

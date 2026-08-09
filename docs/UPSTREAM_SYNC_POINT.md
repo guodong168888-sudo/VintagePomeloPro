@@ -9,9 +9,9 @@
 | 上游分支 | `master` |
 | **最后合并的上游 SHA** | `1036ada`（2026-08-06，文档：固化全屏判定两套语义；其后无新提交） |
 | 合并方式 | 选择性 cherry-pick / 手动移植 + 等价内容人工核对 |
-| 本地对应分支 | `sync/master-dxvk-1103` → `private/wine-engine-app` |
-| 本地对应提交 | `6fdb30d`（feature/20260803-master-sync，1.1.5 / 1001005） |
-| 核对日期 | 2026-08-06 |
+| 本地对应分支 | `private/wine-engine-app` |
+| 本地对应提交 | `7b1c391`（1.1.7 功能提交；发布备忘见 `PRIVATE_1_1_7_RELEASE_AND_MERGE_MEMO.md`） |
+| 核对日期 | 2026-08-09 |
 
 ## 已核对的上游增量（d9c667e..1036ada，共 5 个提交）
 
