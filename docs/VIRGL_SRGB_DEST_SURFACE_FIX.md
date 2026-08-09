@@ -1,217 +1,92 @@
-# VirGL sRGB 偏色修复：统一回退（禁用硬件 sRGB 编码）
+# VirGL sRGB 兼容修复：按首个 render target 固化写入策略
 
-本文档记录旧柚Pro（VintagePomeloPro）在 Maleoon 920/935 等 GPU 上
-VirGL（vrend/GLES 路径）画面偏黑/偏白的根因、两阶段修复与最终决策，
-供其他代码线参照移植。
+本文记录 VintagePomeloPro 在 GLES/VirGL 路径上同时兼容 PAL4、PAL5 的
+sRGB 方案。最终实现不按游戏名、进程路径、GPU 型号或设备型号分支，只依据
+host 能力、render target 格式，以及同一 VirGL sub-context 首次出现的相关
+framebuffer 状态。
 
-**最终决策（2026-08-08）**：无条件清除 `feat_srgb_write_control`，
-统一回退到 Maleoon 910（无硬件 sRGB 编码）的行为，所有游戏颜色与 910
-一致。代码中保留 FIXME 注释，未来再按 guest 采样语义实现硬件加速兼容
-（见第 7 节 memo）。
+## 最终结论（2026-08-09）
 
-## 1. 问题现象
+1. 恢复 v1.1.6 的 guest-visible 行为：host 具备 GL colorspace 时继续上报
+   `VIRGL_CAP_SRGB_WRITE_CONTROL`，不强制把 UNORM surface 改成 sRGB view，
+   不给 dma-buf import 追加 sRGB colorspace，也不全局改变 sampler decode。
+2. 第一个相关 framebuffer 若包含 alpha-bearing
+   `RGBA_UNORM surface -> RGBA_SRGB resource`，则一次性选择“保留 guest
+   写入”，后续 XRGB attachment 不补编码。
+3. 第一个相关 framebuffer 若是
+   `XRGB_UNORM surface -> XRGB_SRGB resource`，则一次性选择“XRGB 软件编码”，
+   在 fragment shader 写出和 `glClearColor` 路径做 linear-to-sRGB 转换。
+4. 策略一经选定不再被后续无关 render target 改写。这样可避免启动时序、
+   贴图创建顺序或另一个窗口改变已经正确的主画面。
 
-- 部分游戏（如“灰色的果实”）通过 VirGL 渲染时，整幅画面明显偏暗/偏黑。
-- 同一游戏在 Maleoon 910（9010 平板）颜色正常，在 Maleoon 920（9020 平板）
-  与 935 偏黑。
-- 非游戏桌面（explorer、窗口管理器）颜色正常，问题集中在 3D 渲染目标上。
+ARM64 真机验证结果：PAL5 颜色与房屋材质正常；PAL4 颜色正常；灰色的果实
+不再偏黑。三项均由用户在同一正式候选包上确认。临时 `[srgb-diag]` 日志已
+从最终源码移除。
 
-## 2. 设备能力差异（实测）
+## 为什么以 v1.1.6 为基线
 
-| 设备 | GPU | `GL_EXT_sRGB_write_control` | `EGL_EXT_image_gl_colorspace` | 现象 |
-| --- | --- | --- | --- | --- |
-| 9010 | Maleoon 910 | 无 | 有 | 颜色正常 |
-| 9020 | Maleoon 920 | 有 | 有 | 偏黑 |
+对比 v1.1.6 tag 与问题版本后确认：Mesa gitlink 没有变化；颜色相关差异只来自
+VirGL 子模块的两次 sRGB 修改。v1.1.6 的 PAL5 已知正常，因此它是可靠的
+PAL5 基线，而不是继续在阶段一/阶段二上叠加采样或 present 补偿。
 
-> 注意：`GL_EXT_sRGB_write_control` 的有无只决定“host 是否把
-> `VIRGL_CAP_SRGB_WRITE_CONTROL` 上报给 guest”，并不等于编码一定正确。
-> 真正的差异在于 guest 拿到该 cap 后**改变了 surface/资源的格式组合**。
+历史实验矩阵：
 
-## 3. 根因分析
+| 路径 | PAL4 | PAL5 | 结论 |
+| --- | --- | --- | --- |
+| v1.1.6：cap 可见、host 不额外编码 | 偏暗 | 正常 | PAL5 基线 |
+| sRGB view + framebuffer 硬件编码 | 正常 | 偏白 | PAL5 被过度转换 |
+| 无条件隐藏 cap | 正常 | 偏白 | guest 仍产生格式错配，不能解决 |
+| 全局 UNORM-view sampler decode | 正常 | 偏黑 | PAL5 过度解码 |
+| v1.1.6 + 首个目标分类 + XRGB 软件编码（最终） | 正常 | 正常 | 通过 |
 
-### 3.1 guest 侧行为
+## 可区分的 render state
 
-host 上报 `VIRGL_CAP_SRGB_WRITE_CONTROL` 后，guest Mesa 的 virgl 驱动会启用
-`dest_surface_srgb_control`（见 mesa `virgl_screen.c` / `virgl_context.c`）：
+真机独立日志显示：
 
-```c
-caps->dest_surface_srgb_control =
-   (vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_SRGB_WRITE_CONTROL) || ...;
+- PAL4 framebuffer 先出现且持续使用
+  `R8G8B8X8_UNORM / R8G8B8X8_SRGB`；
+- PAL5 同一 sub-context 先出现
+  `R8G8B8A8_UNORM / R8G8B8A8_SRGB`，随后也可能出现 XRGB 组合。
+- 灰色的果实先以独立的 1024×576 XRGB 资源建立主画面，约 18 秒后才出现
+  另一个 1024×1024 RGBA 资源。旧实现会在 RGBA 出现后把整个 sub-context
+  从“编码”永久改成“不编码”，导致已经正确的 XRGB 主画面整体偏黑。
 
-/* virgl_create_surface 中允许格式不一致： */
-assert(ctx->screen->caps.dest_surface_srgb_control ||
-       (util_format_is_srgb(templ->format) ==
-        util_format_is_srgb(resource->format)));
-```
+因此既不能“见到 XRGB 就始终编码”，也不能“之后见到任意 RGBA 就反向关闭
+编码”。正确的兼容启发式是由首个相关 framebuffer 一次性分类，后续附件只
+执行已选策略。该状态来自真实的渲染格式与初始化顺序，不依赖游戏识别，同类
+后续游戏会自动获得相同行为。实现同时覆盖 R8G8B8 与 B8G8R8 的 A8/X8
+UNORM/SRGB view-compatible 组合。
 
-即 guest 可以创建 **UNORM surface 绑定 SRGB 资源**，并期望 host 在渲染时
-自动完成线性→sRGB 编码（语义：surface 用 UNORM 视图，但存储是 sRGB）。
+## 实现位置
 
-### 3.2 host（vrend）缺失的编码
+改动位于 `thirdparty/virglrenderer/src/vrend/vrend_renderer.c`：
 
-实际抓到的 framebuffer 状态（修复前）：
+- `vrend_is_unorm_surface_of_srgb_resource()`：识别 RGBA/BGRA 的 A8/X8
+  UNORM-surface / sRGB-resource 配对；
+- `vrend_classify_unorm_srgb_write_policy()`：只在策略为 `UNDECIDED` 时检查
+  当前 framebuffer；alpha-bearing 优先选择 `PRESERVE`，否则 XRGB 选择
+  `ENCODE_XRGB`；
+- `vrend_hw_emit_framebuffer_state()`：
+  - 在第一次相关绑定时固化 `unorm_srgb_write_policy`；
+  - 仅在 GLES、host 具备 `feat_srgb_write_control`、策略为 `ENCODE_XRGB`、
+    且当前为 X8 配对时设置 `needs_manual_srgb_encode_bitmask`；
+- `vrend_clear_prepare()`：为相同 X8 配对转换 clear 的 RGB 分量；alpha 不转换；
+- `vrend_renderer_init()`：恢复 v1.1.6 的能力判断，仅在 winsys 不具备 GL
+  colorspace 时清除 `feat_srgb_write_control`。
 
-```
-surf_fmt=R8G8B8X8_UNORM  res_fmt=R8G8B8X8_SRGB  supports_view=1  use_srgb=0
-```
+阶段一加入的 sRGB texture view、`GL_FRAMEBUFFER_SRGB_EXT` 错配附件启用、
+`EGL_EXT_image_gl_colorspace` dma-buf import 扩展均已撤销，避免硬件路径与
+guest 的内容语义发生双重转换。
 
-问题链：
+## 兼容边界与回归要求
 
-1. `vrend_create_surface` 检测到 surface 格式（UNORM）≠ 资源格式（SRGB），
-   走 `glTextureView()` 创建 **UNORM 视图**（`internalformat` 用 surface 格式）。
-2. `vrend_hw_emit_framebuffer_state` 的 `use_srgb` 只检查
-   `util_format_is_srgb(surf->format)`，UNORM surface → `use_srgb=0`，
-   **不执行 `glEnable(GL_FRAMEBUFFER_SRGB_EXT)`**。
-3. 结果：渲染写入的像素被直接存进 sRGB 存储（未编码），呈现时又被当作
-   sRGB 解码一次 → 画面偏暗。
+- 9010 类不具备 `feat_srgb_write_control` 的 host 不进入新增 XRGB 软编码分支，
+  保持既有行为。
+- 9020/9030 类具备能力的 host 按 render state 自动分流；不允许增加
+  `GL_RENDERER`、设备型号、游戏名或可执行文件路径白名单。
+- 新增格式时，应扩展“view-compatible UNORM/sRGB 配对”识别，而不是增加
+  应用特判。
+- 发布前至少回归 PAL4、PAL5、灰色的果实；建议追加 9010/9030 硬件覆盖。
 
-910 上没有该 GL 扩展，cap 不上报，guest 全部用 UNORM/UNORM 组合，因此
-“误打误撞”颜色正常；920/935 有扩展反而触发错误路径。
-
-### 3.3 阶段一验证暴露的语义冲突（最终回退的原因）
-
-阶段一（组合编码 + 硬件编码）在 9020 上：灰色的果实、仙剑4 颜色正常，
-但**仙剑5 偏白**。对比两游戏 sampler view 完全一致：
-
-```
-SRGB 纹理 + UNORM view + GL_SKIP_DECODE_EXT
-```
-
-消费者语义却相反：
-
-- 仙剑5：按线性 L 消费纹理内容，期望存储里是不编码的线性值 →
-  组合编码后得到 f(L)，再被当作 L 使用 → 偏白。
-- 仙剑4：在 sRGB 空间合成，期望存储里是编码值 f(L) →
-  组合编码后正常。
-
-vrend 无法从 view 格式区分两类游戏：全局 sampler DECODE 会让仙剑4 偏黑，
-组合编码会让仙剑5 偏白；协议中现有 `srgb_decode` 只表达采样侧意图，
-也表达不了“内容编码意图”。因此硬件编码与 guest wined3d 语义存在根本冲突，
-最终选择统一回退。
-
-## 4. 修复内容
-
-全部改动位于 `thirdparty/virglrenderer/src/vrend/`。
-
-> 阶段一（vrend f9c35d7，已放弃）：组合编码 + 硬件编码，见 4.1–4.3。
-> 阶段二（最终）：无条件清除 `feat_srgb_write_control`，统一回退，见 4.4。
-> 阶段一代码仍保留在源码中（因 feat 清除永不触发），关键位置已加
-> `FIXME(硬件加速参考)` 注释，供未来恢复硬件加速时参考。
-
-### 4.1 创建 sRGB 视图（`vrend_create_surface`）
-
-`vrend_renderer.c` `vrend_create_surface()` 内，创建 texture view 时：
-若 host 已启用 `feat_srgb_write_control`，且 surface 是 UNORM、资源是 SRGB
-（dest_srgb_control 方向），则 `internalformat` 改用**资源的 SRGB 格式**，
-使附件真正是 sRGB 格式：
-
-```c
-if (has_feature(feat_srgb_write_control) &&
-    !util_format_is_srgb(surf->format) &&
-    util_format_is_srgb(res->base.format))
-   internalformat = tex_conv_table[res->base.format].internalformat;
-```
-
-### 4.2 framebuffer 状态启用硬件编码（`vrend_hw_emit_framebuffer_state`）
-
-`use_srgb` 判断补充“UNORM surface + SRGB 资源”组合：
-
-```c
-if (util_format_is_srgb(surf->format)) {
-   use_srgb = true;
-   break;
-}
-if (!util_format_is_srgb(surf->format) &&
-    util_format_is_srgb(surf->texture->base.format)) {
-   use_srgb = true;
-   break;
-}
-```
-
-`use_srgb=true` → `glEnable(GL_FRAMEBUFFER_SRGB_EXT)`，由 GPU 硬件完成
-线性→sRGB 编码（含 `glClear` 自动编码）。不触发 shader 手动编码位
-（`needs_manual_srgb_encode_bitmask` 仍只对“surface 本身是 SRGB 且不支持
-view”的场景设置），因此无软件编码、无双编码。
-
-### 4.3 EGL image 导入声明 sRGB（能力驱动，配套）
-
-`vrend_winsys_egl.c/.h`：
-
-- 新增 `EGL_EXT_image_gl_colorspace` 检测（`virgl_has_egl_image_gl_colorspace`）。
-- `virgl_egl_image_from_dmabuf()` 增加 `srgb` 参数；sRGB 资源导入时附加
-  `EGL_GL_COLORSPACE_SRGB` 属性，使 EGL-backed sRGB 纹理真正以 sRGB 格式存在。
-
-`vrend_renderer.c` `vrend_renderer_init()`：
-
-```c
-vrend_state.egl_image_srgb_import = virgl_has_egl_image_gl_colorspace(egl);
-if (!vrend_state.egl_image_srgb_import)
-   clear_feature(feat_srgb_write_control);
-```
-
-即：host 能以 sRGB 格式导入/创建纹理时才保留硬件 sRGB 路径；
-无 `EGL_EXT_image_gl_colorspace`（部分 Maleoon 驱动）→ 清除 feat →
-guest 回落格式匹配 + shader 编码路径（与 910 行为一致）。
-
-配套修改：`vrend_hw_emit_framebuffer_state` 与 `vrend_clear_prepare` 中
-shader 手动编码/手动 clear 转换在 `egl_image_srgb_import=true` 时跳过，
-避免“硬件编码 + shader 编码”双编码偏黑。
-
-### 4.4 最终方案：无条件清除 feat（阶段二）
-
-`vrend_renderer_init()` 中无条件执行：
-
-```c
-/* FIXME: 硬件 sRGB 编码 (GL_EXT_sRGB_write_control) 在 Maleoon 920/935
- * 上与 guest (wined3d) 的 sRGB 语义冲突（详见本文档 3.3）。
- * 当前统一按 Maleoon 910 的行为处理：清除 feat，host 不编码，
- * SRGB 纹理内容保持线性 L，所有游戏与 910 一致（正常）。
- * 未来若要兼容硬件加速，需按 guest 采样语义精确决定内容编码，
- * 或扩展协议传递明确的 srgb_decode 意图。 */
-clear_feature(feat_srgb_write_control);
-```
-
-效果：guest 不再启用 `dest_surface_srgb_control`，回到格式匹配 +
-shader 手动编码路径，与 9010 行为完全一致。阶段一的 sRGB view /
-framebuffer `use_srgb` / EGL sRGB import 代码全部保留但不会触发。
-
-## 5. 验证结果
-
-9020（Maleoon 920）统一回退后：
-
-- 仙剑5：不再偏白，颜色正常；
-- 仙剑4：不再偏黑，颜色正常；
-- 灰色的果实：不再偏黑，颜色正常；
-- 与 9010（Maleoon 910）行为一致。
-
-代价：需要编码的内容走 shader 手动编码（与 910 相同），无硬件 sRGB 编码，
-功能正确优先。
-
-## 6. 移植注意事项
-
-- **最终修复只有一处**：`vrend_renderer_init()` 无条件
-  `clear_feature(feat_srgb_write_control)`（含 FIXME 注释）。不要按
-  `GL_RENDERER`/`GL_VENDOR` 字符串或 GPU 型号分支。
-- 阶段一 4.1–4.3 是已放弃的历史实现，可不移植；若保留，须同步保留
-  `FIXME(硬件加速参考)` 注释，避免后续误以为硬件编码已启用。
-- 若 guest 侧 Mesa 版本不同，请确认 `VIRGL_CAP_SRGB_WRITE_CONTROL` 上报后
-  guest 会创建 UNORM surface + SRGB 资源；回退后该组合不再出现。
-
-## 7. FIXME / 未来硬件加速兼容策略（memo）
-
-当前统一禁用硬件 sRGB 编码，根因是 guest（wined3d）对同一
-“SRGB 纹理 + UNORM view + SKIP_DECODE”组合存在两种相反的内容语义：
-仙剑5 按线性 L 消费、仙剑4 在 sRGB 空间合成；vrend 无法从 view 格式区分，
-现有 `srgb_decode` 只表达采样侧意图，表达不了内容编码意图。
-
-未来若恢复硬件加速，可选方向：
-
-1. 扩展协议：传递明确的“内容编码意图”（结合 view / 采样语义），host 据此
-   决定 framebuffer 编码方式，只对语义明确的 draw 启用硬件编码。
-2. host 侧按 draw 动态切换 `GL_FRAMEBUFFER_SRGB_EXT` 与 sampler
-   `GL_SKIP_DECODE_EXT`/`GL_DECODE_EXT`，避免双编码。
-3. 在上层（guest Mesa / wined3d）统一内容格式约定，避免同一纹理被两种
-   语义消费。
-
-启用条件（必须全部通过）：9010/9020/9030 全系回归 仙剑4、仙剑5、
-灰色的果实 颜色正常；不能只按 GPU 型号开关。
+仍需注意：该策略解决的是当前 D3D/Wine guest 可观察到的两类写入语义。如果
+未来 guest 协议能显式传递内容编码意图，应优先改为协议驱动，移除格式启发式。
