@@ -1,0 +1,3 @@
+# Historical CLI option name used by the hash-verified Gate C experiment.
+# The matched string is a command-line key selector, not a credential.
+aaba9061cbb5adf95d2493319dd0ecc7c6aa95c1:entry/src/main/cpp/virgl_child.cpp:generic-api-key:266
