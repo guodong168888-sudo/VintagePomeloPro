@@ -5,11 +5,15 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import preferences from '@ohos.data.preferences';
 import {
   INPUT_PROFILE_SCHEMA_VERSION,
+  INPUT_TEMPLATES,
   InputProfile,
+  InputTemplate,
   cloneInputProfile,
+  createBuiltInInputProfiles,
   createDefaultInputProfile,
   createInputProfileFromTemplate,
   exportProfileToIcpJson,
+  inputTemplateForProfileId,
   importProfileFromIcpJson
 } from '../model/AppModels';
 
@@ -49,11 +53,16 @@ export class InputProfileService {
       }
     }
 
+    // Built-in profiles are versioned selectable presets. Keep user-created
+    // profiles untouched, but refresh a built-in when its shipped layout gains
+    // a newer revision (for example the physical-keyboard geometry update).
     let changed = false;
-    if (!this.profiles.has('default')) {
-      this.profiles.set('default', createDefaultInputProfile());
+    createBuiltInInputProfiles().forEach((profile: InputProfile): void => {
+      const existing = this.profiles.get(profile.id);
+      if (existing && (existing.builtInRevision ?? 0) >= (profile.builtInRevision ?? 0)) return;
+      this.profiles.set(profile.id, profile);
       changed = true;
-    }
+    });
     if (changed) await this.persistProfiles();
   }
 
@@ -68,8 +77,16 @@ export class InputProfileService {
       values.push(this.cloneProfile(profile));
     });
     values.sort((left: InputProfile, right: InputProfile): number => {
-      if (left.id === 'default') return -1;
-      if (right.id === 'default') return 1;
+      const leftTemplate = inputTemplateForProfileId(left.id);
+      const rightTemplate = inputTemplateForProfileId(right.id);
+      if (leftTemplate && rightTemplate) {
+        return INPUT_TEMPLATES.findIndex((template: InputTemplate): boolean =>
+          template.builtInProfileId === left.id) -
+          INPUT_TEMPLATES.findIndex((template: InputTemplate): boolean =>
+            template.builtInProfileId === right.id);
+      }
+      if (leftTemplate) return -1;
+      if (rightTemplate) return 1;
       return left.name.localeCompare(right.name);
     });
     return values;
@@ -85,6 +102,13 @@ export class InputProfileService {
 
   hasProfile(id: string): boolean {
     return this.profiles.has(id);
+  }
+
+  hasDesktopProfileName(name: string): boolean {
+    const normalized = name.trim().toLocaleLowerCase();
+    if (normalized.length === 0) return false;
+    return this.getDesktopProfiles().some((profile: InputProfile): boolean =>
+      profile.name.trim().toLocaleLowerCase() === normalized);
   }
 
   ensureProfile(id: string, name: string, baseProfileId: string = 'default'): InputProfile {
@@ -109,7 +133,7 @@ export class InputProfileService {
   }
 
   async removeProfile(id: string): Promise<boolean> {
-    if (id === 'default' || !this.profiles.has(id)) return false;
+    if (inputTemplateForProfileId(id) || !this.profiles.has(id)) return false;
     this.profiles.delete(id);
     await this.persistProfiles();
     return true;
@@ -141,7 +165,15 @@ export class InputProfileService {
    * 把默认方案重置为通用模板，其它方案不受影响。
    */
   async resetDefaultProfile(): Promise<InputProfile> {
-    const profile = createDefaultInputProfile();
+    return this.resetBuiltInProfile('default');
+  }
+
+  /** Restore one selectable built-in profile to its shipped template. */
+  async resetBuiltInProfile(profileId: string): Promise<InputProfile> {
+    const template = inputTemplateForProfileId(profileId);
+    if (!template) return this.getProfile(profileId);
+    const profile = createInputProfileFromTemplate(
+      template.builtInProfileId, template.profileName, template.id);
     await this.saveProfile(profile);
     return this.cloneProfile(profile);
   }

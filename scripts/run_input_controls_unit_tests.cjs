@@ -17,8 +17,17 @@ const models = require(path.resolve(outputDirectory, 'model/AppModels.js'));
 const keynames = require(path.resolve(outputDirectory, 'common/EvdevKeyNames.js'));
 
 // ---- 模板工厂 ----
-assert.equal(models.INPUT_TEMPLATES.length, 3);
+assert.equal(models.INPUT_TEMPLATES.length, 5);
 assert.equal(models.INPUT_PROFILE_SCHEMA_VERSION, 6);
+assert.deepEqual(models.INPUT_TEMPLATES.map((template) => template.id),
+  ['default', 'full-keyboard', 'rpg', 'fps', 'action']);
+
+const builtIns = models.createBuiltInInputProfiles();
+assert.deepEqual(builtIns.map((profile) => profile.id),
+  ['default', 'builtin-full-keyboard', 'builtin-rpg', 'builtin-fps', 'builtin-action']);
+assert.ok(builtIns.every((profile) => models.isBuiltInInputProfileId(profile.id)));
+assert.equal(models.isBuiltInInputProfileId('desktop-user'), false);
+assert.deepEqual(builtIns.map((profile) => profile.builtInRevision), [3, 3, 5, 3, 3]);
 
 const generic = models.createDefaultInputProfile();
 assert.equal(generic.id, 'default');
@@ -26,7 +35,35 @@ assert.equal(generic.schemaVersion, 6);
 assert.ok(generic.elements.length >= 8, '默认模板应包含至少 8 个元素');
 assert.ok(generic.gamepadMappings.length >= 10, '默认手柄映射应保留');
 
-const shooter = models.createInputProfileFromTemplate('p1', '射击方案', 'shooter');
+const keyboard = models.createInputProfileFromTemplate('keyboard', '全键盘', 'full-keyboard');
+assert.ok(keyboard.elements.length >= 70, '全键盘模板应覆盖主要 PC 键区');
+const keyboardPanel = keyboard.elements.find((e) => e.type === 'PANEL');
+assert.ok(keyboardPanel, '全键盘应包含统一外框');
+assert.equal(keyboardPanel.panelWidthRatio, 0.84);
+assert.equal(keyboardPanel.panelHeightRatio, 0.48);
+assert.ok(keyboard.elements.some((e) => e.text === 'F12' && e.bindings[0].code === 88));
+assert.ok(keyboard.elements.some((e) => e.text === 'Space' && e.bindings[0].code === 57));
+assert.ok(keyboard.elements.some((e) => e.text === '↑' && e.bindings[0].code === 103));
+assert.ok(keyboard.elements.some((e) => e.text === 'Back' && e.widthScale >= 1.8),
+  '退格键应保留真实键盘的宽键比例');
+assert.ok(keyboard.elements.some((e) => e.text === 'Space' && e.widthScale >= 5),
+  '空格键应明显宽于普通键');
+assert.ok(keyboard.elements.some((e) => e.text === 'Home' && e.x > 0.8),
+  '导航键区应与主键区分离');
+assert.ok(keyboard.elements.some((e) => e.text === 'A' && e.x >
+  keyboard.elements.find((key) => key.text === 'Caps').x), '主键区应按物理键盘行列排序');
+
+const rpg = models.createInputProfileFromTemplate('rpg', 'RPG 方案', 'rpg');
+assert.ok(rpg.elements.some((e) => e.text === '背包' && e.bindings[0].code === 23));
+assert.ok(rpg.elements.some((e) => e.text === '地图' && e.bindings[0].code === 50));
+assert.ok(rpg.elements.filter((e) => ['菜单', '背包', '地图', '角色', '任务'].includes(e.text))
+  .every((e) => e.y <= 0.1), 'RPG 菜单快捷键应贴近顶部');
+assert.ok(rpg.elements.some((e) => e.type === 'TRACKPAD' && e.y >= 0.55),
+  'RPG 鼠标触摸区应放在画面下半区');
+assert.ok(rpg.elements.some((e) => e.type === 'RANGE_BUTTON' && e.orientation === 'vertical' && e.x >= 0.95),
+  'RPG 技能快捷键应为右侧细竖条');
+
+const shooter = models.createInputProfileFromTemplate('p1', '射击方案', 'fps');
 assert.equal(shooter.name, '射击方案');
 assert.equal(shooter.elements.length, 10);
 assert.equal(shooter.elements[0].type, 'D_PAD');
@@ -40,6 +77,85 @@ const action = models.createInputProfileFromTemplate('p2', '动作方案', 'acti
 assert.equal(action.elements[0].type, 'STICK');
 assert.equal(action.elements[1].type, 'STICK');
 assert.equal(action.elements[1].bindings[0].code, 103); // 上
+
+// ---- 手机/平板默认模板几何：修饰键不能压住移动摇杆或方向键 ----
+function viewportScale(width, height) {
+  const longSide = Math.max(width, height);
+  const shortSide = Math.min(width, height);
+  return Math.max(0.85, Math.min(1.65, Math.min(longSide / 809, shortSide / 365)));
+}
+
+function controlSize(element, width, height) {
+  if (element.type === 'PANEL') {
+    return [width * (element.panelWidthRatio ?? 0.84), height * (element.panelHeightRatio ?? 0.48)];
+  }
+  const responsive = viewportScale(width, height);
+  if (element.type === 'TRACKPAD') {
+    return [150 * element.scale * (element.widthScale ?? 1) * responsive,
+      100 * element.scale * (element.heightScale ?? 1) * responsive];
+  }
+  if (element.type === 'RANGE_BUTTON') {
+    const horizontal = element.orientation === 'horizontal';
+    return [(horizontal ? 180 : 44) * element.scale * (element.widthScale ?? 1) * responsive,
+      (horizontal ? 44 : 180) * element.scale * (element.heightScale ?? 1) * responsive];
+  }
+  const base = element.type === 'D_PAD' ? 132 : element.type === 'STICK' ? 120 : 56;
+  return [base * element.scale * (element.widthScale ?? 1) * responsive,
+    base * element.scale * (element.heightScale ?? 1) * responsive];
+}
+
+function overlaps(left, right, width, height) {
+  const [leftW, leftH] = controlSize(left, width, height);
+  const [rightW, rightH] = controlSize(right, width, height);
+  return Math.abs(left.x - right.x) * width < (leftW + rightW) / 2 &&
+    Math.abs(left.y - right.y) * height < (leftH + rightH) / 2;
+}
+
+for (const profile of [generic, rpg, shooter, action]) {
+  const movement = profile.elements.find((e) => e.type === 'D_PAD' || e.type === 'STICK');
+  const modifiers = profile.elements.filter((e) => e.text === 'Shift' || e.text === 'Ctrl');
+  assert.ok(modifiers.length > 0 && modifiers.every((modifier) => modifier.toggleSwitch),
+    `${profile.name} 的 Shift/Ctrl 应默认启用按住锁定`);
+  assert.ok(modifiers.every((modifier) => modifier.x <= 0.17 && modifier.y >= 0.4),
+    `${profile.name} 的 Shift/Ctrl 应放在左侧移动区上方并避开工具栏`);
+  for (const [width, height] of [[809, 365], [1280, 800]]) {
+    assert.ok(modifiers.every((modifier) => !overlaps(movement, modifier, width, height)),
+      `${profile.name} 的 Shift/Ctrl 不应在 ${width}x${height} 下遮挡移动控件`);
+    for (const modifier of modifiers) {
+      const others = profile.elements.filter((element) =>
+        element !== modifier && element.type !== 'PANEL');
+      assert.ok(others.every((element) => !overlaps(modifier, element, width, height)),
+        `${profile.name} 的 ${modifier.text} 不应在 ${width}x${height} 下遮挡其他控件`);
+    }
+  }
+}
+
+for (const [width, height] of [[809, 365], [1280, 800]]) {
+  const rpgControls = rpg.elements.filter((element) => element.type !== 'PANEL');
+  for (let left = 0; left < rpgControls.length; left++) {
+    for (let right = left + 1; right < rpgControls.length; right++) {
+      assert.ok(!overlaps(rpgControls[left], rpgControls[right], width, height),
+        `RPG 控件 ${rpgControls[left].text}/${rpgControls[right].text} 不应在 ${width}x${height} 下重叠`);
+    }
+  }
+}
+
+const keyboardModifiers = keyboard.elements.filter((e) => e.text === 'Shift' || e.text === 'Ctrl');
+assert.ok(keyboardModifiers.length >= 4 && keyboardModifiers.every((modifier) => modifier.toggleSwitch),
+  '全键盘左右 Shift/Ctrl 应默认启用按住锁定');
+for (const [width, height] of [[809, 365], [1280, 800]]) {
+  const [panelW, panelH] = controlSize(keyboardPanel, width, height);
+  const panelLeft = keyboardPanel.x * width - panelW / 2;
+  const panelRight = keyboardPanel.x * width + panelW / 2;
+  const panelTop = keyboardPanel.y * height - panelH / 2;
+  const panelBottom = keyboardPanel.y * height + panelH / 2;
+  for (const key of keyboard.elements.filter((element) => element.type === 'BUTTON')) {
+    const [keyW, keyH] = controlSize(key, width, height);
+    assert.ok(key.x * width - keyW / 2 >= panelLeft && key.x * width + keyW / 2 <= panelRight &&
+      key.y * height - keyH / 2 >= panelTop && key.y * height + keyH / 2 <= panelBottom,
+    `全键盘按键 ${key.text} 不应在 ${width}x${height} 下越过外框`);
+  }
+}
 
 // ---- 克隆与序列化往返 ----
 const cloned = models.cloneInputProfile(generic);

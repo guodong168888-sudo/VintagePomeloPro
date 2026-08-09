@@ -34,6 +34,7 @@ interface ElementPatch {
   x?: number;
   y?: number;
   scale?: number;
+  widthScale?: number;
   text?: string;
   shape?: ControlElementShape;
   toggleSwitch?: boolean;
@@ -49,6 +50,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function elementTypeLabel(type: ControlElementType): string {
+  if (type === ControlElementType.PANEL) return '布局外框';
   if (type === ControlElementType.D_PAD) return '方向键';
   if (type === ControlElementType.STICK) return '摇杆';
   if (type === ControlElementType.TRACKPAD) return '触摸板';
@@ -299,6 +301,10 @@ struct InputLayoutEditor {
       x: patch.x ?? element.x,
       y: patch.y ?? element.y,
       scale: patch.scale ?? element.scale,
+      widthScale: patch.widthScale ?? element.widthScale ?? 1,
+      heightScale: element.heightScale ?? 1,
+      panelWidthRatio: element.panelWidthRatio,
+      panelHeightRatio: element.panelHeightRatio,
       opacity: patch.opacity ?? element.opacity,
       bindings: patch.bindings ?? element.bindings,
       toggleSwitch: patch.toggleSwitch ?? element.toggleSwitch,
@@ -312,21 +318,50 @@ struct InputLayoutEditor {
   }
 
   private elementPixelWidth(element: ControlElement): number {
-    if (element.type === ControlElementType.TRACKPAD) return 150 * (element.scale ?? 1);
-    if (element.type === ControlElementType.RANGE_BUTTON) {
-      return (element.orientation === 'horizontal' ? 180 : 44) * (element.scale ?? 1);
+    if (element.type === ControlElementType.PANEL) {
+      return this.previewW * Math.max(0.1, Math.min(1, element.panelWidthRatio ?? 0.84));
     }
-    if (element.type === ControlElementType.D_PAD) return 132 * (element.scale ?? 1);
-    if (element.type === ControlElementType.STICK) return 120 * (element.scale ?? 1);
-    return 56 * (element.scale ?? 1);
+    const viewportScale = this.previewControlScale();
+    const widthScale = element.widthScale ?? 1;
+    if (element.type === ControlElementType.TRACKPAD) {
+      return 150 * (element.scale ?? 1) * widthScale * viewportScale;
+    }
+    if (element.type === ControlElementType.RANGE_BUTTON) {
+      return (element.orientation === 'horizontal' ? 180 : 44) *
+        (element.scale ?? 1) * widthScale * viewportScale;
+    }
+    if (element.type === ControlElementType.D_PAD) return 132 * (element.scale ?? 1) * widthScale * viewportScale;
+    if (element.type === ControlElementType.STICK) return 120 * (element.scale ?? 1) * widthScale * viewportScale;
+    return 56 * (element.scale ?? 1) * widthScale * viewportScale;
   }
 
   private elementPixelHeight(element: ControlElement): number {
-    if (element.type === ControlElementType.TRACKPAD) return 100 * (element.scale ?? 1);
-    if (element.type === ControlElementType.RANGE_BUTTON) {
-      return (element.orientation === 'horizontal' ? 44 : 180) * (element.scale ?? 1);
+    if (element.type === ControlElementType.PANEL) {
+      return this.previewH * Math.max(0.1, Math.min(1, element.panelHeightRatio ?? 0.48));
     }
-    return this.elementPixelWidth(element);
+    const viewportScale = this.previewControlScale();
+    const heightScale = element.heightScale ?? 1;
+    if (element.type === ControlElementType.TRACKPAD) {
+      return 100 * (element.scale ?? 1) * heightScale * viewportScale;
+    }
+    if (element.type === ControlElementType.RANGE_BUTTON) {
+      return (element.orientation === 'horizontal' ? 44 : 180) *
+        (element.scale ?? 1) * heightScale * viewportScale;
+    }
+    if (element.type === ControlElementType.D_PAD) {
+      return 132 * (element.scale ?? 1) * heightScale * viewportScale;
+    }
+    if (element.type === ControlElementType.STICK) {
+      return 120 * (element.scale ?? 1) * heightScale * viewportScale;
+    }
+    return 56 * (element.scale ?? 1) * heightScale * viewportScale;
+  }
+
+  private previewControlScale(): number {
+    if (this.previewW <= 0 || this.previewH <= 0) return 1;
+    const longSide = Math.max(this.previewW, this.previewH);
+    const shortSide = Math.min(this.previewW, this.previewH);
+    return Math.max(0.85, Math.min(1.65, Math.min(longSide / 809, shortSide / 365)));
   }
 
   private elementsOverlap(left: ControlElement, right: ControlElement): boolean {
@@ -471,7 +506,10 @@ struct InputLayoutEditor {
     const source = this.selectedElement();
     if (!source) return;
     const copy = createControlElement(source.type, Math.min(0.95, source.x + 0.04), Math.min(0.95, source.y + 0.04),
-      source.text, source.bindings, source.shape, source.scale, source.toggleSwitch, source.keyList);
+      source.text, source.bindings, source.shape, source.scale, source.toggleSwitch, source.keyList,
+      source.orientation, source.outputMode, source.widthScale, source.heightScale);
+    copy.panelWidthRatio = source.panelWidthRatio;
+    copy.panelHeightRatio = source.panelHeightRatio;
     copy.opacity = source.opacity;
     this.updateProfile((elements: ControlElement[]): ControlElement[] => {
       const next = elements.slice();
@@ -621,7 +659,6 @@ struct InputLayoutEditor {
 
   // ---- 编辑器 UI ----
 
-  @Builder
   @Builder
   private AddChip(label: string, accent: string, action: () => void, id: string) {
     Text(label).fontSize(11).fontColor(accent).padding({ left: 9, right: 9, top: 5, bottom: 5 })
@@ -808,10 +845,9 @@ struct InputLayoutEditor {
             this.ShapeChip('圆角矩形', ControlElementShape.ROUND_RECT)
             this.ShapeChip('矩形', ControlElementShape.RECT)
           }.width('100%')
-          if (this.selectedElement()?.type === ControlElementType.BUTTON ||
-            this.selectedElement()?.type === ControlElementType.RANGE_BUTTON) {
+          if (this.selectedElement()?.type === ControlElementType.BUTTON) {
             Row({ space: 8 }) {
-              Text('开关模式').fontSize(11).fontColor('#FFFFFFAA')
+              Text('按住锁定（再按释放）').fontSize(11).fontColor('#FFFFFFAA')
               Text(this.selectedElement()?.toggleSwitch ? '开' : '关').fontSize(11)
                 .fontColor(this.selectedElement()?.toggleSwitch ? '#FF64B5F6' : '#FFFFFF88')
                 .padding({ left: 9, right: 9, top: 6, bottom: 6 })
@@ -825,13 +861,26 @@ struct InputLayoutEditor {
           }
           Text('缩放 ' + Math.round((this.selectedElement()?.scale ?? 1) * 100) + '%')
             .fontSize(11).fontColor('#FFFFFFAA').width('100%')
-          Slider({ value: (this.selectedElement()?.scale ?? 1) * 100, min: 50, max: 200, step: 5, style: SliderStyle.OutSet })
+          Slider({ value: (this.selectedElement()?.scale ?? 1) * 100, min: 35, max: 200, step: 5, style: SliderStyle.OutSet })
             .width('100%').blockColor('#FF64B5F6').selectedColor('#FF64B5F6').trackColor('#FFFFFF22')
             .onChange((value: number, mode: SliderChangeMode): void => {
               if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
                 this.scaleElement(this.selectedElementId, value / 100);
               }
             })
+          if (this.selectedElement()?.type === ControlElementType.BUTTON) {
+            Text('按键宽度 ' + Math.round((this.selectedElement()?.widthScale ?? 1) * 100) + '%')
+              .fontSize(11).fontColor('#FFFFFFAA').width('100%')
+            Slider({ value: (this.selectedElement()?.widthScale ?? 1) * 100,
+              min: 50, max: 600, step: 10, style: SliderStyle.OutSet })
+              .width('100%').blockColor('#FF64B5F6').selectedColor('#FF64B5F6').trackColor('#FFFFFF22')
+              .onChange((value: number, mode: SliderChangeMode): void => {
+                if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                  this.updateSelectedElement((current: ControlElement): ControlElement =>
+                    this.withElement(current, { widthScale: value / 100 }));
+                }
+              })
+          }
           Row({ space: 8 }) {
             Text('透明度 ' + ((this.selectedElement()?.opacity ?? -1) >= 0 ?
               Math.round(this.selectedElement()?.opacity ?? 70) : 100) + '%')

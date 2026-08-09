@@ -85,6 +85,8 @@ export struct VirtualInputOverlay {
   @State private controlsVisibleVisual: boolean = true;
   @State private touchpadModeVisual: boolean = false;
   private activeElementTouches: Map<string, number> = new Map<string, number>();
+  /** Toggle buttons stay here after the finger lifts so profile/page changes can release them safely. */
+  private lockedToggleElements: Map<string, ControlElement> = new Map<string, ControlElement>();
   private touchOrigins: Map<string, OverlayPoint> = new Map<string, OverlayPoint>();
   private stickLastDeltas: Map<string, OverlayPoint> = new Map<string, OverlayPoint>();
   private trackpadStates: Map<string, TrackpadState> = new Map<string, TrackpadState>();
@@ -125,20 +127,44 @@ export struct VirtualInputOverlay {
     return 56;
   }
 
+  /** Keep touch targets visually balanced from phones through large tablets. */
+  private viewportControlScale(): number {
+    if (this.overlayW <= 0 || this.overlayH <= 0) return 1;
+    const longSide = Math.max(this.overlayW, this.overlayH);
+    const shortSide = Math.min(this.overlayW, this.overlayH);
+    return Math.max(0.85, Math.min(1.65, Math.min(longSide / 809, shortSide / 365)));
+  }
+
   private elementWidth(element: ControlElement): number {
-    if (element.type === ControlElementType.TRACKPAD) return 150 * (element.scale ?? 1);
-    if (element.type === ControlElementType.RANGE_BUTTON) {
-      return (element.orientation === 'horizontal' ? 180 : 44) * (element.scale ?? 1);
+    if (element.type === ControlElementType.PANEL) {
+      return this.overlayW * Math.max(0.1, Math.min(1, element.panelWidthRatio ?? 0.84));
     }
-    return this.elementBaseSize(element) * (element.scale ?? 1);
+    const viewportScale = this.viewportControlScale();
+    const widthScale = element.widthScale ?? 1;
+    if (element.type === ControlElementType.TRACKPAD) {
+      return 150 * (element.scale ?? 1) * widthScale * viewportScale;
+    }
+    if (element.type === ControlElementType.RANGE_BUTTON) {
+      return (element.orientation === 'horizontal' ? 180 : 44) *
+        (element.scale ?? 1) * widthScale * viewportScale;
+    }
+    return this.elementBaseSize(element) * (element.scale ?? 1) * widthScale * viewportScale;
   }
 
   private elementHeight(element: ControlElement): number {
-    if (element.type === ControlElementType.TRACKPAD) return 100 * (element.scale ?? 1);
-    if (element.type === ControlElementType.RANGE_BUTTON) {
-      return (element.orientation === 'horizontal' ? 44 : 180) * (element.scale ?? 1);
+    if (element.type === ControlElementType.PANEL) {
+      return this.overlayH * Math.max(0.1, Math.min(1, element.panelHeightRatio ?? 0.48));
     }
-    return this.elementBaseSize(element) * (element.scale ?? 1);
+    const viewportScale = this.viewportControlScale();
+    const heightScale = element.heightScale ?? 1;
+    if (element.type === ControlElementType.TRACKPAD) {
+      return 100 * (element.scale ?? 1) * heightScale * viewportScale;
+    }
+    if (element.type === ControlElementType.RANGE_BUTTON) {
+      return (element.orientation === 'horizontal' ? 44 : 180) *
+        (element.scale ?? 1) * heightScale * viewportScale;
+    }
+    return this.elementBaseSize(element) * (element.scale ?? 1) * heightScale * viewportScale;
   }
 
   private elementCenter(element: ControlElement): OverlayPoint {
@@ -164,6 +190,7 @@ export struct VirtualInputOverlay {
   }
 
   private elementContains(element: ControlElement, x: number, y: number): boolean {
+    if (element.type === ControlElementType.PANEL) return false;
     let width = this.elementWidth(element);
     let height = this.elementHeight(element);
     if (element.type === ControlElementType.RANGE_BUTTON) {
@@ -296,7 +323,10 @@ export struct VirtualInputOverlay {
   }
 
   private bindingSource(element: ControlElement, slot: string, touchId: number): string {
-    return 'el-' + element.id + '-' + slot + '-' + touchId.toString();
+    // A toggle can be unlocked by a later finger/mouse event, so its input
+    // source must not depend on the transient touch id.
+    const sourceId = element.toggleSwitch ? 'toggle' : touchId.toString();
+    return 'el-' + element.id + '-' + slot + '-' + sourceId;
   }
 
   private pressBinding(element: ControlElement, slot: string, bindingIndex: number, touchId: number,
@@ -408,10 +438,16 @@ export struct VirtualInputOverlay {
   }
 
   private releaseAllElementTouches(): void {
+    this.lockedToggleElements.forEach((element: ControlElement): void => {
+      this.applyButtonBindings(element, false, 0, 0, 0);
+    });
+    this.lockedToggleElements.clear();
     const entries = Array.from(this.activeElementTouches.entries());
     for (let index = 0; index < entries.length; index++) {
       const element = this.elementById(entries[index][0]);
-      if (element) this.releaseElementBindings(element, entries[index][1]);
+      // Toggle buttons do not inject anything until TouchType.Up. A locked
+      // toggle was already released from lockedToggleElements above.
+      if (element && !element.toggleSwitch) this.releaseElementBindings(element, entries[index][1]);
     }
     this.activeElementTouches.clear();
     this.touchOrigins.clear();
@@ -446,11 +482,7 @@ export struct VirtualInputOverlay {
       if (this.activeElementTouches.has(id)) return;
       this.activeElementTouches.set(id, touch.id);
       this.lastActionTouchAt = Date.now();
-      if (element.toggleSwitch) {
-        const next = !this.isElementPressed(id);
-        this.applyButtonBindings(element, next, touch.id, vp2px(Number(touch.x)), vp2px(Number(touch.y)));
-        this.setElementPressed(id, next);
-      } else {
+      if (!element.toggleSwitch) {
         this.applyButtonBindings(element, true, touch.id, vp2px(Number(touch.x)), vp2px(Number(touch.y)));
         this.setElementPressed(id, true);
       }
@@ -459,6 +491,16 @@ export struct VirtualInputOverlay {
     if ((type === TouchType.Up || type === TouchType.Cancel) &&
       this.activeElementTouches.get(id) === touch.id) {
       this.activeElementTouches.delete(id);
+      if (element.toggleSwitch) {
+        // A cancelled gesture must not unexpectedly lock a modifier.
+        if (type === TouchType.Cancel) return;
+        const next = !this.isElementPressed(id);
+        this.applyButtonBindings(element, next, touch.id, vp2px(Number(touch.x)), vp2px(Number(touch.y)));
+        this.setElementPressed(id, next);
+        if (next) this.lockedToggleElements.set(id, element);
+        else this.lockedToggleElements.delete(id);
+        return;
+      }
       if (this.isElementPressed(id)) {
         this.applyButtonBindings(element, false, touch.id, vp2px(Number(touch.x)), vp2px(Number(touch.y)));
         this.setElementPressed(id, false);
@@ -785,8 +827,10 @@ export struct VirtualInputOverlay {
       event.stopPropagation();
       this.mouseElementId = target.id;
       if (target.type === ControlElementType.BUTTON) {
-        this.applyButtonBindings(target, true, -100, vp2px(x), vp2px(y));
-        this.setElementPressed(target.id, true);
+        if (!target.toggleSwitch) {
+          this.applyButtonBindings(target, true, -100, vp2px(x), vp2px(y));
+          this.setElementPressed(target.id, true);
+        }
       } else {
         const index = this.rangeIndexAt(target, y);
         this.setRangeSelection(target.id, index);
@@ -800,8 +844,16 @@ export struct VirtualInputOverlay {
       this.mouseElementId = '';
       if (target) {
         if (target.type === ControlElementType.BUTTON) {
-          this.applyButtonBindings(target, false, -100, vp2px(x), vp2px(y));
-          this.setElementPressed(target.id, false);
+          if (target.toggleSwitch) {
+            const next = !this.isElementPressed(target.id);
+            this.applyButtonBindings(target, next, -100, vp2px(x), vp2px(y));
+            this.setElementPressed(target.id, next);
+            if (next) this.lockedToggleElements.set(target.id, target);
+            else this.lockedToggleElements.delete(target.id);
+          } else {
+            this.applyButtonBindings(target, false, -100, vp2px(x), vp2px(y));
+            this.setElementPressed(target.id, false);
+          }
         } else {
           this.applyRangeBinding(target, this.rangeSelection(target.id), false, -100);
         }
@@ -812,6 +864,20 @@ export struct VirtualInputOverlay {
   }
 
   // ---- 元素渲染 ----
+
+  @Builder
+  private PanelElement(element: ControlElement) {
+    Stack()
+      .width(this.elementWidth(element)).height(this.elementHeight(element))
+      .borderRadius(this.elementRadius(element))
+      .backgroundColor('#B81A1D28')
+      .border({ width: 2, color: '#66FFFFFF' })
+      .opacity(this.elementOpacity(element))
+      .hitTestBehavior(HitTestMode.None)
+      .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2,
+        y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
+      .id('virtual-element-' + element.id)
+  }
 
   @Builder
   private ButtonElement(element: ControlElement) {
@@ -953,7 +1019,9 @@ export struct VirtualInputOverlay {
 
   @Builder
   private ElementView(element: ControlElement) {
-    if (element.type === ControlElementType.BUTTON) {
+    if (element.type === ControlElementType.PANEL) {
+      this.PanelElement(element)
+    } else if (element.type === ControlElementType.BUTTON) {
       this.ButtonElement(element)
     } else if (element.type === ControlElementType.D_PAD) {
       this.DPadElement(element)
@@ -974,7 +1042,8 @@ export struct VirtualInputOverlay {
     if (code === 29) return 'Ctrl';
     if (code >= 30 && code <= 38) return String.fromCharCode(65 + (code - 30));
     if (code >= 44 && code <= 50) return String.fromCharCode(90 - (code - 44));
-    if (code >= 2 && code <= 11) return (code - 2).toString();
+    if (code >= 2 && code <= 10) return (code - 1).toString();
+    if (code === 11) return '0';
     return code.toString();
   }
 

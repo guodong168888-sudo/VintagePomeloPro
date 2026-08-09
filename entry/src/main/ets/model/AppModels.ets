@@ -345,6 +345,7 @@ export const INPUT_PROFILE_SCHEMA_VERSION = 6;
 
 /** Winlator 风格的可排布输入元素类型。 */
 export enum ControlElementType {
+  PANEL = 'PANEL',
   BUTTON = 'BUTTON',
   D_PAD = 'D_PAD',
   STICK = 'STICK',
@@ -399,6 +400,13 @@ export interface ControlElement {
   x: number;
   y: number;
   scale: number;
+  /** Horizontal multiplier. 1 keeps the legacy square control size. */
+  widthScale?: number;
+  /** Vertical multiplier. Mainly used by non-interactive layout panels. */
+  heightScale?: number;
+  /** Viewport-relative size for PANEL decorations. */
+  panelWidthRatio?: number;
+  panelHeightRatio?: number;
   /** -1 继承方案透明度 overlayOpacity；0-100 为元素级覆盖。 */
   opacity: number;
   bindings: InputBinding[];
@@ -418,6 +426,8 @@ export interface InputProfile {
   id: string;
   name: string;
   schemaVersion: number;
+  /** Shipped-template revision; custom profiles intentionally leave this unset. */
+  builtInRevision?: number;
   /** 触摸板指针速度倍率（0.1-5.0）。 */
   cursorSpeed: number;
   /** 方案级覆盖层透明度（0-100）。 */
@@ -512,7 +522,9 @@ export function createControlElement(
   toggleSwitch?: boolean,
   keyList?: number[],
   orientation?: string,
-  outputMode?: string): ControlElement {
+  outputMode?: string,
+  widthScale?: number,
+  heightScale?: number): ControlElement {
   const resolvedShape = shape ?? (type === ControlElementType.TRACKPAD || type === ControlElementType.RANGE_BUTTON
     ? ControlElementShape.ROUND_RECT : ControlElementShape.CIRCLE);
   return {
@@ -521,7 +533,9 @@ export function createControlElement(
     shape: resolvedShape,
     x: clamp01(x),
     y: clamp01(y),
-    scale: Math.max(0.5, Math.min(2, scale ?? 1)),
+    scale: Math.max(0.35, Math.min(2, scale ?? 1)),
+    widthScale: Math.max(0.5, Math.min(6, widthScale ?? 1)),
+    heightScale: Math.max(0.5, Math.min(6, heightScale ?? 1)),
     opacity: -1,
     bindings: (bindings ?? []).map(cloneInputBinding),
     toggleSwitch: toggleSwitch ?? false,
@@ -542,6 +556,10 @@ export function cloneControlElement(element: ControlElement): ControlElement {
     x: clamp01(element.x ?? 0.5),
     y: clamp01(element.y ?? 0.5),
     scale: element.scale ?? 1,
+    widthScale: Math.max(0.5, Math.min(6, element.widthScale ?? 1)),
+    heightScale: Math.max(0.5, Math.min(6, element.heightScale ?? 1)),
+    panelWidthRatio: element.panelWidthRatio,
+    panelHeightRatio: element.panelHeightRatio,
     opacity: element.opacity ?? -1,
     bindings: (element.bindings ?? []).map(cloneInputBinding),
     toggleSwitch: element.toggleSwitch ?? false,
@@ -572,6 +590,7 @@ export function cloneInputProfile(profile?: InputProfile, profileId?: string, pr
     id: profileId ?? value.id,
     name: profileName ?? value.name,
     schemaVersion: INPUT_PROFILE_SCHEMA_VERSION,
+    builtInRevision: value.builtInRevision,
     cursorSpeed: value.cursorSpeed ?? fallback.cursorSpeed,
     overlayOpacity: value.overlayOpacity ?? fallback.overlayOpacity,
     gamepadMappings: cloneGamepadMappings(value.gamepadMappings),
@@ -582,13 +601,44 @@ export function cloneInputProfile(profile?: InputProfile, profileId?: string, pr
 export interface InputTemplate {
   id: string;
   name: string;
+  description: string;
+  builtInProfileId: string;
+  profileName: string;
+  revision: number;
 }
 
 export const INPUT_TEMPLATES: InputTemplate[] = [
-  { id: 'default', name: '通用' },
-  { id: 'shooter', name: '射击' },
-  { id: 'action', name: '动作' }
+  {
+    id: 'default', name: '通用', description: '方向键、鼠标和常用功能键',
+    builtInProfileId: 'default', profileName: '默认输入方案', revision: 3
+  },
+  {
+    id: 'full-keyboard', name: '全键盘', description: '完整字母、数字、功能键与方向键',
+    builtInProfileId: 'builtin-full-keyboard', profileName: '全键盘', revision: 3
+  },
+  {
+    id: 'rpg', name: 'RPG', description: '移动、交互、背包、地图与技能快捷栏',
+    builtInProfileId: 'builtin-rpg', profileName: 'RPG', revision: 5
+  },
+  {
+    id: 'fps', name: 'FPS', description: '移动、视角、开火、瞄准与武器切换',
+    builtInProfileId: 'builtin-fps', profileName: 'FPS', revision: 3
+  },
+  {
+    id: 'action', name: '动作', description: '双摇杆与 ABXY 风格动作按键',
+    builtInProfileId: 'builtin-action', profileName: '动作', revision: 3
+  }
 ];
+
+export function isBuiltInInputProfileId(profileId: string): boolean {
+  return INPUT_TEMPLATES.some((template: InputTemplate): boolean =>
+    template.builtInProfileId === profileId);
+}
+
+export function inputTemplateForProfileId(profileId: string): InputTemplate | undefined {
+  return INPUT_TEMPLATES.find((template: InputTemplate): boolean =>
+    template.builtInProfileId === profileId);
+}
 
 function dpadWASD(): InputBinding[] {
   return [keyBinding(17), keyBinding(32), keyBinding(31), keyBinding(30)];
@@ -606,13 +656,140 @@ function defaultTemplateElements(): ControlElement[] {
     createControlElement(ControlElementType.BUTTON, 0.88, 0.60, '右键', [mouseBinding(MOUSE_RIGHT_BUTTON)]),
     createControlElement(ControlElementType.BUTTON, 0.86, 0.82, '空格', [keyBinding(57)]),
     createControlElement(ControlElementType.BUTTON, 0.93, 0.70, 'E', [keyBinding(18)]),
-    createControlElement(ControlElementType.BUTTON, 0.05, 0.07, 'Esc', [keyBinding(1)], ControlElementShape.ROUND_RECT),
-    createControlElement(ControlElementType.BUTTON, 0.08, 0.88, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT),
-    createControlElement(ControlElementType.BUTTON, 0.20, 0.88, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT)
+    createControlElement(ControlElementType.BUTTON, 0.06, 0.26, 'Esc', [keyBinding(1)], ControlElementShape.ROUND_RECT, 0.72),
+    createControlElement(ControlElementType.BUTTON, 0.06, 0.44, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT, 0.72, true),
+    createControlElement(ControlElementType.BUTTON, 0.17, 0.44, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT, 0.72, true)
   ];
 }
 
-function shooterTemplateElements(): ControlElement[] {
+interface KeyboardTemplateKey {
+  label: string;
+  code: number;
+  units?: number;
+  gapBefore?: number;
+}
+
+function keyboardTemplateKeyElement(key: KeyboardTemplateKey, x: number, y: number,
+  scale: number): ControlElement {
+  return createControlElement(
+    ControlElementType.BUTTON,
+    x,
+    y,
+    key.label,
+    [keyBinding(key.code)],
+    ControlElementShape.ROUND_RECT,
+    scale,
+    key.label === 'Shift' || key.label === 'Ctrl',
+    [],
+    'vertical',
+    'keys',
+    key.units ?? 1);
+}
+
+/**
+ * Lay out a keyboard row by real key-cap units instead of spreading equal
+ * buttons from edge to edge. Wider keys therefore keep the proportions of a
+ * physical keyboard and the alpha rows stay visually aligned on every screen.
+ */
+function appendKeyboardRow(elements: ControlElement[], keys: KeyboardTemplateKey[], y: number,
+  left: number = 0.10, right: number = 0.74, scale: number = 0.44): void {
+  if (keys.length === 0) return;
+  const totalUnits = keys.reduce((total: number, key: KeyboardTemplateKey): number =>
+    total + (key.gapBefore ?? 0) + (key.units ?? 1), 0);
+  let cursor = 0;
+  keys.forEach((key: KeyboardTemplateKey): void => {
+    cursor += key.gapBefore ?? 0;
+    const units = key.units ?? 1;
+    const center = left + (right - left) * (cursor + units / 2) / totalUnits;
+    elements.push(keyboardTemplateKeyElement(key, center, y, scale));
+    cursor += units;
+  });
+}
+
+function fullKeyboardTemplateElements(): ControlElement[] {
+  const elements: ControlElement[] = [];
+  const frame = createControlElement(ControlElementType.PANEL, 0.50, 0.74, '', [],
+    ControlElementShape.ROUND_RECT, 1, false, [], 'vertical', 'keys');
+  frame.panelWidthRatio = 0.84;
+  frame.panelHeightRatio = 0.48;
+  frame.opacity = 78;
+  elements.push(frame);
+  appendKeyboardRow(elements, [
+    { label: 'Esc', code: 1 }, { label: 'F1', code: 59, gapBefore: 0.7 }, { label: 'F2', code: 60 },
+    { label: 'F3', code: 61 }, { label: 'F4', code: 62 }, { label: 'F5', code: 63, gapBefore: 0.35 },
+    { label: 'F6', code: 64 }, { label: 'F7', code: 65 }, { label: 'F8', code: 66 },
+    { label: 'F9', code: 67, gapBefore: 0.35 }, { label: 'F10', code: 68 }, { label: 'F11', code: 87 },
+    { label: 'F12', code: 88 }
+  ], 0.545, 0.11, 0.89, 0.32);
+  appendKeyboardRow(elements, [
+    { label: '`', code: 41 },
+    { label: '1', code: 2 }, { label: '2', code: 3 }, { label: '3', code: 4 },
+    { label: '4', code: 5 }, { label: '5', code: 6 }, { label: '6', code: 7 },
+    { label: '7', code: 8 }, { label: '8', code: 9 }, { label: '9', code: 10 },
+    { label: '0', code: 11 }, { label: '-', code: 12 }, { label: '=', code: 13 },
+    { label: 'Back', code: 14, units: 1.9 }
+  ], 0.625, 0.11, 0.72, 0.38);
+  appendKeyboardRow(elements, [
+    { label: 'Tab', code: 15, units: 1.5 }, { label: 'Q', code: 16 }, { label: 'W', code: 17 },
+    { label: 'E', code: 18 }, { label: 'R', code: 19 }, { label: 'T', code: 20 },
+    { label: 'Y', code: 21 }, { label: 'U', code: 22 }, { label: 'I', code: 23 },
+    { label: 'O', code: 24 }, { label: 'P', code: 25 }, { label: '[', code: 26 },
+    { label: ']', code: 27 }, { label: '\\', code: 43, units: 1.5 }
+  ], 0.700, 0.11, 0.72, 0.38);
+  appendKeyboardRow(elements, [
+    { label: 'Caps', code: 58, units: 1.8 }, { label: 'A', code: 30 }, { label: 'S', code: 31 },
+    { label: 'D', code: 32 }, { label: 'F', code: 33 }, { label: 'G', code: 34 },
+    { label: 'H', code: 35 }, { label: 'J', code: 36 }, { label: 'K', code: 37 },
+    { label: 'L', code: 38 }, { label: ';', code: 39 }, { label: "'", code: 40 },
+    { label: 'Enter', code: 28, units: 2.2 }
+  ], 0.775, 0.11, 0.72, 0.38);
+  appendKeyboardRow(elements, [
+    { label: 'Shift', code: 42, units: 2.3 }, { label: 'Z', code: 44 }, { label: 'X', code: 45 },
+    { label: 'C', code: 46 }, { label: 'V', code: 47 }, { label: 'B', code: 48 },
+    { label: 'N', code: 49 }, { label: 'M', code: 50 }, { label: ',', code: 51 },
+    { label: '.', code: 52 }, { label: '/', code: 53 }, { label: 'Shift', code: 54, units: 2.7 }
+  ], 0.850, 0.11, 0.72, 0.38);
+  appendKeyboardRow(elements, [
+    { label: 'Ctrl', code: 29, units: 1.5 }, { label: 'Win', code: 125, units: 1.2 },
+    { label: 'Alt', code: 56, units: 1.25 }, { label: 'Space', code: 57, units: 5.6 },
+    { label: 'Alt', code: 100, units: 1.25 }, { label: 'Menu', code: 127, units: 1.2 },
+    { label: 'Ctrl', code: 97, units: 1.5 }
+  ], 0.925, 0.11, 0.69, 0.38);
+
+  // Standard six-key navigation block and inverted-T arrow cluster.
+  const navigationKeys: Array<[string, number, number, number]> = [
+    ['Ins', 110, 0.78, 0.625], ['Home', 102, 0.835, 0.625], ['PgUp', 104, 0.89, 0.625],
+    ['Del', 111, 0.78, 0.700], ['End', 107, 0.835, 0.700], ['PgDn', 109, 0.89, 0.700],
+    ['↑', 103, 0.835, 0.850], ['←', 105, 0.78, 0.925],
+    ['↓', 108, 0.835, 0.925], ['→', 106, 0.89, 0.925]
+  ];
+  navigationKeys.forEach((key: [string, number, number, number]): void => {
+    elements.push(keyboardTemplateKeyElement({ label: key[0], code: key[1], units: 0.92 }, key[2], key[3], 0.34));
+  });
+  return elements;
+}
+
+function rpgTemplateElements(): ControlElement[] {
+  return [
+    createControlElement(ControlElementType.STICK, 0.13, 0.73, '', dpadWASD()),
+    createControlElement(ControlElementType.TRACKPAD, 0.60, 0.58, '视角', []),
+    createControlElement(ControlElementType.BUTTON, 0.82, 0.70, '攻击', [mouseBinding(MOUSE_LEFT_BUTTON)]),
+    createControlElement(ControlElementType.BUTTON, 0.91, 0.59, '视角', [mouseBinding(MOUSE_RIGHT_BUTTON)]),
+    createControlElement(ControlElementType.BUTTON, 0.91, 0.82, '交互', [keyBinding(18)]),
+    createControlElement(ControlElementType.BUTTON, 0.73, 0.82, '跳跃', [keyBinding(57)]),
+    createControlElement(ControlElementType.BUTTON, 0.05, 0.09, '菜单', [keyBinding(1)], ControlElementShape.ROUND_RECT),
+    createControlElement(ControlElementType.BUTTON, 0.15, 0.09, '背包', [keyBinding(23)], ControlElementShape.ROUND_RECT),
+    createControlElement(ControlElementType.BUTTON, 0.25, 0.09, '地图', [keyBinding(50)], ControlElementShape.ROUND_RECT),
+    createControlElement(ControlElementType.BUTTON, 0.35, 0.09, '角色', [keyBinding(46)], ControlElementShape.ROUND_RECT),
+    createControlElement(ControlElementType.BUTTON, 0.45, 0.09, '任务', [keyBinding(36)], ControlElementShape.ROUND_RECT),
+    createControlElement(ControlElementType.BUTTON, 0.06, 0.44, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT, 0.72, true),
+    createControlElement(ControlElementType.BUTTON, 0.17, 0.44, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT, 0.72, true),
+    createControlElement(ControlElementType.RANGE_BUTTON, 0.972, 0.39, '技能', [],
+      ControlElementShape.ROUND_RECT, 0.62, false, [2, 3, 4, 5, 6, 7], 'vertical')
+  ];
+}
+
+function fpsTemplateElements(): ControlElement[] {
   return [
     createControlElement(ControlElementType.D_PAD, 0.12, 0.72, '', dpadWASD()),
     createControlElement(ControlElementType.TRACKPAD, 0.68, 0.38, '视角', []),
@@ -620,9 +797,9 @@ function shooterTemplateElements(): ControlElement[] {
     createControlElement(ControlElementType.BUTTON, 0.89, 0.58, '瞄准', [mouseBinding(MOUSE_RIGHT_BUTTON)]),
     createControlElement(ControlElementType.BUTTON, 0.90, 0.84, 'R', [keyBinding(19)]),
     createControlElement(ControlElementType.BUTTON, 0.72, 0.84, '跳', [keyBinding(57)]),
-    createControlElement(ControlElementType.BUTTON, 0.08, 0.86, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT),
-    createControlElement(ControlElementType.BUTTON, 0.20, 0.86, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT),
-    createControlElement(ControlElementType.BUTTON, 0.05, 0.07, 'Esc', [keyBinding(1)], ControlElementShape.ROUND_RECT),
+    createControlElement(ControlElementType.BUTTON, 0.06, 0.44, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT, 0.72, true),
+    createControlElement(ControlElementType.BUTTON, 0.17, 0.44, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT, 0.72, true),
+    createControlElement(ControlElementType.BUTTON, 0.06, 0.26, 'Esc', [keyBinding(1)], ControlElementShape.ROUND_RECT, 0.72),
     createControlElement(ControlElementType.RANGE_BUTTON, 0.95, 0.46, '武器', [], ControlElementShape.ROUND_RECT, 0.9, false, [2, 3, 4, 5, 6])
   ];
 }
@@ -635,11 +812,11 @@ function actionTemplateElements(): ControlElement[] {
     createControlElement(ControlElementType.BUTTON, 0.92, 0.60, 'B', [keyBinding(36)]),
     createControlElement(ControlElementType.BUTTON, 0.85, 0.84, 'X', [keyBinding(18)]),
     createControlElement(ControlElementType.BUTTON, 0.92, 0.84, 'Y', [keyBinding(37)]),
-    createControlElement(ControlElementType.BUTTON, 0.06, 0.64, 'L', [keyBinding(16)]),
-    createControlElement(ControlElementType.BUTTON, 0.16, 0.64, 'R', [keyBinding(17)]),
-    createControlElement(ControlElementType.BUTTON, 0.05, 0.07, 'Start', [keyBinding(28)], ControlElementShape.ROUND_RECT),
-    createControlElement(ControlElementType.BUTTON, 0.08, 0.88, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT),
-    createControlElement(ControlElementType.BUTTON, 0.20, 0.88, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT)
+    createControlElement(ControlElementType.BUTTON, 0.06, 0.26, 'L', [keyBinding(16)], ControlElementShape.ROUND_RECT, 0.72),
+    createControlElement(ControlElementType.BUTTON, 0.16, 0.26, 'R', [keyBinding(17)], ControlElementShape.ROUND_RECT, 0.72),
+    createControlElement(ControlElementType.BUTTON, 0.46, 0.26, 'Start', [keyBinding(28)], ControlElementShape.ROUND_RECT, 0.72),
+    createControlElement(ControlElementType.BUTTON, 0.06, 0.44, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT, 0.72, true),
+    createControlElement(ControlElementType.BUTTON, 0.17, 0.44, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT, 0.72, true)
   ];
   // 视角摇杆默认输出鼠标视角。
   if (elements.length > 1 && elements[1].type === ControlElementType.STICK) {
@@ -649,7 +826,9 @@ function actionTemplateElements(): ControlElement[] {
 }
 
 function templateElements(templateId: string): ControlElement[] {
-  if (templateId === 'shooter') return shooterTemplateElements();
+  if (templateId === 'full-keyboard') return fullKeyboardTemplateElements();
+  if (templateId === 'rpg') return rpgTemplateElements();
+  if (templateId === 'fps' || templateId === 'shooter') return fpsTemplateElements();
   if (templateId === 'action') return actionTemplateElements();
   return defaultTemplateElements();
 }
@@ -668,6 +847,17 @@ export function createInputProfileFromTemplate(id: string, name: string, templat
 
 export function createDefaultInputProfile(): InputProfile {
   return createInputProfileFromTemplate('default', '默认输入方案', 'default');
+}
+
+export function createBuiltInInputProfiles(): InputProfile[] {
+  return INPUT_TEMPLATES.map((template: InputTemplate): InputProfile => {
+    const profile = createInputProfileFromTemplate(
+      template.builtInProfileId,
+      template.profileName,
+      template.id);
+    profile.builtInRevision = template.revision;
+    return profile;
+  });
 }
 
 export function createDefaultGlobalSettings(): GlobalSettings {
@@ -787,6 +977,11 @@ interface IcpElementRaw {
   shape?: string;
   bindings?: string[];
   scale?: number;
+  /** VintagePomelo extension; other Winlator-compatible readers ignore it. */
+  widthScale?: number;
+  heightScale?: number;
+  panelWidthRatio?: number;
+  panelHeightRatio?: number;
   x?: number;
   y?: number;
   toggleSwitch?: boolean;
@@ -804,6 +999,7 @@ interface IcpProfileRaw {
 }
 
 function parseElementType(value: string): ControlElementType | null {
+  if (value === 'PANEL') return ControlElementType.PANEL;
   if (value === 'BUTTON') return ControlElementType.BUTTON;
   if (value === 'D_PAD') return ControlElementType.D_PAD;
   if (value === 'STICK') return ControlElementType.STICK;
@@ -870,7 +1066,13 @@ export function importProfileFromIcpJson(json: string, profileId: string, name?:
       shape: parseElementShape(el.shape ?? '', type),
       x: clampNumber(el.x, 0, 1, 0.5),
       y: clampNumber(el.y, 0, 1, 0.5),
-      scale: clampNumber(el.scale, 0.5, 2, 1),
+      scale: clampNumber(el.scale, 0.35, 2, 1),
+      widthScale: clampNumber(el.widthScale, 0.5, 6, 1),
+      heightScale: clampNumber(el.heightScale, 0.5, 6, 1),
+      panelWidthRatio: type === ControlElementType.PANEL ?
+        clampNumber(el.panelWidthRatio, 0.1, 1, 0.84) : undefined,
+      panelHeightRatio: type === ControlElementType.PANEL ?
+        clampNumber(el.panelHeightRatio, 0.1, 1, 0.48) : undefined,
       opacity: -1,
       bindings: bindings.map(cloneInputBinding),
       toggleSwitch: el.toggleSwitch ?? false,
@@ -919,8 +1121,8 @@ function exportBindingNames(element: ControlElement): string[] {
 }
 
 /**
- * 导出为 Winlator 兼容的 .icp JSON（标准字段子集；本项目扩展字段如
- * 元素级透明度、可见性不导出）。
+ * 导出为 Winlator 兼容的 .icp JSON。widthScale 是本项目用于宽键的
+ * 可选扩展字段，其他兼容读取器会按 JSON 规则忽略它。
  */
 export function exportProfileToIcpJson(profile: InputProfile): string {
   const elements = (profile.elements ?? []).map((element: ControlElement): IcpElementRaw => ({
@@ -928,6 +1130,10 @@ export function exportProfileToIcpJson(profile: InputProfile): string {
     shape: element.shape,
     bindings: exportBindingNames(element),
     scale: element.scale,
+    widthScale: element.widthScale ?? 1,
+    heightScale: element.heightScale ?? 1,
+    panelWidthRatio: element.panelWidthRatio,
+    panelHeightRatio: element.panelHeightRatio,
     x: element.x,
     y: element.y,
     toggleSwitch: element.toggleSwitch,

@@ -23,7 +23,8 @@ import {
   box64PresetDescription,
   box64PresetLabel,
   cloneVirtualMouseConfig,
-  createDefaultGlobalSettings
+  createDefaultGlobalSettings,
+  inputTemplateForProfileId
 } from '../model/AppModels';
 import { ThemeSettingsService } from '../service/ThemeSettingsService';
 import { EngineStateListener, WineEngineService } from '../service/WineEngineService';
@@ -74,6 +75,147 @@ const SUPPORTS_HDS_FLOATING: boolean =
 const HDS_MATERIAL_TYPE_IMMERSIVE: number = 101;
 const HDS_MATERIAL_LEVEL_EXQUISITE: number = 0;
 
+@CustomDialog
+struct InputProfilePickerDialog {
+  controller?: CustomDialogController;
+  profiles: InputProfile[] = [];
+  selectedId: string = 'default';
+  compact: boolean = true;
+  onSelect: (profileId: string) => void = (_profileId: string): void => {};
+  onDelete: (profile: InputProfile) => void = (_profile: InputProfile): void => {};
+
+  private builtInProfiles(): InputProfile[] {
+    return this.profiles.filter((profile: InputProfile): boolean =>
+      inputTemplateForProfileId(profile.id) !== undefined);
+  }
+
+  private customProfiles(): InputProfile[] {
+    return this.profiles.filter((profile: InputProfile): boolean =>
+      inputTemplateForProfileId(profile.id) === undefined);
+  }
+
+  private choose(profileId: string): void {
+    if (this.controller) this.controller.close();
+    this.onSelect(profileId);
+  }
+
+  private remove(profile: InputProfile): void {
+    if (this.controller) this.controller.close();
+    this.onDelete(profile);
+  }
+
+  @Builder
+  private BuiltInChoice(profile: InputProfile) {
+    Button() {
+      Row({ space: 10 }) {
+        SymbolGlyph(profile.id === this.selectedId ?
+          $r('sys.symbol.checkmark_circle_fill') : $r('sys.symbol.circle'))
+          .fontSize(21)
+          .fontColor([profile.id === this.selectedId ?
+            $r('app.color.accent') : $r('app.color.text_secondary')])
+        Column({ space: 3 }) {
+          Text(profile.name).fontSize(14).fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary')).maxLines(1).width('100%')
+          Text(inputTemplateForProfileId(profile.id)?.description ?? '内置输入方案')
+            .fontSize(10).fontColor($r('app.color.text_secondary')).maxLines(2).width('100%')
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+      }.width('100%')
+    }
+    .width(this.compact ? '100%' : '48%')
+    .height(this.compact ? 70 : 78)
+    .padding(11).borderRadius(14)
+    .backgroundColor(profile.id === this.selectedId ?
+      $r('app.color.selected_background') : $r('app.color.search_background'))
+    .border({ width: 1, color: profile.id === this.selectedId ?
+      $r('app.color.accent') : '#14000000' })
+    .margin({ bottom: 8 })
+    .id('picker-input-profile-' + profile.id)
+    .onClick((): void => this.choose(profile.id))
+  }
+
+  @Builder
+  private CustomChoice(profile: InputProfile) {
+    Row({ space: 8 }) {
+      Button() {
+        Row({ space: 10 }) {
+          SymbolGlyph(profile.id === this.selectedId ?
+            $r('sys.symbol.checkmark_circle_fill') : $r('sys.symbol.circle'))
+            .fontSize(21)
+            .fontColor([profile.id === this.selectedId ?
+              $r('app.color.accent') : $r('app.color.text_secondary')])
+          Column({ space: 3 }) {
+            Text(profile.name).fontSize(14).fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.text_primary')).maxLines(1).width('100%')
+            Text(profile.id === this.selectedId ? '我的方案 · 使用中' : '我的方案')
+              .fontSize(10).fontColor(profile.id === this.selectedId ?
+                $r('app.color.accent') : $r('app.color.text_secondary')).width('100%')
+          }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        }.width('100%')
+      }
+      .layoutWeight(1).height(62).padding({ left: 10, right: 6 })
+      .backgroundColor(Color.Transparent)
+      .onClick((): void => this.choose(profile.id))
+      Button('删除')
+        .width(58).height(36).margin({ right: 8 }).borderRadius(10).fontSize(11)
+        .backgroundColor('#18D94848').fontColor('#D94848')
+        .id('picker-delete-input-profile-' + profile.id)
+        .onClick((): void => this.remove(profile))
+    }
+    .width('100%').height(62).borderRadius(14)
+    .backgroundColor(profile.id === this.selectedId ?
+      $r('app.color.selected_background') : $r('app.color.search_background'))
+    .margin({ bottom: 8 })
+  }
+
+  build() {
+    Column({ space: 12 }) {
+      Row() {
+        Column({ space: 3 }) {
+          Text('切换输入方案').fontSize(20).fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary')).width('100%')
+          Text('内置方案可直接使用；自己的方案可在这里切换或删除。')
+            .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        Button('关闭').height(38).borderRadius(12).fontSize(12)
+          .backgroundColor($r('app.color.search_background')).fontColor($r('app.color.text_primary'))
+          .onClick((): void => { if (this.controller) this.controller.close(); })
+      }.width('100%')
+
+      Scroll() {
+        Column({ space: 6 }) {
+          Text('内置方案').fontSize(12).fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_secondary')).width('100%')
+          Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween }) {
+            ForEach(this.builtInProfiles(), (profile: InputProfile): void => {
+              this.BuiltInChoice(profile)
+            }, (profile: InputProfile): string => profile.id)
+          }.width('100%')
+
+          Text('我的方案').fontSize(12).fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_secondary')).width('100%').margin({ top: 2 })
+          if (this.customProfiles().length === 0) {
+            Text('还没有自定义方案，可关闭后点击“新建方案”。')
+              .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+              .padding(12).backgroundColor($r('app.color.search_background')).borderRadius(12)
+          } else {
+            ForEach(this.customProfiles(), (profile: InputProfile): void => {
+              this.CustomChoice(profile)
+            }, (profile: InputProfile): string => profile.id)
+          }
+        }.width('100%').alignItems(HorizontalAlign.Start)
+      }
+      .width('100%')
+      .constraintSize({ maxHeight: this.compact ? 500 : 590 })
+      .scrollBar(BarState.Auto)
+    }
+    .width(this.compact ? '94%' : '82%')
+    .constraintSize({ maxWidth: 720 })
+    .padding(this.compact ? 16 : 22)
+    .backgroundColor($r('app.color.card_background'))
+    .borderRadius(22)
+  }
+}
+
 @Entry
 @Component
 struct SystemSettingsPage {
@@ -85,7 +227,10 @@ struct SystemSettingsPage {
   @State private engineBusy: boolean = false;
   @State private engineOperationMessage: string = '';
   @State private inputProfiles: InputProfile[] = [];
-  @State private showTemplatePicker: boolean = false;
+  @State private showProfileCreator: boolean = false;
+  @State private profileCreatorBaseId: string = 'current';
+  @State private profileCreatorName: string = '';
+  @State private profileCreating: boolean = false;
   @State private statusBarHeightVp: number = 0;
   @State private titleContentTopInsetVp: number = 40;
   @State private navBarInsetVp: number = 0;
@@ -99,6 +244,7 @@ struct SystemSettingsPage {
   private engineCallback: EngineStateListener | null = null;
   private sidebarTarget: SettingsSection | null = null;
   private disposeWindowInsetObserver: (() => void) | null = null;
+  private inputProfilePickerController: CustomDialogController | null = null;
 
   private isNarrowPhone(): boolean {
     return this.breakpoint === 'xs';
@@ -749,23 +895,85 @@ struct SystemSettingsPage {
       this.settings.controlBarDirection, this.settings.virtualMouseConfig, profileId);
   }
 
-  private async saveDesktopProfileCopy(): Promise<void> {
-    const service = InputProfileService.getInstance();
-    const sourceId = this.settings.desktopInputProfileId || 'default';
-    const number = this.inputProfiles.filter((profile: InputProfile): boolean => profile.id !== 'default').length + 1;
-    const profile = await service.duplicateProfile(sourceId, '桌面方案 ' + number.toString());
-    this.inputProfiles = service.getDesktopProfiles();
-    this.selectDesktopProfile(profile.id);
-    promptAction.showToast({ message: '已保存并切换到 ' + profile.name });
+  private openProfileCreator(baseId: string = 'current'): void {
+    this.showProfileCreator = true;
+    this.selectProfileCreatorBase(baseId);
   }
 
-  private async createProfileFromTemplate(templateId: string): Promise<void> {
-    const service = InputProfileService.getInstance();
+  private selectProfileCreatorBase(baseId: string): void {
+    this.profileCreatorBaseId = baseId;
+    if (baseId === 'current') {
+      this.profileCreatorName = (this.selectedProfileName() + ' 副本').slice(0, 40);
+      return;
+    }
+    const templateId = baseId.startsWith('template:') ? baseId.slice('template:'.length) : baseId;
     const template = INPUT_TEMPLATES.find((item: InputTemplate): boolean => item.id === templateId);
-    const profile = await service.createProfileFromTemplate('模板方案', templateId);
-    this.inputProfiles = service.getDesktopProfiles();
-    this.selectDesktopProfile(profile.id);
-    promptAction.showToast({ message: '已创建 ' + profile.name + '（' + (template?.name ?? '通用') + ' 模板）' });
+    this.profileCreatorName = ((template?.name ?? '自定义') + ' 方案').slice(0, 40);
+  }
+
+  private normalizedProfileCreatorName(): string {
+    return this.profileCreatorName.replace(/\s+/g, ' ').trim();
+  }
+
+  private profileCreatorError(): string {
+    const name = this.normalizedProfileCreatorName();
+    if (name.length === 0) return '请输入方案名称';
+    if (name.length > 40) return '方案名称不能超过 40 个字符';
+    if (InputProfileService.getInstance().hasDesktopProfileName(name)) return '已有同名方案，请换一个名称';
+    return '';
+  }
+
+  private async createNamedProfile(): Promise<void> {
+    if (this.profileCreating) return;
+    const error = this.profileCreatorError();
+    if (error.length > 0) {
+      promptAction.showToast({ message: error });
+      return;
+    }
+    this.profileCreating = true;
+    try {
+      const service = InputProfileService.getInstance();
+      const name = this.normalizedProfileCreatorName();
+      let profile: InputProfile;
+      if (this.profileCreatorBaseId === 'current') {
+        profile = await service.duplicateProfile(this.settings.desktopInputProfileId || 'default', name);
+      } else {
+        const templateId = this.profileCreatorBaseId.startsWith('template:') ?
+          this.profileCreatorBaseId.slice('template:'.length) : this.profileCreatorBaseId;
+        profile = await service.createProfileFromTemplate(name, templateId);
+      }
+      this.inputProfiles = service.getDesktopProfiles();
+      this.selectDesktopProfile(profile.id);
+      this.showProfileCreator = false;
+      promptAction.showToast({ message: '已创建并切换到“' + profile.name + '”' });
+    } catch (_) {
+      promptAction.showToast({ message: '创建方案失败，请重试' });
+    } finally {
+      this.profileCreating = false;
+    }
+  }
+
+  private requestRemoveInputProfile(profile: InputProfile): void {
+    if (inputTemplateForProfileId(profile.id)) return;
+    AlertDialog.show({
+      title: '删除输入方案',
+      message: '确定删除“' + profile.name + '”吗？只会删除这份按键配置，不会影响游戏文件。',
+      primaryButton: { value: '取消', action: (): void => {} },
+      secondaryButton: { value: '删除', fontColor: '#D94848', action: (): void => {
+        const wasActive = this.settings.desktopInputProfileId === profile.id;
+        InputProfileService.getInstance().removeProfile(profile.id).then((removed: boolean): void => {
+          if (!removed) {
+            promptAction.showToast({ message: '内置方案不能删除' });
+            return;
+          }
+          this.inputProfiles = InputProfileService.getInstance().getDesktopProfiles();
+          if (wasActive) this.selectDesktopProfile('default');
+          promptAction.showToast({ message: '已删除“' + profile.name + '”' });
+        }).catch((): void => {
+          promptAction.showToast({ message: '删除方案失败' });
+        });
+      } }
+    });
   }
 
   private async importInputProfile(): Promise<void> {
@@ -797,17 +1005,20 @@ struct SystemSettingsPage {
     }
   }
 
-  private resetDefaultInputProfile(): void {
+  private resetSelectedBuiltInProfile(): void {
+    const profileId = this.settings.desktopInputProfileId || 'default';
+    const template = inputTemplateForProfileId(profileId);
+    if (!template) return;
     AlertDialog.show({
-      title: '重置默认输入方案',
-      message: '默认输入方案将恢复为通用模板，当前默认方案的修改会丢失。',
+      title: '恢复内置方案',
+      message: '“' + template.profileName + '”将恢复为出厂布局，对它的修改会丢失；我的方案不受影响。',
       primaryButton: { value: '取消', action: (): void => {} },
-      secondaryButton: { value: '重置', fontColor: '#D94848', action: (): void => {
-        InputProfileService.getInstance().resetDefaultProfile().then((): void => {
+      secondaryButton: { value: '恢复', fontColor: '#D94848', action: (): void => {
+        InputProfileService.getInstance().resetBuiltInProfile(profileId).then((): void => {
           this.inputProfiles = InputProfileService.getInstance().getDesktopProfiles();
-          promptAction.showToast({ message: '默认方案已重置为通用模板' });
+          promptAction.showToast({ message: '“' + template.profileName + '”已恢复' });
         }).catch((): void => {
-          promptAction.showToast({ message: '重置失败' });
+          promptAction.showToast({ message: '恢复失败' });
         });
       } }
     });
@@ -977,89 +1188,185 @@ struct SystemSettingsPage {
     return selected?.name ?? '默认输入方案';
   }
 
-  @Builder
-  private InputProfileChoice(profile: InputProfile) {
-    Row({ space: 10 }) {
-      SymbolGlyph(profile.id === this.settings.desktopInputProfileId ?
-        $r('sys.symbol.checkmark_circle_fill') : $r('sys.symbol.circle'))
-        .fontSize(20)
-        .fontColor([profile.id === this.settings.desktopInputProfileId ?
-          $r('app.color.accent') : $r('app.color.text_secondary')])
-      Column({ space: 3 }) {
-        Text(profile.name).fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
-        Text(profile.id === 'default' ? '内建默认方案' : '已保存桌面方案')
-          .fontSize(10).fontColor($r('app.color.text_secondary'))
-      }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-      if (profile.id === this.settings.desktopInputProfileId) {
-        Text('使用中').fontSize(11).fontColor($r('app.color.accent'))
-      }
+  private selectedProfileDescription(): string {
+    const template = inputTemplateForProfileId(this.settings.desktopInputProfileId || 'default');
+    if (template) return '内置方案 · ' + template.description;
+    const selected = this.inputProfiles.find((profile: InputProfile): boolean =>
+      profile.id === this.settings.desktopInputProfileId);
+    return '我的方案 · ' + (selected?.elements.length ?? 0).toString() + ' 个控件';
+  }
+
+  private compactProfileDialog(): boolean {
+    return this.breakpoint === 'xs' || this.breakpoint === 'sm';
+  }
+
+  private openInputProfilePicker(): void {
+    if (this.inputProfilePickerController) return;
+    this.inputProfilePickerController = new CustomDialogController({
+      builder: InputProfilePickerDialog({
+        profiles: this.inputProfiles,
+        selectedId: this.settings.desktopInputProfileId || 'default',
+        compact: this.compactProfileDialog(),
+        onSelect: (profileId: string): void => {
+          this.inputProfilePickerController = null;
+          if (profileId === this.settings.desktopInputProfileId) return;
+          this.selectDesktopProfile(profileId);
+          promptAction.showToast({ message: '已切换到“' + this.selectedProfileName() + '”' });
+        },
+        onDelete: (profile: InputProfile): void => {
+          this.inputProfilePickerController = null;
+          this.requestRemoveInputProfile(profile);
+        }
+      }),
+      cancel: (): void => { this.inputProfilePickerController = null; },
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      customStyle: true
+    });
+    try {
+      this.inputProfilePickerController.open();
+    } catch (_) {
+      this.inputProfilePickerController = null;
+      promptAction.showToast({ message: '无法打开方案选择器' });
     }
-    .width('100%').height(58).padding({ left: 12, right: 12 }).borderRadius(14)
-    .backgroundColor(profile.id === this.settings.desktopInputProfileId ?
-      $r('app.color.selected_background') : $r('app.color.search_background'))
-    .id('desktop-input-profile-' + profile.id)
-    .onClick((): void => this.selectDesktopProfile(profile.id))
+  }
+
+  @Builder
+  private ProfileCreatorBaseChoice(baseId: string, title: string, description: string) {
+    Button() {
+      Column({ space: 3 }) {
+        Text(title).fontSize(13).fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary')).maxLines(1).width('100%')
+        Text(description).fontSize(10).fontColor($r('app.color.text_secondary'))
+          .maxLines(2).width('100%')
+      }.width('100%').alignItems(HorizontalAlign.Start)
+    }
+    .width(this.compactProfileDialog() ? '100%' : '48%')
+    .height(66).padding(10).borderRadius(12)
+    .backgroundColor(this.profileCreatorBaseId === baseId ?
+      $r('app.color.selected_background') : $r('app.color.card_background'))
+    .border({ width: 1, color: this.profileCreatorBaseId === baseId ?
+      $r('app.color.accent') : this.groupBorderColor() })
+    .margin({ right: 7, bottom: 7 })
+    .id('profile-base-' + baseId.replace(':', '-'))
+    .onClick((): void => this.selectProfileCreatorBase(baseId))
+  }
+
+  @Builder
+  private InputProfileCreator() {
+    Column({ space: 11 }) {
+      Row() {
+        Column({ space: 3 }) {
+          Text('新建我的方案').fontSize(15).fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+          Text('先选择一个起点，再为新方案命名。创建后会自动切换。')
+            .fontSize(10).fontColor($r('app.color.text_secondary'))
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        Text('取消').fontSize(12).fontColor($r('app.color.text_secondary'))
+          .onClick((): void => { this.showProfileCreator = false; })
+      }.width('100%')
+
+      Text('1  选择起点').fontSize(12).fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary')).width('100%')
+      Flex({ wrap: FlexWrap.Wrap }) {
+        this.ProfileCreatorBaseChoice('current', '复制当前', '保留“' + this.selectedProfileName() + '”的全部设置')
+        ForEach(INPUT_TEMPLATES, (template: InputTemplate): void => {
+          this.ProfileCreatorBaseChoice('template:' + template.id, template.name, template.description)
+        }, (template: InputTemplate): string => template.id)
+      }.width('100%')
+
+      Text('2  输入名称').fontSize(12).fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary')).width('100%')
+      TextInput({ text: this.profileCreatorName, placeholder: '例如：仙剑快捷键、我的 FPS 布局' })
+        .width('100%').height(46).borderRadius(12).maxLength(40)
+        .backgroundColor($r('app.color.card_background'))
+        .id('new-input-profile-name')
+        .onChange((value: string): void => { this.profileCreatorName = value; })
+      if (this.profileCreatorError().length > 0) {
+        Text(this.profileCreatorError()).fontSize(10).fontColor('#D94848').width('100%')
+      }
+      Button(this.profileCreating ? '正在创建…' : '创建并使用')
+        .width('100%').height(46).borderRadius(12)
+        .backgroundColor($r('app.color.accent')).fontColor('#FFFFFFFF')
+        .enabled(!this.profileCreating && this.profileCreatorError().length === 0)
+        .id('confirm-create-input-profile')
+        .onClick((): void => { this.createNamedProfile(); })
+    }
+    .width('100%').padding(13).borderRadius(14)
+    .backgroundColor($r('app.color.selected_background'))
+    .border({ width: 1, color: $r('app.color.accent') })
   }
 
   @Builder
   private DesktopInputProfiles() {
-    Column({ space: 9 }) {
-      Text('桌面模式输入方案').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
-      Text('桌面模式可同时运行多个程序，因此统一使用这里选择的全局方案；支持从模板新建、导入导出 .icp 预设。')
+    Column({ space: 11 }) {
+      Text('输入方案').fontSize(16).fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary')).width('100%')
+      Text('当前只显示正在使用的方案；需要时打开选择器快速切换。')
         .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
-      ForEach(this.inputProfiles, (profile: InputProfile): void => {
-        this.InputProfileChoice(profile)
-      }, (profile: InputProfile): string => profile.id)
-      Button('保存当前配置为新方案')
-        .width('100%').height(48).borderRadius(14)
-        .backgroundColor($r('app.color.selected_background')).fontColor($r('app.color.accent'))
-        .id('save-desktop-input-profile')
-        .onClick((): void => { this.saveDesktopProfileCopy(); })
-      if (this.showTemplatePicker) {
-        Column({ space: 8 }) {
-          Text('选择模板').fontSize(12).fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary')).width('100%')
-          Row({ space: 8 }) {
-            ForEach(INPUT_TEMPLATES, (template: InputTemplate): void => {
-              Text(template.name)
-                .layoutWeight(1).height(40).textAlign(TextAlign.Center).fontSize(13)
-                .fontColor('#FFFFFFFF')
-                .backgroundColor($r('app.color.selected_background'))
-                .borderRadius(12).border({ width: 1, color: '#44FFFFFF' })
-                .id('template-choice-' + template.id)
-                .onClick((): void => { this.createProfileFromTemplate(template.id); })
-            }, (template: InputTemplate): string => template.id)
-          }.width('100%')
-          Text('取消').fontSize(12).fontColor($r('app.color.text_secondary'))
-            .onClick((): void => { this.showTemplatePicker = false; })
-        }
-        .width('100%').padding(10)
-        .backgroundColor($r('app.color.search_background')).borderRadius(12)
+
+      Button() {
+        Row({ space: 12 }) {
+          Stack({ alignContent: Alignment.Center }) {
+            SymbolGlyph($r('sys.symbol.keyboard')).fontSize(23).fontColor([$r('app.color.accent')])
+          }
+          .width(44).height(44).borderRadius(14)
+          .backgroundColor($r('app.color.selected_background'))
+          Column({ space: 3 }) {
+            Text(this.selectedProfileName()).fontSize(15).fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.text_primary')).maxLines(1).width('100%')
+            Text(this.selectedProfileDescription()).fontSize(10)
+              .fontColor($r('app.color.text_secondary')).maxLines(2).width('100%')
+          }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+          Text('切换').fontSize(12).fontColor($r('app.color.accent'))
+        }.width('100%')
       }
+      .width('100%').height(72).padding({ left: 12, right: 12 }).borderRadius(14)
+      .backgroundColor($r('app.color.card_background'))
+      .border({ width: 1, color: this.groupBorderColor() })
+      .id('open-input-profile-picker')
+      .onClick((): void => this.openInputProfilePicker())
+
       Row({ space: 8 }) {
-        Button('从模板新建').layoutWeight(1).height(44).borderRadius(12)
+        Button('切换方案').layoutWeight(1).height(46).borderRadius(12)
           .backgroundColor($r('app.color.selected_background')).fontColor($r('app.color.accent'))
           .fontSize(12)
-          .id('create-input-profile-template')
-          .onClick((): void => { this.showTemplatePicker = !this.showTemplatePicker; })
-        Button('导入方案').layoutWeight(1).height(44).borderRadius(12)
+          .id('switch-input-profile')
+          .onClick((): void => this.openInputProfilePicker())
+        Button(this.showProfileCreator ? '收起新建' : '新建方案')
+          .layoutWeight(1).height(46).borderRadius(12)
           .backgroundColor($r('app.color.selected_background')).fontColor($r('app.color.accent'))
+          .fontSize(12)
+          .id('open-input-profile-creator')
+          .onClick((): void => {
+            if (this.showProfileCreator) this.showProfileCreator = false;
+            else this.openProfileCreator('current');
+          })
+      }.width('100%')
+      if (this.showProfileCreator) {
+        this.InputProfileCreator()
+      }
+
+      Row({ space: 8 }) {
+        Button('导入方案').layoutWeight(1).height(44).borderRadius(12)
+          .backgroundColor($r('app.color.card_background')).fontColor($r('app.color.text_primary'))
           .fontSize(12)
           .id('import-input-profile')
           .onClick((): void => { this.importInputProfile(); })
-      }.width('100%')
-      Row({ space: 8 }) {
         Button('导出当前方案').layoutWeight(1).height(44).borderRadius(12)
-          .backgroundColor($r('app.color.search_background')).fontColor($r('app.color.text_primary'))
+          .backgroundColor($r('app.color.card_background')).fontColor($r('app.color.text_primary'))
           .fontSize(12)
           .id('export-input-profile')
           .onClick((): void => { this.exportCurrentInputProfile(); })
-        Button('重置默认').layoutWeight(1).height(44).borderRadius(12)
-          .backgroundColor($r('app.color.search_background')).fontColor('#D94848')
-          .fontSize(12)
-          .id('reset-default-input-profile')
-          .onClick((): void => { this.resetDefaultInputProfile(); })
       }.width('100%')
+      if (inputTemplateForProfileId(this.settings.desktopInputProfileId || 'default')) {
+        Button('恢复当前内置方案')
+          .width('100%').height(42).borderRadius(12)
+          .backgroundColor($r('app.color.card_background')).fontColor('#D94848')
+          .fontSize(12)
+          .id('reset-builtin-input-profile')
+          .onClick((): void => { this.resetSelectedBuiltInProfile(); })
+      }
     }
     .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
   }
