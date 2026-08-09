@@ -1,6 +1,6 @@
 ---
 name: winehua-build-release
-description: Build, test, sign, inspect, install, diagnose, and privately publish the WineHua/Old Pomelo Pro HarmonyOS project. Use for Docker/Makefile builds, API 23 HAP or APP packaging, x86_64 emulator and ARM64 tablet variants, Box64/Wine/Wayland/VirGL/guest-gfx changes, signing-profile work, HDC deployment, ARM-only Wine startup failures, submodule updates, isolated private-branch work, or publishing VintagePomeloPro without pushing private code to WineHua origin.
+description: Build, test, sign, inspect, install, diagnose, and privately publish the WineHua/Old Pomelo Pro HarmonyOS project. Use for Docker/Makefile builds, API 23 HAP or APP packaging, x86_64 emulator and ARM64 tablet variants, Box64/Wine/Wayland/VirGL/guest-gfx changes, signing-profile work, HDC deployment, ARM-only Wine startup failures, submodule updates, isolated private-branch work, or publishing VintagePomeloPro without pushing private code to WineHua origin. Also use after a WSL or Docker Desktop reinstall (or on a fresh machine) to rebuild the compile environment (Docker WSL integration, git credentials and proxy, private repo/submodule restore, Wine Mono staging, and signing-config recovery).
 ---
 
 # WineHua Build, Test, And Release
@@ -63,6 +63,18 @@ On Windows, express `REPO` and `TOOLS` as WSL paths when passing them to Docker.
 
 On Linux or macOS, invoke the same Linux Docker build with host-absolute bind paths. Do not fall back to a native host build when Docker or the Linux Harmony tools are unavailable. Report the missing prerequisite instead.
 
+### Current Machine Layout (2026-08, after WSL reinstall)
+
+| Value | Location |
+| --- | --- |
+| `REPO` | `/home/liufeng/src/VintagePomeloPro` (WSL Ubuntu-22.04, user `liufeng`), branch `private/wine-engine-app` |
+| Windows view | `\\wsl.localhost\Ubuntu-22.04\home\liufeng\src\VintagePomeloPro` |
+| `TOOLS` | `/mnt/f/command-line-tools` (read-only mount at `/apps/harmony`) |
+| `IMAGE` | `winehua-dev` (never rebuild) |
+| Proxy | host proxy listens on `0.0.0.0:8080`; from WSL use `http://172.17.80.1:8080` (WSL gateway IP, verify with `ip route`) |
+| Signing source | `F:\PomeloWin\signs` and `F:\MyProject\vintage-pomelo\docs\签名` |
+| Artifacts | `F:\PomeloWin\artifacts\VintagePomeloPro-<version>-<date>[-rebuild]` |
+
 Before building, verify the existing environment:
 
 ```bash
@@ -74,6 +86,33 @@ git -C "$REPO" submodule status --recursive
 ```
 
 Do not silently rebuild or replace `winehua-dev`. If the image is absent, inspect the project `Dockerfile` and ask for the expected image/import process.
+
+## Rebuild The Environment (fresh WSL / Docker Desktop)
+
+After a WSL or Docker Desktop reinstall, restore in this order before compiling. Full commands and pitfalls: [REBUILD-ENVIRONMENT.md](references/rebuild-environment.md); signing recovery: [SIGNING-RECOVERY.md](references/signing-recovery.md).
+
+1. **Docker access**: enable WSL integration for the Ubuntu distro (`%APPDATA%\Docker\settings.json` -> `integratedWslDistros`, restart Docker Desktop), then verify `docker` works inside WSL and `docker image inspect winehua-dev` succeeds. Never rebuild the image.
+2. **Git credentials**: retrieve the cached GitHub token from the Windows credential manager (`git credential fill` for `github.com`, do not print it), write `~/.git-credentials` (chmod 600), enable `credential.helper store`, and set `http.lowSpeedLimit 1` / `http.lowSpeedTime 999`.
+3. **Proxy**: point git at the host proxy for github.com (`http.https://github.com/.proxy`). Private GitHub fetches require both proxy and credentials; without credentials the clone hangs or reports "Repository not found".
+4. **Clone**: `git clone https://github.com/yifengling0/VintagePomeloPro.git`, create local branch `private/wine-engine-app` from `main`, and confirm `AppScope/app.json5` bundle/version before building.
+5. **Submodules**: the three `git@github.com:winehua/...` URLs fail in `git submodule update` because `insteadOf` URL rewriting is not inherited by the submodule clone process. Override them in local config first:
+
+   ```bash
+   git config submodule.thirdparty/wine.url https://github.com/winehua/wine.git
+   git config submodule.thirdparty/box64.url https://github.com/winehua/box64.git
+   git config submodule.thirdparty/mesa.url https://github.com/winehua/mesa-ohos.git
+   git submodule update --init --recursive
+   ```
+
+   Repair a wiped submodule working tree with `git submodule update --init --recursive --force`; if one clone keeps failing, clone it manually and check out the pinned SHA.
+6. **Wine Mono**: the image has no curl/wget, so the mono download is skipped and `assemble` aborts with `appwiz.cpl packaged but wine-mono MSI missing`. Stage the MSI as root before the build (build dir is root-owned):
+
+   ```bash
+   docker cp /mnt/f/PomeloWin/wine-mono-11.1.0-x86.msi vp-build:/data/src/winehua/build/wine-ohos/share/wine/mono/
+   ```
+
+7. **Signing config**: restore `build-profile.json5` + `signs/` before `make hap` / `assembleApp` (see signing recovery reference).
+8. **Build**: `bash scripts/vpbuild.sh make hap`, then formal APP with `assembleApp -p product=proRelease -p buildMode=release`.
 
 ## Protect The Repository
 
@@ -146,6 +185,22 @@ Use the smallest target that proves a local change, then finish with `hap` for a
 | Signing, product, SDK, ABI filters | `assemble` if payload changed | Debug HAP and/or formal APP as requested |
 
 ## Canonical Docker Build
+
+Prefer the repository's persistent-container helper so every build reuses one
+container instead of creating a new writable layer per `docker run`:
+
+```bash
+cd "$REPO"
+bash scripts/vpbuild.sh make hap
+```
+
+`vpbuild.sh` creates the `vp-build` container once (repo + read-only tools
+bind mounts, API 23 env, `BUILD_GUEST_GFX=1`, `BUILD_WINE_MONO=1`), restarts it
+if WSL/Docker Desktop stopped it, and runs every build via `docker exec`. It
+rebuilds the container automatically if the repo worktree path changes. To
+force a clean container: `docker rm -f vp-build`. When running builds manually
+with `docker run`, still use `--rm` and a stable container name, and never leave
+stopped build containers behind.
 
 ### Windows Host With WSL
 
@@ -258,6 +313,8 @@ build/outputs/proRelease/winehua-proRelease-signed.app
 entry/build/proRelease/outputs/default/entry-default-signed.hap
 ```
 
+The release profile file name must be ASCII: use `signs/pomelo-pro-release.p7b`. A Chinese file name (e.g. `旧柚Pro-正式Release.p7b`) is mangled to `??????` by the Java signing tool inside the container and fails with `11012002 File not exist`.
+
 Keep the formal signing configuration local and ignored:
 
 ```text
@@ -338,6 +395,8 @@ hdc -t <target> shell aa start -b com.vintage.pomelopro -a EntryAbility -m entry
 ```
 
 Do not uninstall by default. Uninstall only for an explicitly requested clean-install test or an unavoidable signature mismatch, and state that application data may be removed.
+
+`hdc install -r` fails with `install sign info inconsistent (9568332)` when the previously installed build used a different debug certificate; uninstall and clean-install in that case (application data/game library is removed). Key pass markers in `hilog`: `AppCatalog: Download games directory ready: /storage/Users/currentUser/Download/com.vintage.pomelopro/games`; Wine child lines `dlopen box64.so ... calling box64_hmos_main`; guest env `WINEHUA_GUEST_GFX_READY=1`, `WINEHUA_VIRGL_READY=1`, `WINEHUA_VULKAN_PRESENT=1`. Screenshots via `snapshot_display -f /data/local/tmp/x.jpeg` (suffix must be `.jpeg`).
 
 After launch, verify the foreground ability and exercise the real startup path. A complete smoke includes:
 
