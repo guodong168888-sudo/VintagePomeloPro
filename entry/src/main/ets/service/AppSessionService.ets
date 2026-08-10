@@ -266,13 +266,17 @@ export class AppSessionService {
   private ensurePendingLaunchListener(): void {
     if (this.pendingLaunchListenerInstalled) return;
     this.pendingLaunchListenerInstalled = true;
+    let sawPreparing = false;
     WineEngineService.getInstance().subscribe((state: EngineState): void => {
-      hilog.info(DOMAIN, '[SESS]', 'launch: engine state=%{public}s pending=%{public}d', state, this.pendingLaunches.length);
+      if (state === EngineState.PREPARING || state === EngineState.SWITCHING) sawPreparing = true;
+      hilog.info(DOMAIN, '[SESS]', 'launch: engine state=%{public}s pending=%{public}d sawPreparing=%{public}s',
+        state, this.pendingLaunches.length, sawPreparing ? '1' : '0');
       if (state === EngineState.READY) {
         this.drainPendingLaunches();
-      } else if (state === EngineState.ERROR || state === EngineState.STOPPED) {
+      } else if (sawPreparing && (state === EngineState.ERROR || state === EngineState.STOPPED)) {
+        // 只有引擎真实经过启动后失败/停止才拒绝挂起请求；初始 STOPPED 快照
+        // 只是引擎即将启动，不能把请求直接放弃。
         const pending = this.pendingLaunches.splice(0);
-    hilog.info(DOMAIN, '[SESS]', 'launch: drain pending=%{public}d', pending.length);
         pending.forEach((req: PendingLaunchRequest) => req.resolve(null));
       }
     });
