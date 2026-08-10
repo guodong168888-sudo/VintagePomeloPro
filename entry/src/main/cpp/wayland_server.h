@@ -45,6 +45,9 @@ public:
 
     bool Start(const std::string& socketPath);
     void Stop();
+    // Wine 会话终结统一收口: 复位 firstFrame/move grab/输入状态, 使热重启
+    // (连旧 wineserver) 与冷启动同基线。桌面根销毁与 StopClient 路径调用。
+    void ResetSessionState();
 
     // EglRenderer 调用: 取最新一帧像素 (deprecated, 用 TakeToplevelFrame)
     bool TakeFrame(std::vector<uint8_t>& outPixels, int& w, int& h);

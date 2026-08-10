@@ -98,6 +98,19 @@ void WaylandServer::Stop() {
     firstFrame_ = false;
 }
 
+void WaylandServer::ResetSessionState() {
+    // Wine 会话终结统一收口。只重置「进程级一次性/漂移状态」— 随 toplevel
+    // 销毁自愈的字段 (root/pending/taskbar, OnToplevelDestroyed 锁内清理)
+    // 不在这里重复, 避免锁外写非 atomic 字段与锁内读的竞态。
+    firstFrame_ = false;   // 热重启不重走 Start, 不重置则新会话首帧不注入 focus
+    if (moveGrab_.IsActive()) {
+        OH_LOG_INFO(LOG_APP, "[MW] session reset: ending active move grab");
+        moveGrab_.EndMoveGrab(toplevelMgr_);
+    }
+    InputManager::GetInstance()->ResetSessionState();
+    OH_LOG_INFO(LOG_APP, "[MW] session state reset (firstFrame/grab/input focus+keys)");
+}
+
 void WaylandServer::EventLoop() {
     int tick = 0;
     while (running_) {
@@ -215,6 +228,7 @@ void WaylandServer::UnregisterToplevelResource(uint32_t toplevelId) {
 
 void WaylandServer::OnToplevelDestroyed(uint32_t toplevelId) {
     std::vector<uint32_t> cascadePopups;
+    bool wasDesktopRoot = false;
     {
         auto lk = toplevelMgr_.Lock();
         toplevelMgr_.EraseToplevelLocked(toplevelId);
@@ -230,6 +244,7 @@ void WaylandServer::OnToplevelDestroyed(uint32_t toplevelId) {
             OH_LOG_INFO(LOG_APP, "[MW] desktop root toplevel #%{public}u destroyed, clearing root",
                         toplevelId);
             desktopRootToplevelId_ = 0;
+            wasDesktopRoot = true;
         }
         // 被抓取窗口销毁 → 复位 move grab, 防止悬空 grab 吞掉后续 motion
         if (moveGrab_.GetToplevelId() == toplevelId) {
@@ -249,6 +264,10 @@ void WaylandServer::OnToplevelDestroyed(uint32_t toplevelId) {
         // 已无 toplevel 身份的 surface。嵌套锁序同 RemovePopupDataLocked。
         toplevelMgr_.UnmapToplevelSurface(toplevelId);
     }
+    // 桌面会话终结统一收口 (锁外): 重置进程级一次性状态, 使下次引擎启动
+    // (热重启连旧 wineserver) 与冷启动同基线 — 状态生命周期按「Wine 会话」
+    // 而非「进程」建模。stopClient 路径由 napi_init 显式调用同函数。
+    if (wasDesktopRoot) ResetSessionState();
     // 通知 ArkTS 销毁 popup 子窗口 (锁外触发)
     for (uint32_t pid : cascadePopups) {
         char json[64];

@@ -65,6 +65,9 @@ public:
     // 让下一帧相对输入只重建基准、不发送坐标系跳变量。
     void InvalidateRelativePointerBaseline(const char* reason);
     void ResetKeyboardEnter();
+    // Wine 会话终结统一收口 (WaylandServer::ResetSessionState 调用): 清残留
+    // 按键/修饰键/指针位置/可见性/相对输入基线, 防热重启后新会话卡键或漂移
+    void ResetSessionState();
 
     // surface 销毁时重置焦点, 防止后续 Inject*Leave 引用已销毁的 surface
     // 如果不重置, 会导致 Wayland 协议错误 "invalid object" → Wine 断开连接
