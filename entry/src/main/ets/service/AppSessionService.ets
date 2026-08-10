@@ -171,7 +171,9 @@ export class AppSessionService {
 
     if (presentationMode === WinePresentationMode.DESKTOP) {
       // 桌面根已存在 → 直接复用；已就绪但根丢失 → 短暂等待后重启 shell，
-      // 避免每个卡片启动都空等 30 秒再失败（表现为"所有卡片点击都不行"）。
+      // 注意：只有"Wine 桌面"卡片依赖 ArkTS 桌面会话跟踪；游戏/程序启动时
+      // 引擎已 READY（桌面根已注册）即可继续 runWineExe，不能被桌面会话
+      // 尚未入表的竞态（冷启动首击）误杀。
       const engine = WineEngineService.getInstance();
       const wasDesktopReady = engine.isReady() &&
         engine.getPresentationMode() === WinePresentationMode.DESKTOP;
@@ -183,18 +185,24 @@ export class AppSessionService {
           try { testNapi.activateWineSession(desktopSession.sessionId); } catch (_) {}
           try { testNapi.raiseToplevel(desktopSession.toplevelId); } catch (_) {}
         }
-      } else if (!wasDesktopReady) {
-        // 首次启动：native launch 线程正在创建 explorer，不能抢跑第二个 shell。
-        desktopSession = await this.ensureDesktopSession();
-      } else {
-        const settling = await this.waitForDesktopRoot();
-        desktopSession = (settling && settling.toplevelId > 0) ? settling : null;
-        if (!desktopSession) {
-          const restarted = engine.restartDesktopShell();
-          if (restarted && restarted.pid > 0) desktopSession = await this.ensureDesktopSession();
+      } else if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP) {
+        // 桌面卡片必须拿到桌面会话：首次启动不抢跑第二个 shell，
+        // 已就绪但根丢失时短暂等待后重启 shell。
+        if (!wasDesktopReady) {
+          desktopSession = await this.ensureDesktopSession();
+        } else {
+          const settling = await this.waitForDesktopRoot();
+          desktopSession = (settling && settling.toplevelId > 0) ? settling : null;
+          if (!desktopSession) {
+            const restarted = engine.restartDesktopShell();
+            if (restarted && restarted.pid > 0) desktopSession = await this.ensureDesktopSession();
+          }
         }
+        if (!desktopSession) return null;
+      } else if (!desktopSession) {
+        // 游戏/程序：桌面会话尚未入表不阻塞本次启动（引擎 READY 即代表桌面根已注册）。
+        hilog.warn(DOMAIN, '[SESS]', 'desktop session not tracked yet; continuing program launch');
       }
-      if (!desktopSession) return null;
       if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP) return desktopSession;
     }
 
