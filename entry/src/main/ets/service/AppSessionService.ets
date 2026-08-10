@@ -182,17 +182,16 @@ export class AppSessionService {
       const wasDesktopReady = engine.isReady() &&
         engine.getPresentationMode() === WinePresentationMode.DESKTOP;
       let desktopSession = this.syncDesktopSessionFromNative();
-      if (desktopSession && desktopSession.toplevelId > 0) {
-        if (!WineWindowManager.getInstance().isDesktopAbilityForeground(desktopSession.toplevelId)) {
-          await this.resume(desktopSession);
-        } else {
-          try { testNapi.activateWineSession(desktopSession.sessionId); } catch (_) {}
-          try { testNapi.raiseToplevel(desktopSession.toplevelId); } catch (_) {}
-        }
-      } else if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP) {
-        // 桌面卡片必须拿到桌面会话：首次启动不抢跑第二个 shell，
-        // 已就绪但根丢失时短暂等待后重启 shell。
-        if (!wasDesktopReady) {
+      if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP) {
+        // 桌面卡片：完整桌面会话处理（复用/恢复/重建）。
+        if (desktopSession && desktopSession.toplevelId > 0) {
+          if (!WineWindowManager.getInstance().isDesktopAbilityForeground(desktopSession.toplevelId)) {
+            await this.resume(desktopSession);
+          } else {
+            try { testNapi.activateWineSession(desktopSession.sessionId); } catch (_) {}
+            try { testNapi.raiseToplevel(desktopSession.toplevelId); } catch (_) {}
+          }
+        } else if (!wasDesktopReady) {
           desktopSession = await this.ensureDesktopSession();
         } else {
           const settling = await this.waitForDesktopRoot();
@@ -203,11 +202,18 @@ export class AppSessionService {
           }
         }
         if (!desktopSession) return null;
-      } else if (!desktopSession) {
-        // 游戏/程序：桌面会话尚未入表不阻塞本次启动（引擎 READY 即代表桌面根已注册）。
+        return desktopSession;
+      }
+      // 游戏/程序：引擎已 READY（桌面根已注册）即可继续 runWineExe。
+      // 只做轻量窗口激活，绝不 await resume()/startAbility——冷启动时
+      // DesktopAbility 正由 desktop_root 事件启动，startAbility 可能阻塞
+      // 导致本次启动永久挂起（表现为"只有桌面背景、没有进程"）。
+      if (desktopSession && desktopSession.toplevelId > 0) {
+        try { testNapi.activateWineSession(desktopSession.sessionId); } catch (_) {}
+        try { testNapi.raiseToplevel(desktopSession.toplevelId); } catch (_) {}
+      } else {
         hilog.warn(DOMAIN, '[SESS]', 'desktop session not tracked yet; continuing program launch');
       }
-      if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP) return desktopSession;
     }
 
     // 每游戏兼容性预设优先于全局预设；'default' 表示跟随全局。
