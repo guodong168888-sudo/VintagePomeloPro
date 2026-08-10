@@ -167,7 +167,11 @@ export class AppSessionService {
     }
 
     const ready = await WineEngineService.getInstance().ensureReady(mode, presentationMode, homeDirectory);
-    if (!ready) return null;
+    if (!ready) {
+      hilog.error(DOMAIN, '[SESS]', 'launch: ensureReady FAILED app=%{public}s state=%{public}s msg=%{public}s',
+        app.id, WineEngineService.getInstance().getState(), WineEngineService.getInstance().getMessage());
+      return null;
+    }
 
     if (presentationMode === WinePresentationMode.DESKTOP) {
       // 桌面根已存在 → 直接复用；已就绪但根丢失 → 短暂等待后重启 shell，
@@ -214,7 +218,13 @@ export class AppSessionService {
     const result = WineEngineService.getInstance().launchExecutable(
       app.launchTarget.executable, app.launchTarget.arguments,
       app.launchTarget.workingDirectory, envOverrides) as NativeLaunchResult;
-    if (!result || result.pid <= 0) return null;
+    if (!result || result.pid <= 0) {
+      hilog.error(DOMAIN, '[SESS]', 'launch: runWineExe FAILED app=%{public}s exe=%{public}s state=%{public}s',
+        app.id, app.launchTarget.executable, WineEngineService.getInstance().getState());
+      return null;
+    }
+    hilog.info(DOMAIN, '[SESS]', 'launch: spawned app=%{public}s pid=%{public}d session=%{public}s',
+      app.id, result.pid, result.sessionId);
     const session: RuntimeSession = {
       sessionId: result.sessionId || 'wine-' + result.pid,
       appId: app.id,

@@ -307,6 +307,8 @@ export class WineEngineService {
   launchExecutable(executable: string, argumentsValue: string[] = [],
     workingDirectory: string = '', envOverrides: string[] = []): NativeLaunchResult {
     if (this.state !== EngineState.READY) {
+      hilog.warn(DOMAIN, '[ENG]', 'launchExecutable skipped exe=%{public}s state=%{public}s',
+        executable, this.state);
       return { pid: -1, sessionId: '', reused: false };
     }
     if (executable.trim().toLowerCase().startsWith('c:\\smoke\\') &&
