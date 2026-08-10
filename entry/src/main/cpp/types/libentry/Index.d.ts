@@ -85,6 +85,10 @@ export const setOutputSize: (w: number, h: number) => void;
 export const setDisplayScale: (scale: number) => void;
 export const setDesktopMode: (enabled: boolean) => void;
 export const setPhoneMode: (enabled: boolean) => void;
+/** Points the native OH_LOG file sink at the logs directory. */
+export const initAppLog: (dirPath: string) => void;
+/** Removes all native-*.log files managed by the native log sink. */
+export const clearNativeLog: () => void;
 export const findToplevelAt: (px: number, py: number) => number;
 export const raiseToplevel: (toplevelId: number) => void;
 export const createRenderer: (toplevelId: number, surfaceId: BigInt) => void;

@@ -20,6 +20,7 @@ endif()
 set(WAYLAND_LIBS_DIR ${NATIVERENDER_ROOT_PATH}/../../../libs/${OHOS_ARCH})
 
 add_library(entry SHARED
+    app_log.cpp
     audio_broker.cpp
     audio_ipc_server.cpp
     audio_stream.cpp
@@ -65,6 +66,10 @@ add_library(entry SHARED
     pointer-constraints-unstable-v1-protocol.c
     relative-pointer-unstable-v1-protocol.c
 )
+
+# 应用日志文件 sink：force-include app_log.h，让所有 OH_LOG_* 调用在保持
+# hilog 行为不变的同时追加写入 Download/.../logs/native-YYYYMMDD.log。
+target_compile_options(entry PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/app_log.h)
 
 target_link_libraries(entry PUBLIC
     libace_napi.z.so

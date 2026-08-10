@@ -17,6 +17,7 @@
 #include "host_vulkan_probe.h"
 #include "game_controller_bridge.h"
 #include "phone_adapter/phone_adapter.h"
+#include "app_log.h"
 
 #include <unistd.h>
 #include <signal.h>
@@ -674,6 +675,25 @@ static napi_value SetPhoneMode(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
+// -- NAPI: 应用日志文件 sink --
+static napi_value InitAppLog(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = { nullptr };
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    char path[1024] = {};
+    if (argc >= 1 && args[0] != nullptr) {
+        size_t len = 0;
+        napi_get_value_string_utf8(env, args[0], path, sizeof(path), &len);
+    }
+    WineHuaLogInit(path);
+    return nullptr;
+}
+
+static napi_value ClearNativeLog(napi_env env, napi_callback_info info) {
+    WineHuaLogClear();
+    return nullptr;
+}
+
 static napi_value GetDesktopRootId(napi_env env, napi_callback_info) {
     uint32_t id = WaylandServer::GetInstance()->GetDesktopRootToplevelId();
     napi_value r;
@@ -1023,6 +1043,8 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setDisplayScale",  nullptr, SetDisplayScale,  nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setDesktopMode",   nullptr, SetDesktopMode,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setPhoneMode",     nullptr, SetPhoneMode,     nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"initAppLog",       nullptr, InitAppLog,       nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"clearNativeLog",   nullptr, ClearNativeLog,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getDesktopRootId", nullptr, GetDesktopRootId, nullptr, nullptr, nullptr, napi_default, nullptr},
         // ArkTS input forwarding (unified InputManager path)
         {"sendPointerEvent", nullptr, SendPointerEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
