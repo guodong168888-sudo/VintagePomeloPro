@@ -42,6 +42,14 @@ const DESKTOP_SESSION_ID = 'desktop';
 const DESKTOP_APP_ID = 'builtin-desktop';
 const DESKTOP_EXECUTABLE = 'explorer.exe';
 
+interface PendingLaunchRequest {
+  app: AppDescriptor;
+  settings: GlobalSettings;
+  mode: DisplayMode;
+  presentationMode: WinePresentationMode;
+  homeDirectory: string;
+  resolve: (result: RuntimeSession | null) => void;
+}
 export class AppSessionService {
   private static instance: AppSessionService | null = null;
   private context: common.UIAbilityContext | null = null;
@@ -166,48 +174,33 @@ export class AppSessionService {
       return existing;
     }
 
-    const ready = await WineEngineService.getInstance().ensureReady(mode, presentationMode, homeDirectory);
-    if (!ready) {
-      hilog.error(DOMAIN, '[SESS]', 'launch: ensureReady FAILED app=%{public}s state=%{public}s msg=%{public}s',
-        app.id, WineEngineService.getInstance().getState(), WineEngineService.getInstance().getMessage());
-      return null;
+    // 程序/游戏：事件驱动启动。
+    // - 引擎已 READY 且模式匹配 → 直接启动；
+    // - 未就绪 → 挂到引擎 READY 事件，由"桌面就绪"事件触发真正启动，
+    //   避免 ensureReady 返回后继续执行造成的竞态（桌面会话未入表、
+    //   DesktopAbility startAbility 阻塞等）。
+    const engine = WineEngineService.getInstance();
+    if (engine.isReady() && engine.getPresentationMode() === presentationMode) {
+      return this.launchReady(app, settings, mode, presentationMode, homeDirectory);
+    }
+    return this.deferLaunchUntilReady(app, settings, mode, presentationMode, homeDirectory);
+  }
+
+  private async launchReady(app: AppDescriptor, settings: GlobalSettings,
+    mode: DisplayMode, presentationMode: WinePresentationMode,
+    homeDirectory: string): Promise<RuntimeSession | null> {
+    const engine = WineEngineService.getInstance();
+    if (engine.getState() !== EngineState.READY ||
+      engine.getPresentationMode() !== presentationMode) {
+      // 状态在检查后变化：重新走事件队列。
+      return this.deferLaunchUntilReady(app, settings, mode, presentationMode, homeDirectory);
     }
 
     if (presentationMode === WinePresentationMode.DESKTOP) {
-      // 桌面根已存在 → 直接复用；已就绪但根丢失 → 短暂等待后重启 shell，
-      // 注意：只有"Wine 桌面"卡片依赖 ArkTS 桌面会话跟踪；游戏/程序启动时
-      // 引擎已 READY（桌面根已注册）即可继续 runWineExe，不能被桌面会话
-      // 尚未入表的竞态（冷启动首击）误杀。
-      const engine = WineEngineService.getInstance();
-      const wasDesktopReady = engine.isReady() &&
-        engine.getPresentationMode() === WinePresentationMode.DESKTOP;
-      let desktopSession = this.syncDesktopSessionFromNative();
-      if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP) {
-        // 桌面卡片：完整桌面会话处理（复用/恢复/重建）。
-        if (desktopSession && desktopSession.toplevelId > 0) {
-          if (!WineWindowManager.getInstance().isDesktopAbilityForeground(desktopSession.toplevelId)) {
-            await this.resume(desktopSession);
-          } else {
-            try { testNapi.activateWineSession(desktopSession.sessionId); } catch (_) {}
-            try { testNapi.raiseToplevel(desktopSession.toplevelId); } catch (_) {}
-          }
-        } else if (!wasDesktopReady) {
-          desktopSession = await this.ensureDesktopSession();
-        } else {
-          const settling = await this.waitForDesktopRoot();
-          desktopSession = (settling && settling.toplevelId > 0) ? settling : null;
-          if (!desktopSession) {
-            const restarted = engine.restartDesktopShell();
-            if (restarted && restarted.pid > 0) desktopSession = await this.ensureDesktopSession();
-          }
-        }
-        if (!desktopSession) return null;
-        return desktopSession;
-      }
-      // 游戏/程序：引擎已 READY（桌面根已注册）即可继续 runWineExe。
-      // 只做轻量窗口激活，绝不 await resume()/startAbility——冷启动时
-      // DesktopAbility 正由 desktop_root 事件启动，startAbility 可能阻塞
-      // 导致本次启动永久挂起（表现为"只有桌面背景、没有进程"）。
+      // 游戏/程序：引擎已 READY（桌面根已注册）。只做轻量窗口激活，
+      // 绝不 await resume()/startAbility——冷启动时 DesktopAbility 正由
+      // desktop_root 事件启动，startAbility 可能阻塞导致启动永久挂起。
+      const desktopSession = this.syncDesktopSessionFromNative();
       if (desktopSession && desktopSession.toplevelId > 0) {
         try { testNapi.activateWineSession(desktopSession.sessionId); } catch (_) {}
         try { testNapi.raiseToplevel(desktopSession.toplevelId); } catch (_) {}
@@ -226,7 +219,7 @@ export class AppSessionService {
       app.launchTarget.workingDirectory, envOverrides) as NativeLaunchResult;
     if (!result || result.pid <= 0) {
       hilog.error(DOMAIN, '[SESS]', 'launch: runWineExe FAILED app=%{public}s exe=%{public}s state=%{public}s',
-        app.id, app.launchTarget.executable, WineEngineService.getInstance().getState());
+        app.id, app.launchTarget.executable, engine.getState());
       return null;
     }
     hilog.info(DOMAIN, '[SESS]', 'launch: spawned app=%{public}s pid=%{public}d session=%{public}s',
@@ -263,6 +256,48 @@ export class AppSessionService {
       }
     }
     return session;
+  }
+
+  private pendingLaunches: Array<PendingLaunchRequest> = [];
+  private pendingLaunchListenerInstalled: boolean = false;
+  private drainingPendingLaunches: boolean = false;
+
+  private ensurePendingLaunchListener(): void {
+    if (this.pendingLaunchListenerInstalled) return;
+    this.pendingLaunchListenerInstalled = true;
+    WineEngineService.getInstance().subscribe((state: EngineState): void => {
+      if (state === EngineState.READY) {
+        this.drainPendingLaunches();
+      } else if (state === EngineState.ERROR || state === EngineState.STOPPED) {
+        const pending = this.pendingLaunches.splice(0);
+        pending.forEach((req: PendingLaunchRequest) => req.resolve(null));
+      }
+    });
+  }
+
+  private deferLaunchUntilReady(app: AppDescriptor, settings: GlobalSettings,
+    mode: DisplayMode, presentationMode: WinePresentationMode,
+    homeDirectory: string): Promise<RuntimeSession | null> {
+    return new Promise<RuntimeSession | null>((resolve: (result: RuntimeSession | null) => void): void => {
+      this.pendingLaunches.push({ app, settings, mode, presentationMode, homeDirectory, resolve });
+      this.ensurePendingLaunchListener();
+      // 触发引擎启动（不 await）；引擎 READY 事件会驱动队列真正执行。
+      WineEngineService.getInstance().ensureReady(mode, presentationMode, homeDirectory).catch(() => {});
+      // 竞态兜底：若已经就绪立即排水。
+      if (WineEngineService.getInstance().isReady()) this.drainPendingLaunches();
+    });
+  }
+
+  private drainPendingLaunches(): void {
+    if (this.drainingPendingLaunches) return;
+    this.drainingPendingLaunches = true;
+    const pending = this.pendingLaunches.splice(0);
+    for (const req of pending) {
+      this.launchReady(req.app, req.settings, req.mode, req.presentationMode, req.homeDirectory)
+        .then((session: RuntimeSession | null) => req.resolve(session))
+        .catch(() => req.resolve(null));
+    }
+    this.drainingPendingLaunches = false;
   }
 
   async switchModeAndLaunch(app: AppDescriptor, settings: GlobalSettings, homeDirectory: string): Promise<RuntimeSession | null> {
