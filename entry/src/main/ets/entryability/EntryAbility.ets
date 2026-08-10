@@ -1,5 +1,6 @@
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
-import { hilog } from '@kit.PerformanceAnalysisKit';
+import { hilog } from '../service/LogService';
+import { AppLog } from '../service/LogService';
 import { display, window } from '@kit.ArkUI';
 import { WineWindowManager } from '../service/WineWindowManager';
 import { AppCatalogService, GamesDirectoryStatus } from '../service/AppCatalogService';
@@ -17,6 +18,8 @@ export default class EntryAbility extends UIAbility {
   private lastTitleButtonInsetVp: number = 0;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    // 日志服务最先初始化，保证后续 ArkTS/native 日志都能实时落盘。
+    AppLog.init();
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
     const useForkNcp = DeviceCapabilityPolicy.isPhoneDevice();
     testNapi.setPhoneMode(useForkNcp);

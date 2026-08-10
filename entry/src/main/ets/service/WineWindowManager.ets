@@ -1,6 +1,6 @@
 import { common, Want } from '@kit.AbilityKit';
 import { window, display } from '@kit.ArkUI';
-import { hilog } from '@kit.PerformanceAnalysisKit';
+import { hilog } from './LogService';
 import testNapi from 'libentry.so';
 import {
   DesktopWindowMode,

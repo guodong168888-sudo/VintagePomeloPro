@@ -1,4 +1,4 @@
-import { hilog } from '@kit.PerformanceAnalysisKit';
+import { hilog } from '../service/LogService';
 import { common } from '@kit.AbilityKit';
 import { display, window } from '@kit.ArkUI';
 import testNapi from 'libentry.so';

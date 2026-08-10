@@ -1,4 +1,4 @@
-import { hilog } from '@kit.PerformanceAnalysisKit';
+import { hilog } from '../service/LogService';
 import testNapi from 'libentry.so';
 import { mapMouseButton } from '../common/MouseMap';
 

@@ -1,7 +1,11 @@
+/// <reference path="../ohos.systemShare.d.ts" />
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
 import fs from '@ohos.file.fs';
 import { bundleManager, common, ConfigurationConstant, Want } from '@kit.AbilityKit';
+import { BusinessError } from '@kit.BasicServicesKit';
+import { uniformTypeDescriptor as utd } from '@kit.ArkData';
+import { systemShare } from '@kit.ShareKit';
 import { picker } from '@kit.CoreFileKit';
 import testNapi from 'libentry.so';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
@@ -33,6 +37,8 @@ import { WineWindowManager } from '../service/WineWindowManager';
 import { AppSessionService } from '../service/AppSessionService';
 import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
 import { AppCatalogService } from '../service/AppCatalogService';
+import { AppLog } from '../service/LogService';
+import { hilog } from '../service/LogService';
 import { InputProfileService } from '../service/InputProfileService';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { LengthMetrics, window } from '@kit.ArkUI';
@@ -52,7 +58,9 @@ import {
   ScrollEffectType
 } from '@kit.UIDesignKit';
 
-type SettingsSection = 'display' | 'appearance' | 'input' | 'engine' | 'about';
+const DOMAIN = 0x0000;
+
+type SettingsSection = 'display' | 'appearance' | 'input' | 'engine' | 'logs' | 'about';
 
 /** native extractFontZip 的返回结构 (与 libentry Index.d.ts 保持一致)。 */
 interface FontZipExtractResult {
@@ -223,6 +231,7 @@ struct SystemSettingsPage {
   @State private settings: GlobalSettings = createDefaultGlobalSettings();
   @State private breakpoint: BreakpointType = 'lg';
   @State private section: SettingsSection = 'display';
+  @State private logBusy: boolean = false;
   @State private engineMessage: string = 'Wine 引擎未启动';
   @State private engineBusy: boolean = false;
   @State private engineOperationMessage: string = '';
@@ -449,6 +458,51 @@ struct SystemSettingsPage {
       await AppSessionService.getInstance().resetPrefix();
       return true;
     }, 'Wine 环境已重置');
+  }
+
+  private async exportLogs(): Promise<void> {
+    if (this.logBusy) return;
+    this.logBusy = true;
+    try {
+      // 打包整个 logs 目录为 zip，用系统分享面板（ShareKit）分享。
+      // utd 用 general.object 而非 general.file：QQ/微信等 IM 的分享扩展
+      // 只注册了 general.object/text 等泛类型（bm dump 实测 QQ 无 general.file），
+      // 声明泛类型后 QQ 才会出现在面板中。
+      const uri = await AppLog.exportLogsZip();
+      const shareData = new systemShare.SharedData({
+        utd: utd.UniformDataType.OBJECT,
+        uri: uri,
+        title: '旧柚Pro 日志'
+      });
+      const controller = new systemShare.ShareController(shareData);
+      await controller.show(this.context, {
+        selectionMode: systemShare.SelectionMode.SINGLE,
+        previewMode: systemShare.SharePreviewMode.DETAIL
+      });
+    } catch (error) {
+      const err = error as BusinessError;
+      hilog.error(DOMAIN, 'Settings', 'systemShare failed code=%{public}d msg=%{public}s',
+        err.code, err.message);
+      promptAction.showToast({ message: '分享失败，日志仍保留在 下载/旧柚Pro/logs 目录' });
+    } finally {
+      this.logBusy = false;
+    }
+  }
+
+  private clearLogs(): void {
+    AlertDialog.show({
+      title: '清空日志',
+      message: '将删除 logs 目录下全部应用日志（含历史归档与导出快照），无法恢复。',
+      primaryButton: { value: '取消', action: (): void => {} },
+      secondaryButton: {
+        value: '清空',
+        fontColor: '#D94848',
+        action: (): void => {
+          AppLog.clearLogs();
+          promptAction.showToast({ message: '日志已清空' });
+        }
+      }
+    });
   }
 
   private update(mode: DisplayMode = this.settings.defaultDisplayMode,
@@ -1072,7 +1126,8 @@ struct SystemSettingsPage {
     if (section === 'appearance') return 1;
     if (section === 'input') return 2;
     if (section === 'engine') return 3;
-    return 4;
+    if (section === 'logs') return 4;
+    return 5;
   }
 
   private sectionAt(index: number): SettingsSection {
@@ -1080,6 +1135,7 @@ struct SystemSettingsPage {
     if (index === 1) return 'appearance';
     if (index === 2) return 'input';
     if (index === 3) return 'engine';
+    if (index === 4) return 'logs';
     return 'about';
   }
 
@@ -1702,6 +1758,54 @@ struct SystemSettingsPage {
         .backgroundBlurStyle(this.settings.useGlassEffect ? BlurStyle.COMPONENT_ULTRA_THICK : BlurStyle.NONE)
         .border({ width: 1, color: this.groupBorderColor() })
         .borderRadius(20)
+      } else if (section === 'logs') {
+        Column({ space: 14 }) {
+          Row({ space: 12 }) {
+            Stack({ alignContent: Alignment.Center }) {
+              SymbolGlyph($r('sys.symbol.doc_text')).fontSize(24).fontColor([$r('app.color.accent')])
+            }
+            .width(48).height(48).borderRadius(16)
+            .backgroundColor($r('app.color.selected_background'))
+            Column({ space: 3 }) {
+              Text('日志管理').fontSize(20).fontWeight(FontWeight.Bold)
+                .fontColor($r('app.color.text_primary')).width('100%')
+              Text('应用日志按天保存，自动保留 7 天').fontSize(12)
+                .fontColor($r('app.color.text_secondary')).width('100%')
+            }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+          }
+          .width('100%').padding(14).borderRadius(16)
+          .backgroundColor($r('app.color.search_background'))
+
+          Column({ space: 8 }) {
+            Text('日志目录').fontSize(12).fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.text_secondary')).width('100%')
+            Text('Download/com.vintage.pomelopro/logs').fontSize(12)
+              .fontColor($r('app.color.text_primary')).width('100%')
+            Text('记录应用自身 ArkTS 与 native 日志，按日期分文件（app-日期.log / native-日期.log），同一天超过 20MB 自动滚动，超过 7 天的文件自动清理。')
+              .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+          }
+          .width('100%').padding(14).borderRadius(16)
+          .backgroundColor($r('app.color.search_background'))
+
+          Row({ space: 10 }) {
+            Button('导出日志').layoutWeight(1).height(48).borderRadius(14)
+              .backgroundColor($r('app.color.accent')).fontColor('#FFFFFFFF')
+              .enabled(!this.logBusy)
+              .id('log-export')
+              .onClick((): void => { this.exportLogs(); })
+            Button('清空日志').layoutWeight(1).height(48).borderRadius(14)
+              .backgroundColor($r('app.color.search_background'))
+              .fontColor($r('app.color.text_primary'))
+              .id('log-clear')
+              .onClick((): void => { this.clearLogs(); })
+          }.width('100%')
+        }
+        .width('100%')
+        .padding(this.cardPadding())
+        .backgroundColor(this.groupSurfaceColor())
+        .backgroundBlurStyle(this.settings.useGlassEffect ? BlurStyle.COMPONENT_ULTRA_THICK : BlurStyle.NONE)
+        .border({ width: 1, color: this.groupBorderColor() })
+        .borderRadius(20)
       } else {
         Column({ space: 14 }) {
           Row({ space: 12 }) {
@@ -1757,6 +1861,7 @@ struct SystemSettingsPage {
       ListItem() { this.Content('appearance') }.width('100%').id('settings-section-appearance')
       ListItem() { this.Content('input') }.width('100%').id('settings-section-input')
       ListItem() { this.Content('engine') }.width('100%').id('settings-section-engine')
+      ListItem() { this.Content('logs') }.width('100%').id('settings-section-logs')
       ListItem() { this.Content('about') }.width('100%').id('settings-section-about')
     }
     .layoutWeight(1)
@@ -1789,6 +1894,7 @@ struct SystemSettingsPage {
               this.SectionButton('外观', 'appearance', $r('sys.symbol.square_grid_2x2'))
               this.SectionButton('输入与手柄', 'input', $r('sys.symbol.list_bullet'))
               this.SectionButton('Wine 引擎', 'engine', $r('sys.symbol.arrow_clockwise'))
+              this.SectionButton('日志', 'logs', $r('sys.symbol.doc_text'))
               this.SectionButton('关于', 'about', $r('sys.symbol.info_circle'))
             }
             .width(this.breakpoint === 'xl' ? 224 : 204)

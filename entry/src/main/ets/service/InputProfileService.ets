@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
 import bundleManager from '@ohos.bundle.bundleManager';
-import { hilog } from '@kit.PerformanceAnalysisKit';
+import { hilog } from './LogService';
 import preferences from '@ohos.data.preferences';
 import {
   INPUT_PROFILE_SCHEMA_VERSION,

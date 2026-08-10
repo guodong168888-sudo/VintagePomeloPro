@@ -1,5 +1,5 @@
 import { common, Want } from '@kit.AbilityKit';
-import { hilog } from '@kit.PerformanceAnalysisKit';
+import { hilog } from './LogService';
 import testNapi from 'libentry.so';
 import {
   BOX64_PRESET_DEFAULT,

@@ -1,6 +1,6 @@
 import deviceInfo from '@ohos.deviceInfo';
 import { window } from '@kit.ArkUI';
-import { hilog } from '@kit.PerformanceAnalysisKit';
+import { hilog } from '../service/LogService';
 import { ScreenOrientationSetting } from '../model/AppModels';
 
 const DOMAIN = 0x0000;

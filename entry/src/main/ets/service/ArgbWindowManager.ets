@@ -1,5 +1,5 @@
 import { window } from '@kit.ArkUI';
-import { hilog } from '@kit.PerformanceAnalysisKit';
+import { hilog } from './LogService';
 import testNapi from 'libentry.so';
 
 const DOMAIN = 0x0000;
