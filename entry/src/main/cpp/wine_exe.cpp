@@ -808,24 +808,6 @@ napi_value RunWineExe(napi_env env, napi_callback_info info)
         addr.sun_family = AF_UNIX;
         strncpy(addr.sun_path, brokerPath, sizeof(addr.sun_path) - 1);
 
-        int broker_fd = -1;
-        int connectError = 0;
-        for (int attempt = 0; attempt < 10; attempt++) {
-            broker_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-            if (broker_fd >= 0 && connect(broker_fd,
-                reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) break;
-            connectError = errno;
-            if (broker_fd >= 0) close(broker_fd);
-            broker_fd = -1;
-            usleep(50000);
-        }
-        if (broker_fd < 0) {
-            OH_LOG_ERROR(LOG_APP, "[Wine] broker connect failed after retry: %{public}s",
-                         strerror(connectError));
-            if (gStateTsfn) napi_call_threadsafe_function(gStateTsfn, strdup("-1:wine-failed"), napi_tsfn_blocking);
-            return MakeLaunchResult(env, -1, "", false);
-        }
-
         char req_hdr[32];
         int hdr_len = snprintf(req_hdr, sizeof(req_hdr), "SPAWN\n");
         size_t ep_len = entryParams.size();
@@ -838,18 +820,60 @@ napi_value RunWineExe(napi_env env, napi_callback_info info)
         msg.msg_iov = iov;
         msg.msg_iovlen = 3;
 
-        if (sendmsg(broker_fd, &msg, MSG_NOSIGNAL) < 0) {
-            OH_LOG_ERROR(LOG_APP, "[Wine] broker sendmsg failed: %{public}s", strerror(errno));
-            close(broker_fd);
-            if (gStateTsfn) napi_call_threadsafe_function(gStateTsfn, strdup("-1:wine-failed"), napi_tsfn_blocking);
-            return MakeLaunchResult(env, -1, "", false);
-        }
+        int connectError = 0;
+        auto connectBroker = [&]() -> int {
+            int fd = -1;
+            int err = 0;
+            for (int attempt = 0; attempt < 10; attempt++) {
+                fd = socket(AF_UNIX, SOCK_STREAM, 0);
+                if (fd >= 0 && connect(fd,
+                    reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) return fd;
+                err = errno;
+                if (fd >= 0) close(fd);
+                usleep(50000);
+            }
+            connectError = err;
+            return -1;
+        };
 
+        // 瞬时 appspawn/broker 抖动: 整个 SPAWN 交换自动重试一次 (1s 退避),
+        // 避免一次瞬态失败就把用户点击的启动打回。
+        int broker_fd = -1;
         int32_t response[2] = {-1, -1};
-        ssize_t n = recv(broker_fd, response, sizeof(response), MSG_WAITALL);
-        close(broker_fd);
-        if (n != sizeof(response) || response[1] != 0 || response[0] <= 0) {
-            OH_LOG_ERROR(LOG_APP, "[Wine] broker spawn failed pid=%{public}d status=%{public}d", response[0], response[1]);
+        bool spawnOk = false;
+        for (int launchAttempt = 0; launchAttempt < 2 && !spawnOk; launchAttempt++) {
+            broker_fd = connectBroker();
+            if (broker_fd < 0) {
+                OH_LOG_ERROR(LOG_APP, "[Wine] broker connect failed after retry: %{public}s",
+                             strerror(connectError));
+                break;
+            }
+            if (sendmsg(broker_fd, &msg, MSG_NOSIGNAL) < 0) {
+                OH_LOG_ERROR(LOG_APP, "[Wine] broker sendmsg failed: %{public}s", strerror(errno));
+                close(broker_fd);
+                broker_fd = -1;
+                if (launchAttempt == 0) {
+                    usleep(1000000);
+                    continue;
+                }
+                break;
+            }
+            ssize_t n = recv(broker_fd, response, sizeof(response), MSG_WAITALL);
+            close(broker_fd);
+            broker_fd = -1;
+            if (n == sizeof(response) && response[1] == 0 && response[0] > 0) {
+                spawnOk = true;
+                break;
+            }
+            OH_LOG_WARN(LOG_APP, "[Wine] broker spawn failed pid=%{public}d status=%{public}d (attempt %{public}d)",
+                        response[0], response[1], launchAttempt + 1);
+            response[0] = -1;
+            response[1] = -1;
+            if (launchAttempt == 0) usleep(1000000);
+        }
+        if (!spawnOk) {
+            OH_LOG_ERROR(LOG_APP, "[Wine] broker spawn failed pid=%{public}d status=%{public}d",
+                         response[0], response[1]);
             if (gStateTsfn) napi_call_threadsafe_function(gStateTsfn, strdup("-1:wine-failed"), napi_tsfn_blocking);
             return MakeLaunchResult(env, -1, "", false);
         }
