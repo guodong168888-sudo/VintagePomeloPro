@@ -198,16 +198,20 @@ export class AppSessionService {
     }
 
     if (presentationMode === WinePresentationMode.DESKTOP) {
-      // 游戏/程序：引擎已 READY（桌面根已注册）。只做轻量窗口激活，
-      // 绝不 await resume()/startAbility——冷启动时 DesktopAbility 正由
-      // desktop_root 事件启动，startAbility 可能阻塞导致启动永久挂起。
-      const desktopSession = this.syncDesktopSessionFromNative();
-      if (desktopSession && desktopSession.toplevelId > 0) {
-        try { testNapi.activateWineSession(desktopSession.sessionId); } catch (_) {}
-        try { testNapi.raiseToplevel(desktopSession.toplevelId); } catch (_) {}
-      } else {
-        hilog.warn(DOMAIN, '[SESS]', 'desktop session not tracked yet; continuing program launch');
+      // 游戏/程序：前置条件是桌面根已注册（toplevelId > 0），不是仅 READY。
+      // READY 事件可能先于 desktop_root/created 到达，此时直接 runWineExe
+      // 会落在窗口链路未就绪的窗口期（表现为"点了没反应/进程没起来"）。
+      // 这里只等注册，绝不 await resume()/startAbility——冷启动时
+      // DesktopAbility 正由 desktop_root 事件启动，startAbility 可能阻塞
+      // 导致启动永久挂起。
+      const desktopSession = await this.waitForDesktopRootRegistered();
+      if (!desktopSession || desktopSession.toplevelId <= 0) {
+        hilog.warn(DOMAIN, '[SESS]', 'launch: desktop root unavailable, abort app=%{public}s',
+          app.id);
+        return null;
       }
+      try { testNapi.activateWineSession(desktopSession.sessionId); } catch (_) {}
+      try { testNapi.raiseToplevel(desktopSession.toplevelId); } catch (_) {}
     }
 
     // 每游戏兼容性预设优先于全局预设；'default' 表示跟随全局。
@@ -301,8 +305,20 @@ export class AppSessionService {
     const pending = this.pendingLaunches.splice(0);
 
     for (const req of pending) {
+      const engine = WineEngineService.getInstance();
+      if (!engine.isReady() || engine.getPresentationMode() !== req.presentationMode) {
+        // 状态又切走（重启/切换模式中）：请求重新入队，等下一次 READY 事件
+        // 再排水，而不是静默判失败（否则表现为"点了没反应"）。
+        const state = engine.getState();
+        if (state === EngineState.PREPARING || state === EngineState.SWITCHING) {
+          this.pendingLaunches.push(req);
+        } else {
+          req.resolve(null);
+        }
+        continue;
+      }
       this.launchReady(req.app, req.settings, req.mode, req.presentationMode, req.homeDirectory)
-        .then((session: RuntimeSession | null) => req.resolve(session))
+        .then((session: RuntimeSession | null): void => req.resolve(session))
         .catch(() => req.resolve(null));
     }
     this.drainingPendingLaunches = false;
@@ -490,11 +506,23 @@ export class AppSessionService {
       matched = this.upsertDesktopSession(toplevelId, clientPid);
     }
     if (matched) {
+      const wasUnmapped = matched.toplevelId <= 0;
       if (matched.pid <= 0 && clientPid > 0) matched.pid = clientPid;
       if (sessionId === DESKTOP_SESSION_ID || matched.toplevelId === 0) matched.toplevelId = toplevelId;
       matched.state = SessionState.RUNNING;
       if (sessionId === DESKTOP_SESSION_ID && matched.toplevelId > 0) {
         this.settleDesktopRootWaiters(matched);
+      }
+      // 程序窗口首次映射：非阻塞地把桌面窗口（DWA）切到该窗口，恢复
+      // "点卡片 → 自动跳到桌面/程序视图"。created 事件晚于 runWineExe，
+      // 此时 fire-and-forget startAbility 不会阻塞启动链（冷启动卡死
+      // 只在 launch 路径 await startAbility 时发生）。
+      if (sessionId !== DESKTOP_SESSION_ID && wasUnmapped && matched.toplevelId > 0 &&
+        matched.presentationMode === WinePresentationMode.DESKTOP &&
+        WineEngineService.getInstance().isReady()) {
+        hilog.info(DOMAIN, '[SESS]', 'auto-promote session=%{public}s tl=%{public}d',
+          matched.sessionId, matched.toplevelId);
+        this.resume(matched).catch(() => {});
       }
     } else if (toplevelId > 0) {
       this.pendingToplevels.push({ sessionId: sessionId, clientPid: clientPid, toplevelId: toplevelId });
@@ -530,20 +558,14 @@ export class AppSessionService {
     return this.waitForDesktopRoot();
   }
 
-  /** 等待 explorer surface 关联为 desktop root；不创建或重置任何 Wine 资源。
-   *  事件驱动：root 注册（created 事件或状态同步发现）即成功放行，引擎
+  /** 事件驱动地等待桌面根注册（toplevelId > 0），不做 resume/startAbility。
+   *  root 注册（created/desktop_root 事件或状态同步发现）即成功放行，引擎
    *  ERROR/STOPPED 即明确失败；不依赖固定秒数轮询。 */
-  private async waitForDesktopRoot(): Promise<RuntimeSession | null> {
+  private async waitForDesktopRootRegistered(): Promise<RuntimeSession | null> {
     const existing = this.sessions.get(DESKTOP_SESSION_ID) ?? null;
-    if (existing && existing.toplevelId > 0) {
-      if (!WineWindowManager.getInstance().isDesktopAbilityForeground(existing.toplevelId)) await this.resume(existing);
-      return existing;
-    }
+    if (existing && existing.toplevelId > 0) return existing;
     let session = this.syncDesktopSessionFromNative();
-    if (session && session.toplevelId > 0) {
-      if (!WineWindowManager.getInstance().isDesktopAbilityForeground(session.toplevelId)) await this.resume(session);
-      return session;
-    }
+    if (session && session.toplevelId > 0) return session;
     return new Promise<RuntimeSession | null>((resolve: (result: RuntimeSession | null) => void): void => {
       const finish = (result: RuntimeSession | null): void => {
         const index = this.desktopRootWaiters.indexOf(finish);
@@ -564,6 +586,17 @@ export class AppSessionService {
         finish(null);
       }
     });
+  }
+
+  /** 等待 explorer surface 关联为 desktop root；不创建或重置任何 Wine 资源。
+   *  在注册等待之上补一次前台激活（仅当 DesktopAbility 未在前台时）。 */
+  private async waitForDesktopRoot(): Promise<RuntimeSession | null> {
+    const session = await this.waitForDesktopRootRegistered();
+    if (!session || session.toplevelId <= 0) return null;
+    if (!WineWindowManager.getInstance().isDesktopAbilityForeground(session.toplevelId)) {
+      await this.resume(session);
+    }
+    return session;
   }
 
   private syncDesktopSessionFromNative(): RuntimeSession | null {

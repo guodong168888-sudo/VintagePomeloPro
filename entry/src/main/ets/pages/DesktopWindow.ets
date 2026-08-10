@@ -83,6 +83,11 @@ class DesktopController extends XComponentController {
     try {
       if (this.rendererRootId > 0 && (this.rendererRootId !== rootId || force)) {
         testNapi.destroyRenderer(this.rendererRootId);
+      } else if (this.rendererRootId === rootId && !force) {
+        // 已绑定同一桌面根：无需重建 renderer，仅同步输入目标。
+        InputOverlayWindowCoordinator.getInstance().setActiveToplevel(rootId);
+        InputOverlayWindowCoordinator.getInstance().markRendererRebound();
+        return true;
       }
       testNapi.createRenderer(rootId, BigInt(this.surfaceId));
       this.rendererRootId = rootId;
@@ -173,7 +178,7 @@ struct DesktopPage {
     GamepadManager.getInstance().subscribeConnection(this.gamepadConnectionCallback);
     GamepadManager.getInstance().subscribeActivity(this.gamepadActivityCallback);
     InputRouter.getInstance().setActiveToplevel(WineWindowManager.getInstance().getDesktopRootId());
-    this.controller.switchDesktopRoot(this.desktopToplevelId);
+    this.controller.switchDesktopRoot(WineWindowManager.getInstance().getDesktopRootId());
     InputOverlayWindowCoordinator.getInstance().registerRendererStressDriver(() => this.controller.rebindRenderer());
   }
 
@@ -191,8 +196,14 @@ struct DesktopPage {
   }
 
   private onDesktopToplevelChanged(): void {
-    const rootId = this.desktopToplevelId || WineWindowManager.getInstance().getDesktopRootId();
-    if (this.controller.switchDesktopRoot(rootId)) {
+    hilog.info(DOMAIN, 'LIFE', '[XComp] desktop toplevel changed to #%{public}d, renderer stays on desktop root',
+      this.desktopToplevelId);
+    // 桌面合成模式下 renderer 始终绑定桌面根：前台窗口"提升"只改变展示内容，
+    // native 渲染与输入映射都按根 toplevel 查找 renderer（egl_renderer 的
+    // RootCompositing 分支）。若随 desktopToplevelId 把 renderer 迁到非根
+    // 窗口，输入侧按根 id 查不到 renderer，坐标会全部坍缩为 (0,0)（鼠标失效）。
+    const rootId = WineWindowManager.getInstance().getDesktopRootId();
+    if (rootId > 0 && this.controller.switchDesktopRoot(rootId)) {
       InputOverlayWindowCoordinator.getInstance().setActiveToplevel(rootId);
     }
   }
