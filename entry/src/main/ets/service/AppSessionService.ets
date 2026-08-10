@@ -174,7 +174,7 @@ export class AppSessionService {
       return existing;
     }
 
-    hilog.info(DOMAIN, '[SESS]', 'launch: enter app=%{public}s kind=%{public}s state=%{public}s', app.id, app.launchTarget.kind, WineEngineService.getInstance().getState());
+
     // 程序/游戏：事件驱动启动。
     // - 引擎已 READY 且模式匹配 → 直接启动；
     // - 未就绪 → 挂到引擎 READY 事件，由"桌面就绪"事件触发真正启动，
@@ -269,8 +269,7 @@ export class AppSessionService {
     let sawPreparing = false;
     WineEngineService.getInstance().subscribe((state: EngineState): void => {
       if (state === EngineState.PREPARING || state === EngineState.SWITCHING) sawPreparing = true;
-      hilog.info(DOMAIN, '[SESS]', 'launch: engine state=%{public}s pending=%{public}d sawPreparing=%{public}s',
-        state, this.pendingLaunches.length, sawPreparing ? '1' : '0');
+
       if (state === EngineState.READY) {
         this.drainPendingLaunches();
       } else if (sawPreparing && (state === EngineState.ERROR || state === EngineState.STOPPED)) {
@@ -287,7 +286,7 @@ export class AppSessionService {
     homeDirectory: string): Promise<RuntimeSession | null> {
     return new Promise<RuntimeSession | null>((resolve: (result: RuntimeSession | null) => void): void => {
       this.pendingLaunches.push({ app, settings, mode, presentationMode, homeDirectory, resolve });
-      hilog.info(DOMAIN, '[SESS]', 'launch: deferred app=%{public}s queue=%{public}d', app.id, this.pendingLaunches.length);
+
       this.ensurePendingLaunchListener();
       // 触发引擎启动（不 await）；引擎 READY 事件会驱动队列真正执行。
       WineEngineService.getInstance().ensureReady(mode, presentationMode, homeDirectory).catch(() => {});
@@ -300,7 +299,7 @@ export class AppSessionService {
     if (this.drainingPendingLaunches) return;
     this.drainingPendingLaunches = true;
     const pending = this.pendingLaunches.splice(0);
-    hilog.info(DOMAIN, '[SESS]', 'launch: drain pending=%{public}d', pending.length);
+
     for (const req of pending) {
       this.launchReady(req.app, req.settings, req.mode, req.presentationMode, req.homeDirectory)
         .then((session: RuntimeSession | null) => req.resolve(session))
