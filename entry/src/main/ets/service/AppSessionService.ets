@@ -56,6 +56,7 @@ export class AppSessionService {
   private sessions: Map<string, RuntimeSession> = new Map<string, RuntimeSession>();
   private pendingToplevels: PendingToplevelAssociation[] = [];
   private desktopRootWaiters: Array<(session: RuntimeSession | null) => void> = [];
+  private promoteRetries: Map<string, number> = new Map<string, number>();
 
   static getInstance(): AppSessionService {
     if (!AppSessionService.instance) AppSessionService.instance = new AppSessionService();
@@ -210,8 +211,18 @@ export class AppSessionService {
           app.id);
         return null;
       }
-      try { testNapi.activateWineSession(desktopSession.sessionId); } catch (_) {}
-      try { testNapi.raiseToplevel(desktopSession.toplevelId); } catch (_) {}
+      // 先跳到桌面再启动 exe：非阻塞地把桌面窗口（DWA）带到前台（不 await，
+      // 冷启动时 startAbility 可能阻塞启动链）。exe 启动后其窗口出现在桌面
+      // 合成里，窗口 created 后再自动切到该窗口（auto-promote）。
+      if (!WineWindowManager.getInstance().isDesktopAbilityForeground(desktopSession.toplevelId)) {
+        this.resume(desktopSession).catch((err: Error) => {
+          hilog.warn(DOMAIN, '[SESS]', 'launch: jump-to-desktop failed err=%{public}s',
+            JSON.stringify(err));
+        });
+      } else {
+        try { testNapi.activateWineSession(desktopSession.sessionId); } catch (_) {}
+        try { testNapi.raiseToplevel(desktopSession.toplevelId); } catch (_) {}
+      }
     }
 
     // 每游戏兼容性预设优先于全局预设；'default' 表示跟随全局。
@@ -522,7 +533,24 @@ export class AppSessionService {
         WineEngineService.getInstance().isReady()) {
         hilog.info(DOMAIN, '[SESS]', 'auto-promote session=%{public}s tl=%{public}d',
           matched.sessionId, matched.toplevelId);
-        this.resume(matched).catch(() => {});
+        const tl = matched.toplevelId;
+        const sid = matched.sessionId;
+        // DWA 已在前台显示桌面时，程序窗口会直接出现在桌面合成里，无需再
+        // startAbility（引擎就绪瞬间重复 startAbility 偶发 201 被拒），
+        // 只做轻量激活。DWA 不在前台（库页还开着）才切窗口并带重试兜底。
+        const rootId = WineWindowManager.getInstance().getDesktopRootId();
+        if (rootId > 0 && WineWindowManager.getInstance().isDesktopAbilityForeground(rootId)) {
+          try { testNapi.activateWineSession(sid); } catch (_) {}
+          try { testNapi.raiseToplevel(tl); } catch (_) {}
+        } else {
+          this.resume(matched).catch((err: Error) => {
+            hilog.warn(DOMAIN, '[SESS]', 'auto-promote resume failed sid=%{public}s name=%{public}s msg=%{public}s',
+              sid, err.name, err.message);
+          });
+          // 引擎刚就绪时 AMS 可能仍在处理桌面窗口启动，startAbility 偶发被拒；
+          // 短窗口内若 DWA 未切到该窗口则补一次（非阻塞，最多重试 2 次）。
+          this.schedulePromoteRetry(sid, tl, 0);
+        }
       }
     } else if (toplevelId > 0) {
       this.pendingToplevels.push({ sessionId: sessionId, clientPid: clientPid, toplevelId: toplevelId });
@@ -624,6 +652,24 @@ export class AppSessionService {
     const waiters = this.desktopRootWaiters;
     this.desktopRootWaiters = [];
     waiters.forEach((resolve: (result: RuntimeSession | null) => void): void => resolve(session));
+  }
+
+  /** 自动拉起兜底：startAbility 在引擎就绪瞬间偶发被 AMS 拒绝，1.2s 后若
+   *  DWA 仍未切到目标窗口则重试，最多 2 次；会话/窗口已变化则放弃。 */
+  private schedulePromoteRetry(sessionId: string, tl: number, attempt: number): void {
+    if (attempt >= 2) return;
+    setTimeout((): void => {
+      const session = this.sessions.get(sessionId);
+      if (!session || session.toplevelId !== tl) return;
+      if (WineWindowManager.getInstance().isDesktopAbilityForeground(tl)) return;
+      hilog.info(DOMAIN, '[SESS]', 'auto-promote retry #%{public}d sid=%{public}s tl=%{public}d',
+        attempt + 1, sessionId, tl);
+      this.resume(session).catch((err: Error) => {
+        hilog.warn(DOMAIN, '[SESS]', 'auto-promote retry failed sid=%{public}s err=%{public}s',
+          sessionId, JSON.stringify(err));
+      });
+      this.schedulePromoteRetry(sessionId, tl, attempt + 1);
+    }, 1200);
   }
 
   private upsertDesktopSession(toplevelId: number, pid: number): RuntimeSession {

@@ -293,11 +293,25 @@ static void HandleRequest(int conn_fd)
                 ret, childPid);
 
     if (ret == 0 && childPid > 0) {
+        // 子进程继承请求方会话：Wine 的 CreateProcess 由游戏进程连上 broker
+        // 发起，SO_PEERCRED 拿到请求方 pid 并解析其 sessionId。多进程游戏
+        // （launcher 拉起真正进程）建窗的往往是子进程，若不继承会话，窗口
+        // 的 created 事件会以 wine-<子pid> 自注册，ArkTS 的 associateToplevel
+        // 匹配不到卡片启动会话 → 自动拉起缺失（程序能跑但跳不到桌面）。
+        std::string inheritedSession;
+        {
+            struct ucred cred;
+            socklen_t credLen = sizeof(cred);
+            if (getsockopt(conn_fd, SOL_SOCKET, SO_PEERCRED, &cred, &credLen) == 0 &&
+                cred.pid > 1) {
+                inheritedSession = FindSessionIdForClientPid(cred.pid);
+            }
+        }
         // 全量登记: App 侧主动启动 (SpawnViaBroker) 与 wine 内部自启
         // (ohos_broker_spawn_child / loader.c 自启 wineserver) 都汇到 broker。
         // 统一登记使 explorer 里双击的 exe 出现在任务列表; App 侧调用者随后
         // 会用更准确的路径 AddProcess 覆盖 (AddProcess 同 pid 幂等)。
-        AddProcess(childPid, ParseProcessName(entryParamsRaw), -1);
+        AddProcess(childPid, ParseProcessName(entryParamsRaw), -1, inheritedSession);
     }
 
     free(entryParamsCopy);
