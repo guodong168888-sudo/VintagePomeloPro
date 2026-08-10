@@ -499,22 +499,54 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
         OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot started, pid=%{public}d", childPid);
         /* 首次初始化 (wine.inf 的 PreInstall/DefaultInstall/Wow64Install + 可选 Mono)
          * 耗时与设备性能强相关, 模拟器上可超过 30s — 固定死线会把仍在正常初始化的
-         * wineboot 误判为失败。改为进程活性驱动: wineboot 活着就继续等,
-         * 大超时仅作挂死安全网; 真正的失败由进程退出后 prefix 不完整触发。 */
-        char procPath[64];
-        snprintf(procPath, sizeof(procPath), "/proc/%d", childPid);
-        constexpr int kWinebootHangMs = 3 * 60 * 1000;
-        int aliveMs = 0;
-        while (IsProcessAliveNotZombie(childPid) && aliveMs < kWinebootHangMs) {
-            usleep(500000);
-            aliveMs += 500;
-            if (aliveMs % 10000 == 0)
+         * wineboot 误判为失败。改为"进展驱动"看门狗: prefix 关键路径的 mtime 持续
+         * 变化就视为仍在推进并继续等待; 进程活着但长时间零进展才判死; 绝对上限只
+         * 作挂死安全网, 正常情况下不会触发。 */
+        constexpr int kWinebootPollMs = 1000;
+        constexpr int kWinebootNoProgressGraceMs = 90 * 1000;
+        constexpr int kWinebootAbsoluteCapMs = 5 * 60 * 1000;
+        const std::string winebootProgressPaths[] = {
+            p->prefixDir + "/drive_c/windows",
+            p->prefixDir + "/drive_c/windows/mono",
+            p->prefixDir + "/drive_c/windows/system32",
+            p->prefixDir + "/system.reg",
+            p->prefixDir + "/user.reg",
+        };
+        auto winebootProgressStamp = [&winebootProgressPaths]() -> int64_t {
+            int64_t latest = 0;
+            for (const auto& path : winebootProgressPaths) {
+                struct stat st;
+                if (stat(path.c_str(), &st) == 0 && (int64_t)st.st_mtime > latest)
+                    latest = (int64_t)st.st_mtime;
+            }
+            return latest;
+        };
+        int64_t lastStamp = winebootProgressStamp();
+        int waitedMs = 0;
+        int lastProgressMs = 0;
+        while (IsProcessAliveNotZombie(childPid) && waitedMs < kWinebootAbsoluteCapMs) {
+            usleep(kWinebootPollMs * 1000);
+            waitedMs += kWinebootPollMs;
+            const int64_t nowStamp = winebootProgressStamp();
+            if (nowStamp != lastStamp) {
+                lastStamp = nowStamp;
+                lastProgressMs = waitedMs;
+            }
+            if (waitedMs % 10000 == 0)
                 OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot still initializing (%{public}d s)",
-                            aliveMs / 1000);
+                            waitedMs / 1000);
+            if (waitedMs - lastProgressMs >= kWinebootNoProgressGraceMs) {
+                OH_LOG_ERROR(LOG_APP,
+                             "[Launch-Async] wineboot alive but no prefix progress for %{public}d s, abort",
+                             kWinebootNoProgressGraceMs / 1000);
+                if (gStateTsfn)
+                    napi_call_threadsafe_function(gStateTsfn, strdup("wineboot-failed"), napi_tsfn_blocking);
+                return false;
+            }
         }
-        if (aliveMs >= kWinebootHangMs) {
-            OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineboot hung for %{public}d s, abort",
-                         kWinebootHangMs / 1000);
+        if (waitedMs >= kWinebootAbsoluteCapMs) {
+            OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineboot exceeded %{public}d s absolute cap, abort",
+                         kWinebootAbsoluteCapMs / 1000);
             if (gStateTsfn)
                 napi_call_threadsafe_function(gStateTsfn, strdup("wineboot-failed"), napi_tsfn_blocking);
             return false;
@@ -529,7 +561,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
                 napi_call_threadsafe_function(gStateTsfn, strdup("wineboot-failed"), napi_tsfn_blocking);
             return false;
         }
-        OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot completed (%{public}d s)", aliveMs / 1000);
+        OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot completed (%{public}d s)", waitedMs / 1000);
         unlink(initMarker.c_str());
         ws->SetDesktopRootRecognitionEnabled(true);
         ws->PromotePendingDesktopRoot();
@@ -593,6 +625,9 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
         OH_LOG_INFO(LOG_APP, "[Launch-Async] explorer desktop size: outputW=%{public}d outputH=%{public}d → %{public}dx%{public}d",
                     ws->outputW_, ws->outputH_, dw, dh);
         char desktopArg[128];
+        constexpr int kExplorerMaxAttempts = 3;
+        constexpr int kExplorerRetryBackoffMs = 2000;
+        int explorerAttempt = 0;
         /* 附带 winehua_keep.exe: 加入 shell desktop 并持久运行,
          * 避免最后一个用户应用退出后 wineserver 自动关闭桌面.
          * 仅 Pad 桌面模式需要, Phone 模式走单窗口, 无需此逻辑. */
@@ -608,40 +643,47 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
         exArgs.fdList.head = (audioBootstrapFd >= 0) ? &audioFdNode : nullptr;
         NativeChildProcess_Options exOpts = {};
         exOpts.isolationMode = NCP_ISOLATION_MODE_NORMAL;
-        int32_t exPid = -1;
-        auto exRet = OH_Ability_StartNativeChildProcess(
-            "libwine_child.so:Main", exArgs, exOpts, &exPid);
-        OH_LOG_INFO(LOG_APP, "[Launch-Async] explorer desktop pid=%{public}d ret=%{public}d",
-                    exPid, (int)exRet);
-        if (exPid > 0) {
-            // 桌面壳进程登记为引擎核心进程: 保证用户程序停止后桌面保持存活,
-            // 且"关闭运行中的程序"不会把桌面一起带走。
-            AddProcess(exPid, "@engine/explorer", -1, "@engine/explorer");
-        }
-        ws->PromotePendingDesktopRoot();
-        if (exRet != NCP_NO_ERROR) {
-            OH_LOG_ERROR(LOG_APP, "[Launch-Async] explorer desktop spawn failed ret=%{public}d",
-                         (int)exRet);
-            if (gStateTsfn)
-                napi_call_threadsafe_function(gStateTsfn, strdup("wine-failed"), napi_tsfn_blocking);
-            return false;
-        }
-        /* 桌面根是 wine-ready 的真实前置条件，不用固定秒数判定成功/失败：
-         * - root toplevel 注册 → 条件满足，立即放行；
-         * - explorer 或 wineserver 核心进程死亡 → 条件被破坏，明确失败；
-         * 仅“进程活着但 root 永不注册”这种无法用布尔条件表达的挂死由看门狗
-         * 兜底（不作为成功/失败判定依据，只防永久卡死）。 */
-        {
-            constexpr int kRootCheckIntervalMs = 100;
-            constexpr int kRootWatchdogMs = 10 * 60 * 1000;
-            int waitedMs = 0;
-            while (ws->GetDesktopRootToplevelId() == 0) {
-                if (!IsProcessAliveNotZombie(exPid)) {
-                    OH_LOG_ERROR(LOG_APP,
-                                 "[Launch-Async] explorer desktop died before registering desktop root");
+        bool explorerRootReady = false;
+        while (!explorerRootReady && explorerAttempt < kExplorerMaxAttempts) {
+            explorerAttempt++;
+            int32_t exPid = -1;
+            auto exRet = OH_Ability_StartNativeChildProcess(
+                "libwine_child.so:Main", exArgs, exOpts, &exPid);
+            OH_LOG_INFO(LOG_APP, "[Launch-Async] explorer desktop attempt=%{public}d/%{public}d pid=%{public}d ret=%{public}d",
+                        explorerAttempt, kExplorerMaxAttempts, exPid, (int)exRet);
+            if (exPid > 0) {
+                // 桌面壳进程登记为引擎核心进程: 保证用户程序停止后桌面保持存活,
+                // 且"关闭运行中的程序"不会把桌面一起带走。
+                AddProcess(exPid, "@engine/explorer", -1, "@engine/explorer");
+            }
+            ws->PromotePendingDesktopRoot();
+            if (exRet != NCP_NO_ERROR) {
+                OH_LOG_ERROR(LOG_APP, "[Launch-Async] explorer desktop spawn failed ret=%{public}d (attempt %{public}d)",
+                             (int)exRet, explorerAttempt);
+                if (explorerAttempt >= kExplorerMaxAttempts) {
                     if (gStateTsfn)
                         napi_call_threadsafe_function(gStateTsfn, strdup("wine-failed"), napi_tsfn_blocking);
                     return false;
+                }
+                usleep(kExplorerRetryBackoffMs * 1000);
+                continue;
+            }
+            /* 桌面根是 wine-ready 的真实前置条件:
+             * - root toplevel 注册 → 条件满足, 立即放行;
+             * - explorer 死亡 → 自动重试 (慢设备/内存压力下 explorer 可能瞬崩);
+             * - wineserver 死亡 → 明确失败;
+             * 仅"进程活着但 root 永不注册"的挂死由看门狗兜底。 */
+            constexpr int kRootCheckIntervalMs = 100;
+            constexpr int kRootWatchdogMs = 10 * 60 * 1000;
+            int waitedMs = 0;
+            bool attemptFailed = false;
+            while (ws->GetDesktopRootToplevelId() == 0) {
+                if (!IsProcessAliveNotZombie(exPid)) {
+                    OH_LOG_ERROR(LOG_APP,
+                                 "[Launch-Async] explorer desktop died before registering desktop root (attempt %{public}d/%{public}d)",
+                                 explorerAttempt, kExplorerMaxAttempts);
+                    attemptFailed = true;
+                    break;
                 }
                 if (wsChildPid > 0 && !IsProcessAliveNotZombie(wsChildPid)) {
                     OH_LOG_ERROR(LOG_APP,
@@ -661,9 +703,19 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
                 usleep(kRootCheckIntervalMs * 1000);
                 waitedMs += kRootCheckIntervalMs;
             }
-            OH_LOG_INFO(LOG_APP, "[Launch-Async] explorer desktop root ready tl=%{public}d",
-                        ws->GetDesktopRootToplevelId());
+            if (attemptFailed) {
+                if (explorerAttempt >= kExplorerMaxAttempts) {
+                    if (gStateTsfn)
+                        napi_call_threadsafe_function(gStateTsfn, strdup("wine-failed"), napi_tsfn_blocking);
+                    return false;
+                }
+                usleep(kExplorerRetryBackoffMs * 1000);
+                continue;
+            }
+            explorerRootReady = ws->GetDesktopRootToplevelId() != 0;
         }
+        OH_LOG_INFO(LOG_APP, "[Launch-Async] explorer desktop root ready tl=%{public}d",
+                    ws->GetDesktopRootToplevelId());
     }
     else
     {

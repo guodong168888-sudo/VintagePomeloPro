@@ -1302,9 +1302,10 @@ void GraphicsBroker::StartVirglSocketServerLocked()
     OH_LOG_INFO(LOG_APP, "[GraphicsBroker] waiting for virgl socket at %{public}s",
                 virglSocketPath_.c_str());
 
+    constexpr int kVtestSocketWaitMs = 30 * 1000;
     if (WaitFor("virgl_test_server socket",
                 [this]() { return FileExists(virglSocketPath_) || !IsVirglServerProcessAliveLocked(); },
-                4000, 100) &&
+                kVtestSocketWaitMs, 100) &&
         FileExists(virglSocketPath_) &&
         IsVirglServerProcessAliveLocked())
     {
@@ -1318,18 +1319,23 @@ void GraphicsBroker::StartVirglSocketServerLocked()
 
     const bool socketExists = FileExists(virglSocketPath_);
     const bool serverAlive = IsVirglServerProcessAliveLocked();
+    if (serverAlive) {
+        /* 慢设备上 vtest 服务首次冷启动可能超过固定等待。进程还活着就保留它,
+         * 让后续 EnsureStarted() 重新探测 socket, 而不是杀掉服务造成硬失败。 */
+        virglSocketReady_ = false;
+        lastError_ = "virgl_test_server socket not ready yet after " +
+                     std::to_string(kVtestSocketWaitMs / 1000) +
+                     " s; host process alive, will retry";
+        OH_LOG_WARN(LOG_APP,
+                    "[GraphicsBroker] virgl socket wait timed out but host alive: "
+                    "socket_exists=%{public}d process_alive=%{public}d; keeping host for retry",
+                    socketExists ? 1 : 0, serverAlive ? 1 : 0);
+        return;
+    }
+
     OH_LOG_ERROR(LOG_APP,
                  "[GraphicsBroker] virgl socket wait FAILED: socket_exists=%{public}d process_alive=%{public}d",
                  socketExists ? 1 : 0, serverAlive ? 1 : 0);
-
-    // An in-process host cannot be killed independently from the application.
-    // Keep its real state so a later Prepare() can observe a delayed socket.
-    if (virglServerUsesInProcess_.load(std::memory_order_acquire) && serverAlive)
-    {
-        virglSocketReady_ = false;
-        lastError_ = "timed out waiting for virgl_test_server socket; host is still starting";
-        return;
-    }
 
     if (virglServerPid_ > 0 &&
         !virglServerUsesInProcess_.load(std::memory_order_acquire))
