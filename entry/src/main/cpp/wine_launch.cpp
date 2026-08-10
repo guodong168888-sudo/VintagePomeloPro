@@ -379,6 +379,32 @@ static void AppendDesktopD3dEntryEnv(std::string& entryParams, const LaunchParam
     AppendMissingEntryParamsEnvOverrides(entryParams, params.envStrs);
 }
 
+// -- 引擎阶段/失败事件 (单一协调者 -> ArkTS 观察者) --
+// 事件通道复用 gStateTsfn 单字符串; 语法:
+//   phase:<name>    进入某个初始化阶段 (graphics/wineserver/wineboot/explorer/ready)
+//   fail:<reason>   致命失败并带结构化原因
+//   wine-ready      终态成功 (保留)
+//   <pid>:wine-*    进程级事件 (游戏启动结果, 保留)
+static void EmitEngineEvent(const char* event)
+{
+    if (gStateTsfn)
+        napi_call_threadsafe_function(gStateTsfn, strdup(event), napi_tsfn_blocking);
+}
+
+static void EmitEnginePhase(const char* phase)
+{
+    std::string event = "phase:";
+    event += phase;
+    EmitEngineEvent(event.c_str());
+}
+
+static void EmitEngineFail(const char* reason)
+{
+    std::string event = "fail:";
+    event += reason;
+    EmitEngineEvent(event.c_str());
+}
+
 static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
                           const std::string& serializedEnv) {
     // 通过 fdList 传递 audio bootstrap fd (仅 explorer 需要音频)
@@ -393,8 +419,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
     if (!EnsureExternalPePrefixSkeleton(p->prefixDir) ||
         !EnsureWow64Files(p->winehuaBin, p->prefixDir)) {
         OH_LOG_ERROR(LOG_APP, "[Launch-Async] external-PE prefix preparation failed");
-        if (gStateTsfn)
-            napi_call_threadsafe_function(gStateTsfn, strdup("wineboot-failed"), napi_tsfn_blocking);
+        EmitEngineFail("prefix-prepare");
         return false;
     }
 
@@ -410,8 +435,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
                          "[Launch-Async] graphics backend unavailable: active=%{public}s error=%{public}s",
                          winehua::GraphicsBroker::BackendName(gfxState.active),
                          gfxState.lastError.c_str());
-            if (gStateTsfn)
-                napi_call_threadsafe_function(gStateTsfn, strdup("wine-failed"), napi_tsfn_blocking);
+            EmitEngineFail("graphics-unavailable");
             return false;
         }
     }
@@ -431,8 +455,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
             "libwine_child.so:WineserverMain", wsArgs, wsOpts, &wsChildPid);
         if (wsRet != NCP_NO_ERROR) {
             OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineserver StartNativeChildProcess FAILED ret=%{public}d", (int)wsRet);
-            if (gStateTsfn)
-                napi_call_threadsafe_function(gStateTsfn, strdup("wineserver-failed"), napi_tsfn_blocking);
+            EmitEngineFail("wineserver-spawn");
             return false;
         }
         OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver pid=%{public}d (via appspawn)", wsChildPid);
@@ -445,8 +468,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
         }
     }
 
-    if (gStateTsfn)
-        napi_call_threadsafe_function(gStateTsfn, strdup("wineboot-starting"), napi_tsfn_blocking);
+    EmitEnginePhase("wineboot");
 
     gBrokerHomeDir = p->homeDir;
     StartBrokerServer();
@@ -459,14 +481,6 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
 
     if (!prefixReady) {
         OH_LOG_INFO(LOG_APP, "[Launch-Async] prefix not initialized, preparing WoW64 and running wineboot --init...");
-        if (FILE* marker = fopen(initMarker.c_str(), "w")) {
-            fputs("wineboot\n", marker);
-            fclose(marker);
-        } else {
-            OH_LOG_ERROR(LOG_APP, "[Launch-Async] cannot create prefix init marker: %{public}s",
-                         initMarker.c_str());
-            return false;
-        }
         auto* ws = WaylandServer::GetInstance();
         ws->SetDesktopRootRecognitionEnabled(false);
         // wineboot creates shell-owned helper windows while initializing a fresh
@@ -475,93 +489,130 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
         // session can leave Wayland/audio/graphics services half initialized.
         const char* desktopTag =
             (ws->IsDesktopMode() || p->automationMode) ? "__winehua_desktop__|" : "";
-#ifdef __aarch64__
-        std::string entryParams = p->homeDir + "|" + p->winehuaBin + "|" + desktopTag +
-            "wineboot|--init|__env=WINEPREFIX=" + p->prefixDir;
-#else
-        std::string entryParams = p->homeDir + "|" + p->winehuaBin + "|" + desktopTag +
-            "wine|wineboot|--init|__env=WINEPREFIX=" + p->prefixDir;
-#endif
         // 注意: wineboot --init 只需要初始化 prefix, 不传完整环境变量以节省 entryParams 长度
-        NativeChildProcess_Args childArgs = {};
-        childArgs.entryParams = const_cast<char*>(entryParams.c_str());
-        NativeChildProcess_Options options = {};
-        options.isolationMode = NCP_ISOLATION_MODE_NORMAL;
-        int32_t childPid = -1;
-        auto ret = OH_Ability_StartNativeChildProcess(
-            "libwine_child.so:Main", childArgs, options, &childPid);
-        if (ret != NCP_NO_ERROR) {
-            OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineboot FAILED ret=%{public}d", (int)ret);
-            if (gStateTsfn)
-                napi_call_threadsafe_function(gStateTsfn, strdup("wineboot-failed"), napi_tsfn_blocking);
-            return false;
-        }
-        OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot started, pid=%{public}d", childPid);
+        // 首启 wineboot 失败允许从标记重跑一次 (慢设备/瞬时崩溃), 避免一次失败
+        // 就把整条启动链打回; 只有重试耗尽才发 fail:。
+        constexpr int kMaxWinebootAttempts = 2;
+        constexpr int kWinebootRetryBackoffMs = 2000;
+        bool winebootOk = false;
+        int winebootWaitMs = 0;
+        for (int attempt = 1; attempt <= kMaxWinebootAttempts && !winebootOk; attempt++) {
+            if (attempt > 1) {
+                OH_LOG_WARN(LOG_APP, "[Launch-Async] retrying wineboot --init (attempt %d/%d)",
+                            attempt, kMaxWinebootAttempts);
+                usleep(kWinebootRetryBackoffMs * 1000);
+            }
+            if (FILE* marker = fopen(initMarker.c_str(), "w")) {
+                fputs("wineboot\n", marker);
+                fclose(marker);
+            } else {
+                OH_LOG_ERROR(LOG_APP, "[Launch-Async] cannot create prefix init marker: %{public}s",
+                             initMarker.c_str());
+                EmitEngineFail("wineboot-failed");
+                return false;
+            }
+#ifdef __aarch64__
+            std::string entryParams = p->homeDir + "|" + p->winehuaBin + "|" + desktopTag +
+                "wineboot|--init|__env=WINEPREFIX=" + p->prefixDir;
+#else
+            std::string entryParams = p->homeDir + "|" + p->winehuaBin + "|" + desktopTag +
+                "wine|wineboot|--init|__env=WINEPREFIX=" + p->prefixDir;
+#endif
+            NativeChildProcess_Args childArgs = {};
+            childArgs.entryParams = const_cast<char*>(entryParams.c_str());
+            NativeChildProcess_Options options = {};
+            options.isolationMode = NCP_ISOLATION_MODE_NORMAL;
+            int32_t childPid = -1;
+            auto ret = OH_Ability_StartNativeChildProcess(
+                "libwine_child.so:Main", childArgs, options, &childPid);
+            if (ret != NCP_NO_ERROR) {
+                OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineboot FAILED ret=%{public}d (attempt %{public}d)",
+                             (int)ret, attempt);
+                if (attempt >= kMaxWinebootAttempts) {
+                    EmitEngineFail("wineboot-spawn");
+                    return false;
+                }
+                continue;
+            }
+            OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot started, pid=%{public}d (attempt %{public}d)",
+                        childPid, attempt);
         /* 首次初始化 (wine.inf 的 PreInstall/DefaultInstall/Wow64Install + 可选 Mono)
          * 耗时与设备性能强相关, 模拟器上可超过 30s — 固定死线会把仍在正常初始化的
          * wineboot 误判为失败。改为"进展驱动"看门狗: prefix 关键路径的 mtime 持续
          * 变化就视为仍在推进并继续等待; 进程活着但长时间零进展才判死; 绝对上限只
          * 作挂死安全网, 正常情况下不会触发。 */
-        constexpr int kWinebootPollMs = 1000;
-        constexpr int kWinebootNoProgressGraceMs = 90 * 1000;
-        constexpr int kWinebootAbsoluteCapMs = 5 * 60 * 1000;
-        const std::string winebootProgressPaths[] = {
-            p->prefixDir + "/drive_c/windows",
-            p->prefixDir + "/drive_c/windows/mono",
-            p->prefixDir + "/drive_c/windows/system32",
-            p->prefixDir + "/system.reg",
-            p->prefixDir + "/user.reg",
-        };
-        auto winebootProgressStamp = [&winebootProgressPaths]() -> int64_t {
-            int64_t latest = 0;
-            for (const auto& path : winebootProgressPaths) {
-                struct stat st;
-                if (stat(path.c_str(), &st) == 0 && (int64_t)st.st_mtime > latest)
-                    latest = (int64_t)st.st_mtime;
+            constexpr int kWinebootPollMs = 1000;
+            constexpr int kWinebootNoProgressGraceMs = 90 * 1000;
+            constexpr int kWinebootAbsoluteCapMs = 5 * 60 * 1000;
+            const std::string winebootProgressPaths[] = {
+                p->prefixDir + "/drive_c/windows",
+                p->prefixDir + "/drive_c/windows/mono",
+                p->prefixDir + "/drive_c/windows/system32",
+                p->prefixDir + "/system.reg",
+                p->prefixDir + "/user.reg",
+            };
+            auto winebootProgressStamp = [&winebootProgressPaths]() -> int64_t {
+                int64_t latest = 0;
+                for (const auto& path : winebootProgressPaths) {
+                    struct stat st;
+                    if (stat(path.c_str(), &st) == 0 && (int64_t)st.st_mtime > latest)
+                        latest = (int64_t)st.st_mtime;
+                }
+                return latest;
+            };
+            int64_t lastStamp = winebootProgressStamp();
+            int waitedMs = 0;
+            int lastProgressMs = 0;
+            while (IsProcessAliveNotZombie(childPid) && waitedMs < kWinebootAbsoluteCapMs) {
+                usleep(kWinebootPollMs * 1000);
+                waitedMs += kWinebootPollMs;
+                const int64_t nowStamp = winebootProgressStamp();
+                if (nowStamp != lastStamp) {
+                    lastStamp = nowStamp;
+                    lastProgressMs = waitedMs;
+                }
+                if (waitedMs % 10000 == 0)
+                    OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot still initializing (%{public}d s)",
+                                waitedMs / 1000);
+                if (waitedMs - lastProgressMs >= kWinebootNoProgressGraceMs) {
+                    OH_LOG_ERROR(LOG_APP,
+                                 "[Launch-Async] wineboot alive but no prefix progress for %{public}d s, abort (attempt %{public}d)",
+                                 kWinebootNoProgressGraceMs / 1000, attempt);
+                    winebootWaitMs = waitedMs;
+                    if (attempt >= kMaxWinebootAttempts) {
+                        EmitEngineFail("wineboot-no-progress");
+                        return false;
+                    }
+                    continue;
+                }
             }
-            return latest;
-        };
-        int64_t lastStamp = winebootProgressStamp();
-        int waitedMs = 0;
-        int lastProgressMs = 0;
-        while (IsProcessAliveNotZombie(childPid) && waitedMs < kWinebootAbsoluteCapMs) {
-            usleep(kWinebootPollMs * 1000);
-            waitedMs += kWinebootPollMs;
-            const int64_t nowStamp = winebootProgressStamp();
-            if (nowStamp != lastStamp) {
-                lastStamp = nowStamp;
-                lastProgressMs = waitedMs;
+            if (waitedMs >= kWinebootAbsoluteCapMs) {
+                OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineboot exceeded %{public}d s absolute cap, abort (attempt %{public}d)",
+                             kWinebootAbsoluteCapMs / 1000, attempt);
+                winebootWaitMs = waitedMs;
+                if (attempt >= kMaxWinebootAttempts) {
+                    EmitEngineFail("wineboot-cap");
+                    return false;
+                }
+                continue;
             }
-            if (waitedMs % 10000 == 0)
-                OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot still initializing (%{public}d s)",
-                            waitedMs / 1000);
-            if (waitedMs - lastProgressMs >= kWinebootNoProgressGraceMs) {
-                OH_LOG_ERROR(LOG_APP,
-                             "[Launch-Async] wineboot alive but no prefix progress for %{public}d s, abort",
-                             kWinebootNoProgressGraceMs / 1000);
-                if (gStateTsfn)
-                    napi_call_threadsafe_function(gStateTsfn, strdup("wineboot-failed"), napi_tsfn_blocking);
-                return false;
-            }
-        }
-        if (waitedMs >= kWinebootAbsoluteCapMs) {
-            OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineboot exceeded %{public}d s absolute cap, abort",
-                         kWinebootAbsoluteCapMs / 1000);
-            if (gStateTsfn)
-                napi_call_threadsafe_function(gStateTsfn, strdup("wineboot-failed"), napi_tsfn_blocking);
-            return false;
-        }
+            winebootWaitMs = waitedMs;
         /* wineboot 已退出: registry 仍在 wineserver flush 途中 (实测落盘延迟
          * 稳定 ~13s), 宽限窗口等文件就绪 — 文件到位即通过, 不会满等 */
-        if (!WaitFor("wine prefix",
-                     [&p]() { return IsWinePrefixInitialized(p->prefixDir); },
-                     60000, 200)) {
-            OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineboot exited but prefix incomplete, abort");
-            if (gStateTsfn)
-                napi_call_threadsafe_function(gStateTsfn, strdup("wineboot-failed"), napi_tsfn_blocking);
-            return false;
+            if (!WaitFor("wine prefix",
+                         [&p]() { return IsWinePrefixInitialized(p->prefixDir); },
+                         60000, 200)) {
+                OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineboot exited but prefix incomplete, abort (attempt %{public}d)",
+                             attempt);
+                if (attempt >= kMaxWinebootAttempts) {
+                    EmitEngineFail("wineboot-failed");
+                    return false;
+                }
+                continue;
+            }
+            winebootOk = true;
         }
-        OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot completed (%{public}d s)", waitedMs / 1000);
+        OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot completed (%{public}d s)", winebootWaitMs / 1000);
         unlink(initMarker.c_str());
         ws->SetDesktopRootRecognitionEnabled(true);
         ws->PromotePendingDesktopRoot();
@@ -625,6 +676,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
         OH_LOG_INFO(LOG_APP, "[Launch-Async] explorer desktop size: outputW=%{public}d outputH=%{public}d → %{public}dx%{public}d",
                     ws->outputW_, ws->outputH_, dw, dh);
         char desktopArg[128];
+        EmitEnginePhase("explorer");
         constexpr int kExplorerMaxAttempts = 3;
         constexpr int kExplorerRetryBackoffMs = 2000;
         int explorerAttempt = 0;
@@ -661,8 +713,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
                 OH_LOG_ERROR(LOG_APP, "[Launch-Async] explorer desktop spawn failed ret=%{public}d (attempt %{public}d)",
                              (int)exRet, explorerAttempt);
                 if (explorerAttempt >= kExplorerMaxAttempts) {
-                    if (gStateTsfn)
-                        napi_call_threadsafe_function(gStateTsfn, strdup("wine-failed"), napi_tsfn_blocking);
+                    EmitEngineFail("explorer-spawn");
                     return false;
                 }
                 usleep(kExplorerRetryBackoffMs * 1000);
@@ -688,16 +739,14 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
                 if (wsChildPid > 0 && !IsProcessAliveNotZombie(wsChildPid)) {
                     OH_LOG_ERROR(LOG_APP,
                                  "[Launch-Async] wineserver died before explorer registered desktop root");
-                    if (gStateTsfn)
-                        napi_call_threadsafe_function(gStateTsfn, strdup("wineserver-failed"), napi_tsfn_blocking);
+                    EmitEngineFail("wineserver-died");
                     return false;
                 }
                 if (waitedMs >= kRootWatchdogMs) {
                     OH_LOG_ERROR(LOG_APP,
                                  "[Launch-Async] explorer alive but desktop root never registered (%d s), abort",
                                  waitedMs / 1000);
-                    if (gStateTsfn)
-                        napi_call_threadsafe_function(gStateTsfn, strdup("wine-failed"), napi_tsfn_blocking);
+                    EmitEngineFail("explorer-root-timeout");
                     return false;
                 }
                 usleep(kRootCheckIntervalMs * 1000);
@@ -705,8 +754,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
             }
             if (attemptFailed) {
                 if (explorerAttempt >= kExplorerMaxAttempts) {
-                    if (gStateTsfn)
-                        napi_call_threadsafe_function(gStateTsfn, strdup("wine-failed"), napi_tsfn_blocking);
+                    EmitEngineFail("explorer-died");
                     return false;
                 }
                 usleep(kExplorerRetryBackoffMs * 1000);
@@ -737,6 +785,7 @@ void LaunchThreadFunc(LaunchParams* p) {
     auto& graphicsBroker = winehua::GraphicsBroker::GetInstance();
     graphicsBroker.SetWineRuntimeBinaryDir(p->winehuaBin);
     graphicsBroker.SetVulkanPresentMode(p->d3dBackend.rfind("dxvk_", 0) == 0);
+    EmitEnginePhase("graphics");
     graphicsBroker.EnsureStarted(p->sockDir);
 
     int audioBootstrapFd = CreateAudioBootstrapFd(p->sockDir);
@@ -750,14 +799,15 @@ void LaunchThreadFunc(LaunchParams* p) {
 
     mkdir(p->prefixDir.c_str(), 0755);
 
-    if (gStateTsfn)
-        napi_call_threadsafe_function(gStateTsfn, strdup("wineserver-starting"), napi_tsfn_blocking);
+    EmitEnginePhase("wineserver");
 
     bool ok = false;
     ok = LaunchPadMode(p, audioBootstrapFd, serializedEnv);
 
-    if (ok && gStateTsfn)
-        napi_call_threadsafe_function(gStateTsfn, strdup("wine-ready"), napi_tsfn_blocking);
+    if (ok) {
+        EmitEnginePhase("ready");
+        EmitEngineEvent("wine-ready");
+    }
 
     delete p;
 }

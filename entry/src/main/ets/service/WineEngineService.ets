@@ -32,10 +32,9 @@ const RUNTIME_VERSION_MARKER = WINE_ROOT + '/.winehua-runtime-version';
 // The user's prefix and Download games must remain intact across upgrades.
 const PREFIX_RUNTIME_VERSION_MARKER = FILES_BASE + '/.wine/.winehua-prefix-runtime-version';
 const PREFIX_SYSTEM_REG = FILES_BASE + '/.wine/system.reg';
-// Native wineboot allows up to 8 minutes on slow ARM devices, followed by a
-// registry flush window. Keep a margin so a valid first-run/update operation
-// is not reported as failed while it is still making progress.
-const ENGINE_READY_TIMEOUT_MS = 10 * 60 * 1000;
+// ArkTS 不再用固定阶段死线: native 协调者会发 phase:/fail:/wine-ready 事件,
+// 等待只由事件结束。下面的安全网仅在"长时间完全无事件"时兜底, 正常不会触发。
+const ENGINE_NO_EVENT_SAFETY_MS = 30 * 60 * 1000;
 
 interface RuntimePathRequirement {
   path: string;
@@ -141,6 +140,9 @@ export class WineEngineService {
   private prefixRefreshRequired: boolean = false;
   private pendingPrefixVersion: Uint8Array = new Uint8Array(0);
   private d3dBackend: string = 'dxvk_legacy';
+  private enginePhase: string = '';
+  private phaseStartedAt: number = 0;
+  private readySafetyTimer: number = -1;
 
   static getInstance(): WineEngineService {
     if (!WineEngineService.instance) WineEngineService.instance = new WineEngineService();
@@ -160,6 +162,46 @@ export class WineEngineService {
 
   getMessage(): string {
     return this.message;
+  }
+
+  getPhase(): string {
+    return this.enginePhase;
+  }
+
+  getPhaseText(): string {
+    return this.enginePhase ? this.phaseText(this.enginePhase) : '';
+  }
+
+  getPhaseElapsedMs(): number {
+    return this.enginePhase ? Date.now() - this.phaseStartedAt : 0;
+  }
+
+  private phaseText(phase: string): string {
+    switch (phase) {
+      case 'graphics': return '准备图形栈';
+      case 'wineserver': return '启动 Wine 服务';
+      case 'wineboot': return '初始化 Wine 环境';
+      case 'explorer': return '启动桌面';
+      case 'ready': return '就绪';
+      default: return phase;
+    }
+  }
+
+  private failReasonText(reason: string): string {
+    switch (reason) {
+      case 'graphics-unavailable': return '图形栈未就绪';
+      case 'wineserver-spawn': return 'Wine 服务启动失败';
+      case 'wineserver-died': return 'Wine 服务退出';
+      case 'wineboot-spawn': return 'Wine 环境初始化启动失败';
+      case 'wineboot-no-progress': return 'Wine 环境初始化无进展';
+      case 'wineboot-cap': return 'Wine 环境初始化超时';
+      case 'wineboot-failed': return 'Wine 环境初始化失败';
+      case 'prefix-prepare': return '运行环境准备失败';
+      case 'explorer-spawn': return '桌面启动失败';
+      case 'explorer-died': return '桌面进程退出';
+      case 'explorer-root-timeout': return '桌面就绪超时';
+      default: return reason;
+    }
   }
 
   getMode(): DisplayMode | null {
@@ -195,6 +237,17 @@ export class WineEngineService {
     if (this.state === EngineState.PREPARING && this.mode === mode &&
       this.presentationMode === presentationMode &&
       this.d3dBackend === requestedD3DBackend) return this.waitForReady();
+
+    if (this.state === EngineState.ERROR) {
+      // native 进程仍存活说明协调者可能还在推进 (例如之前 ArkTS 侧瞬态失败):
+      // 不重启 server, 只重新进入等待, 避免双服务竞态。
+      let processes: NativeProcessInfo[] = [];
+      try { processes = testNapi.getProcessList() as NativeProcessInfo[]; } catch (_) {}
+      if (processes.length > 0) {
+        this.setState(EngineState.PREPARING, '正在等待引擎恢复');
+        return this.waitForReady();
+      }
+    }
 
     if (this.state !== EngineState.STOPPED &&
       (this.mode !== mode || this.presentationMode !== presentationMode ||
@@ -367,6 +420,7 @@ export class WineEngineService {
   private waitForReady(): Promise<boolean> {
     if (this.state === EngineState.READY) return Promise.resolve(true);
     if (this.state === EngineState.ERROR) return Promise.resolve(false);
+    this.resetReadySafetyNet();
     return new Promise<boolean>((resolve: (ready: boolean) => void) => {
       let completed = false;
       const finish = (ready: boolean): void => {
@@ -375,14 +429,23 @@ export class WineEngineService {
         resolve(ready);
       };
       this.waiters.push(finish);
-      setTimeout(() => {
-        if (!completed && this.state !== EngineState.READY) {
-          this.waiters = this.waiters.filter((waiter: (ready: boolean) => void) => waiter !== finish);
-          this.setState(EngineState.ERROR, 'Wine 引擎准备超时');
-          finish(false);
-        }
-      }, ENGINE_READY_TIMEOUT_MS);
     });
+  }
+
+  private resetReadySafetyNet(): void {
+    if (this.readySafetyTimer >= 0) {
+      clearTimeout(this.readySafetyTimer);
+      this.readySafetyTimer = -1;
+    }
+    if (this.state === EngineState.PREPARING || this.state === EngineState.SWITCHING) {
+      this.readySafetyTimer = setTimeout(() => {
+        this.readySafetyTimer = -1;
+        if (this.state === EngineState.PREPARING || this.state === EngineState.SWITCHING) {
+          this.setState(EngineState.ERROR, '引擎长时间无响应，请重试');
+          this.finishWaiters(false);
+        }
+      }, ENGINE_NO_EVENT_SAFETY_MS);
+    }
   }
 
   private finishWaiters(ready: boolean): void {
@@ -392,6 +455,17 @@ export class WineEngineService {
   }
 
   private handleNativeState(raw: string): void {
+    if (raw.startsWith('phase:')) {
+      this.handleEnginePhase(raw.substring('phase:'.length));
+      return;
+    }
+    if (raw.startsWith('fail:')) {
+      const reason = raw.substring('fail:'.length);
+      hilog.error(DOMAIN, TAG, 'engine failed: %{public}s', reason);
+      this.setState(EngineState.ERROR, 'Wine 启动失败：' + this.failReasonText(reason));
+      this.finishWaiters(false);
+      return;
+    }
     const separator = raw.indexOf(':');
     const processScoped = separator > 0;
     const value = separator >= 0 ? raw.substring(separator + 1) : raw;
@@ -426,13 +500,32 @@ export class WineEngineService {
       if (this.state === EngineState.PREPARING || this.state === EngineState.SWITCHING) {
         // appspawn wrapper processes may exit while wineboot/services continue
         // in broker-spawned children. The native launch coordinator emits an
-        // explicit ready/failure result; the six-minute waiter remains the
+        // explicit ready/failure result; the no-event safety net remains the
         // bounded fallback when that result never arrives.
         hilog.info(DOMAIN, TAG, 'transient zero-process exit while %{public}s; waiting for launch result', this.state);
       } else if (this.state !== EngineState.STOPPED) {
         this.setState(EngineState.STOPPED, 'Wine 引擎已停止');
       }
     }
+  }
+
+  private handleEnginePhase(phase: string): void {
+    this.enginePhase = phase;
+    this.phaseStartedAt = Date.now();
+    if (phase === 'ready') {
+      if (this.state !== EngineState.READY) {
+        this.setState(EngineState.READY, 'Wine 引擎已就绪');
+        this.finishWaiters(true);
+      }
+      return;
+    }
+    const phaseMessage = '正在初始化 Wine：' + this.phaseText(phase);
+    if (this.state === EngineState.PREPARING || this.state === EngineState.SWITCHING) {
+      this.setState(this.state, phaseMessage);
+    } else if (this.state !== EngineState.READY) {
+      this.setState(EngineState.PREPARING, phaseMessage);
+    }
+    this.resetReadySafetyNet();
   }
 
   private syncManagedSmokePayload(trigger: string): boolean {
@@ -452,6 +545,12 @@ export class WineEngineService {
     hilog.info(DOMAIN, TAG, 'engine state %{public}s -> %{public}s: %{public}s', this.state, state, message);
     this.state = state;
     this.message = message;
+    if (state === EngineState.READY || state === EngineState.STOPPED || state === EngineState.ERROR) {
+      if (this.readySafetyTimer >= 0) {
+        clearTimeout(this.readySafetyTimer);
+        this.readySafetyTimer = -1;
+      }
+    }
     this.listeners.forEach((listener: EngineStateListener) => listener(state, message));
   }
 
