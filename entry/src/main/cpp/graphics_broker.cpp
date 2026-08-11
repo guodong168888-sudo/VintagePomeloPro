@@ -5,6 +5,7 @@
 #include "string_utils.h"
 #include "wait_utils.h"
 #include "wayland_server.h"
+#include "wine_env.h"
 
 #include <AbilityKit/native_child_process.h>
 #include "phone_adapter/phone_adapter.h"
@@ -874,7 +875,12 @@ void GraphicsBroker::AppendWineEnv(std::vector<std::string>& env) const
             std::string guestLibDir = state.guestReceiverRuntimeDir + "/lib";
             env.push_back("EGL_PLATFORM=wayland");
             if (FileExists(guestLibDir + "/libEGL.so"))
+#ifdef __x86_64__
+                // 我们 x86_64 打包用唯一命名 (libwinehua_guest_EGL.so) 防覆盖系统库
+                env.push_back("WINEHUA_EGL_LIBRARY_PATH=/data/storage/el1/bundle/libs/x86_64/libwinehua_guest_EGL.so");
+#else
                 env.push_back("WINEHUA_EGL_LIBRARY_PATH=" + guestLibDir + "/libEGL.so");
+#endif
 #ifdef __aarch64__
             env.push_back("BOX64_EMULATED_LIBS=libEGL.so:libEGL.so.1:libGLESv2.so:libGLESv2.so.2:"
                           "libGLESv1_CM.so:libGLESv1_CM.so.1:libGL.so:libGL.so.1:"
@@ -882,7 +888,11 @@ void GraphicsBroker::AppendWineEnv(std::vector<std::string>& env) const
                           "libwayland-server.so.0:libwayland-egl.so:libwayland-egl.so.1:"
                           "libdrm.so:libdrm.so.2:libffi.so:libffi.so.8");
 #endif
+#ifdef __x86_64__
+            // LIBGL_DRIVERS_PATH 由下方 softpipe 块统一指向 el1, 不在此重复设置
+#else
             if (DirExists(guestLibDir + "/dri")) env.push_back("LIBGL_DRIVERS_PATH=" + guestLibDir + "/dri");
+#endif
             if (DirExists(guestLibDir + "/egl")) env.push_back("EGL_DRIVERS_PATH=" + guestLibDir + "/egl");
         }
         env.push_back("WINEHUA_WAYLAND_READBACK=1");
@@ -892,7 +902,22 @@ void GraphicsBroker::AppendWineEnv(std::vector<std::string>& env) const
         env.push_back("WINEHUA_VTEST_PRESENT=surface-queue");
         env.push_back(std::string("WINEHUA_ZERO_COPY_READY_DIR=") + ZERO_COPY_READY_DIR);
         for (const std::string& extra : guestEnv) env.push_back(extra);
+#ifdef __x86_64__
+        // HarmonyOS PC emulator express GPU cannot host GL: eglCreateContext
+        // with a NULL share context and glTexImage2D with NULL pixels crash
+        // Emulator.exe. Route the x86_64 guest to software rendering
+        // (softpipe) instead of virpipe, and do not advertise the vtest
+        // socket. arm64 real-device virgl path is unchanged.
+        //
+        // NOTE: 必须用 UpsertEnvLine 覆盖而不是 push_back — guest_gfx env
+        // 文件 (共享产物, arm64/x86_64 同一份) 里已含 GALLIUM_DRIVER=virpipe
+        // 与 LIBGL_DRIVERS_PATH=guest 路径, getenv 取首个匹配, push_back 追加
+        // 的 softpipe/el1 值会被产物里的旧值遮蔽。
+        UpsertEnvLine(env, "GALLIUM_DRIVER=softpipe");
+        UpsertEnvLine(env, "LIBGL_DRIVERS_PATH=/data/storage/el1/bundle/libs/x86_64");
+#else
         if (!state.virglSocketPath.empty()) env.push_back("VTEST_SOCKET_NAME=" + state.virglSocketPath);
+#endif
     }
 }
 

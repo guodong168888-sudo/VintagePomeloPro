@@ -83,6 +83,9 @@ void AppendProductDxvkEnv(std::vector<std::string>& env,
                           const std::string& d3dBackend,
                           const std::string& perfProfile = "");
 
+// 覆盖式追加: 清理同 key 旧条目后追加新值 (graphics_broker 等跨文件使用)
+void UpsertEnvLine(std::vector<std::string>& env, const std::string& line);
+
 // -- Audio bootstrap --
 int CreateAudioBootstrapFd(const std::string& runtimeDir);
 
