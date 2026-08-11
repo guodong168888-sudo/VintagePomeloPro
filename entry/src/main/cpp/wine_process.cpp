@@ -1,5 +1,7 @@
 #include "wine_process.h"
 #include "wine_constants.h"
+#include "phone_adapter/phone_adapter.h"
+#include <AbilityKit/native_child_process.h>
 
 #include <unistd.h>
 #include <signal.h>
@@ -146,6 +148,15 @@ std::string FindSessionIdForClientPid(pid_t clientPid) {
         if (parent <= 1 || parent == current) break;
         current = parent;
     }
+    // 诊断 (限频): 查不到会话 — 客户端自身未登记且 /proc 祖先链不可读。
+    // NCP 后端 appspawn 子进程可能不在主进程 /proc 可见范围 (命名空间/
+    // hidepid/SELinux), 会导致 created 事件 sessionId 为空、ArkTS 关联不上。
+    static uint32_t sEmptyLogN = 0;
+    if (++sEmptyLogN <= 3) {
+        OH_LOG_WARN(LOG_APP,
+                    "[ProcReg] FindSessionIdForClientPid empty for pid=%{public}d (registry miss + /proc unreadable?)",
+                    clientPid);
+    }
     return "";
 }
 
@@ -186,6 +197,14 @@ void RemoveToplevelAssociation(uint32_t toplevelId) {
         [toplevelId](const PendingToplevel& pending) {
             return pending.toplevelId == toplevelId;
         }), gPendingToplevels.end());
+}
+
+bool IsProcessRegisteredRunning(pid_t pid) {
+    std::lock_guard<std::mutex> lock(gProcMutex);
+    for (const auto& entry : gProcRegistry) {
+        if (entry.pid == pid && entry.running) return true;
+    }
+    return false;
 }
 
 void RemoveProcess(pid_t pid, int exitCode, const std::string& exitCodeSource) {
@@ -307,14 +326,62 @@ void sigchld_handler(int) {
 
 // -- NCP 进程存活监控 --
 // NCP 子进程由 appspawn 创建，不是主进程的 fork() 子进程，
-// SIGCHLD 收不到它们的退出事件。通过 /proc/<pid> 轮询检测退出。
+// SIGCHLD 收不到它们的退出事件。
+//
+// 后端分流:
+//   fork 后端 (手机/电视): 同 PID 命名空间, /proc/<pid> 可靠 → 保留轮询。
+//   NCP 后端 (平板/2in1/PC): appspawn 子进程可能不在主进程 /proc 可见范围
+//     (PID 命名空间 / hidepid 挂载 / SELinux), access() 会误判存活进程为
+//     死亡 → 以系统 NCP 退出回调为权威退出信号, /proc 轮询停用。
+//     症状: 每个进程注册后 1s 被误标 "no longer alive", 启动线程以为
+//     explorer/wineserver 已死 → explorer-died 启动失败 (MatePad Pro 复现)。
 static std::atomic<bool> gMonitorRunning{false};
 static std::thread gMonitorThread;
+static std::atomic<bool> gNcpCallbackActive{false};
+
+static void OnNcpChildExit(int32_t pid, int32_t signal) {
+    OH_LOG_INFO(LOG_APP, "[ProcMon] NCP exit callback pid=%{public}d signal=%{public}d",
+                pid, signal);
+    RemoveProcess(pid, -1, "ncp-exit");
+    if (gStateTsfn) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "%d:exited", pid);
+        napi_call_threadsafe_function(gStateTsfn, strdup(msg), napi_tsfn_blocking);
+    }
+}
 
 static void ProcessMonitorLoop() {
-    OH_LOG_INFO(LOG_APP, "[ProcMon] started");
+    OH_LOG_INFO(LOG_APP, "[ProcMon] started (backend=%{public}s)",
+                PhoneAdapter_IsPhoneMode() ? "fork" : "ncp");
+    bool procProbeLogged = false;
     while (gMonitorRunning.load(std::memory_order_relaxed)) {
         sleep(1);
+
+        if (!PhoneAdapter_IsPhoneMode()) {
+            // NCP 后端: 一律不用 /proc 轮询 (appspawn 子进程可能不可见, 会误判
+            // 存活进程为死亡并清空注册表 → 启动失败)。退出事件由系统 NCP 退出
+            // 回调权威上报; 回调注册失败时仅退出检测降级 (注册表条目保留, 由
+            // 显式 stop/重启路径清理), 启动流程不受影响。
+            // 一次性诊断: 探测 NCP 子进程在 /proc 的可见性, 供后续分析设备差异
+            // (ENOENT=命名空间/hidepid 隐藏, EPERM/EACCES=存在但权限/沙箱禁止)。
+            if (!procProbeLogged) {
+                procProbeLogged = true;
+                std::lock_guard<std::mutex> lock(gProcMutex);
+                for (const auto& entry : gProcRegistry) {
+                    if (!entry.running) continue;
+                    char procPath[64];
+                    snprintf(procPath, sizeof(procPath), "/proc/%d", entry.pid);
+                    errno = 0;
+                    int r = access(procPath, F_OK);
+                    OH_LOG_WARN(LOG_APP,
+                                "[ProcMon] NCP /proc probe pid=%{public}d access=%{public}d errno=%{public}d (%{public}s) callback=%{public}s → 存活以 NCP 退出回调为准",
+                                entry.pid, r, errno, errno ? strerror(errno) : "ok",
+                                gNcpCallbackActive.load(std::memory_order_acquire) ? "active" : "failed");
+                    break;
+                }
+            }
+            continue;
+        }
 
         std::vector<pid_t> exitedPids;
         {
@@ -325,6 +392,11 @@ static void ProcessMonitorLoop() {
                 snprintf(procPath, sizeof(procPath), "/proc/%d", entry.pid);
                 if (access(procPath, F_OK) != 0) {
                     exitedPids.push_back(entry.pid);
+                    // 诊断: fork 后端 /proc 读不到是异常 — ENOENT=进程真退出或
+                    // 命名空间不可见; EPERM/EACCES=进程在但权限/沙箱禁止读取。
+                    OH_LOG_WARN(LOG_APP,
+                                "[ProcMon] /proc/%d access failed errno=%d (%s)",
+                                entry.pid, errno, strerror(errno));
                 }
             }
         }
@@ -343,6 +415,13 @@ static void ProcessMonitorLoop() {
 }
 
 static void EnsureMonitorRunning() {
+    // 注册系统 NCP 子进程退出回调 (幂等; fork 后端注册后不触发, 无副作用)。
+    static std::once_flag sNcpCallbackOnce;
+    std::call_once(sNcpCallbackOnce, [] {
+        auto ret = OH_Ability_RegisterNativeChildProcessExitCallback(OnNcpChildExit);
+        gNcpCallbackActive = (ret == NCP_NO_ERROR);
+        OH_LOG_INFO(LOG_APP, "[ProcMon] NCP exit callback register ret=%{public}d", (int)ret);
+    });
     if (!gMonitorRunning.load(std::memory_order_acquire)) {
         gMonitorRunning.store(true, std::memory_order_release);
         gMonitorThread = std::thread(ProcessMonitorLoop);

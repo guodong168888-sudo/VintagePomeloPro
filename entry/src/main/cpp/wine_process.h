@@ -48,6 +48,9 @@ void RemoveToplevelAssociation(uint32_t toplevelId);
 // -- 进程注册表只读访问 (供 NAPI handler) --
 std::vector<WineProcessEntry> GetProcessListSnapshot();
 bool QueryProcessSnapshot(pid_t pid, WineProcessEntry* outEntry);
+/** 进程是否仍在注册表中且 running (NCP 后端存活判定的权威依据, 由系统
+ *  NCP 退出回调维护; fork 后端由 ProcMon /proc 轮询维护)。 */
+bool IsProcessRegisteredRunning(pid_t pid);
 
 // -- 辅助函数 --
 void LogProcessExit(const char* tag, pid_t pid, int status);

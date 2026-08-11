@@ -6,6 +6,7 @@
 #include "wayland_server.h"
 #include "audio_ipc_protocol.h"
 #include "graphics_broker.h"
+#include "phone_adapter/phone_adapter.h"
 
 #include <unistd.h>
 #include <signal.h>
@@ -60,11 +61,29 @@ bool IsWinePrefixInitialized() {
 
 // fork 模式下子进程退出先变僵尸、/proc/<pid> 不消失（NCP 模式由 appspawn 立即 reap）。
 // 存活检测必须识别僵尸，否则 wineboot 等待会白等到 kWinebootHangMs 超时。
+//
+// 后端分流: fork 后端 (手机) /proc 可靠 → 保留 /proc/<pid>/stat 僵尸检测;
+// NCP 后端 (平板/2in1/PC) appspawn 子进程可能不在主进程 /proc 可见范围
+// (命名空间/hidepid/SELinux), fopen 必失败 → 改查进程注册表 (running 状态
+// 由系统 NCP 退出回调维护), 避免把活着的 explorer/wineserver 误判为死亡
+// 导致 "explorer died before registering desktop root" 启动失败。
 static bool IsProcessAliveNotZombie(pid_t pid) {
+    if (!PhoneAdapter_IsPhoneMode()) {
+        return IsProcessRegisteredRunning(pid);
+    }
     char path[64];
     snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
     FILE* f = fopen(path, "r");
-    if (!f) return false;                       // /proc 消失 = 已退出
+    if (!f) {
+        // 诊断 (限频): fork 后端 /proc 读不到是异常 — ENOENT=进程真退出或
+        // 命名空间不可见; EPERM/EACCES=进程在但权限/沙箱禁止读取。
+        static uint32_t sOpenFailLogN = 0;
+        if (++sOpenFailLogN <= 5) {
+            OH_LOG_WARN(LOG_APP, "[Launch-Async] /proc/%d/stat open failed errno=%d (%s)",
+                        (int)pid, errno, strerror(errno));
+        }
+        return false;                       // /proc 消失 = 已退出
+    }
     char buf[512];
     size_t n = fread(buf, 1, sizeof(buf) - 1, f);
     fclose(f);
