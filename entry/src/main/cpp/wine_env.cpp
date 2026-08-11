@@ -129,7 +129,7 @@ std::vector<std::string> BuildWineEnv(const std::string& sockDir,
     return env;
 }
 
-static void UpsertEnvLine(std::vector<std::string>& env, const std::string& line)
+void UpsertEnvLine(std::vector<std::string>& env, const std::string& line)
 {
     const size_t sep = line.find('=');
     if (sep == std::string::npos || sep == 0) return;
