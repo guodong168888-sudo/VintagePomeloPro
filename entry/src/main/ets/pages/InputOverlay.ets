@@ -80,6 +80,13 @@ struct InputOverlayPage {
   private touchpadDragTouchId: number = -1;
   private touchpadDragCandidate: boolean = false;
   private touchpadDragActive: boolean = false;
+  // 触摸板"轻点确认": 手指抬起后延迟一小段窗口再触发点击。若窗口内手指重新
+  // 落下并滑动 (抬起→再触摸→移动 = 分段移动光标), 取消该点击 — 区分"轻点
+  // (点击)"与"分段滑动(移动)"。双击 (两次轻点) 不受影响: 第二次轻点无移动
+  // 时不取消, 两下确认窗口各自触发。
+  private touchpadPendingTapTimer: number = -1;
+  private touchpadReTouchSinceTap: boolean = false;
+  private static readonly TOUCHPAD_TAP_CONFIRM_MS: number = 150;
   private mouseLeftActive: boolean = false;
   private mouseLeftReleaseTimer: number = -1;
 
@@ -332,8 +339,42 @@ struct InputOverlayPage {
     this.touchpadSuppressSingleTap = false;
     this.touchpadTwoFingerTapEligible = false;
     this.touchpadLastTapAt = 0;
+    this.cancelPendingTouchpadTap();
     InputDispatcher.getInstance().releaseSource('touchpad-scroll');
     InputDispatcher.getInstance().releaseSource('touchpad-cursor');
+  }
+
+  private cancelPendingTouchpadTap(): void {
+    if (this.touchpadPendingTapTimer >= 0) {
+      clearTimeout(this.touchpadPendingTapTimer);
+      this.touchpadPendingTapTimer = -1;
+    }
+    this.touchpadReTouchSinceTap = false;
+  }
+
+  private firePendingTouchpadTap(): void {
+    this.touchpadPendingTapTimer = -1;
+    this.touchpadClick(272, 'touchpad-left');
+    this.touchpadLastTapAt = Date.now();
+  }
+
+  /** 轻点候选: 延迟确认, 窗口内再次落下并滑动则取消 (抬起→再滑动=移动)。 */
+  private armPendingTouchpadTap(): void {
+    this.cancelPendingTouchpadTap();
+    this.touchpadPendingTapTimer = setTimeout((): void => this.firePendingTouchpadTap(),
+      InputOverlayPage.TOUCHPAD_TAP_CONFIRM_MS) as number;
+  }
+
+  /** 确认窗口内手指重新落下: 重启计时等待该触摸是"滑动(取消点击)"还是
+   *  "轻点(双击)"。固定窗口会被慢速/延迟投递的 MOVE 击穿 (ArkUI MOVE 可能
+   *  晚到), 重新计时给再触摸后的移动留足时间。 */
+  private extendPendingTouchpadTap(): void {
+    if (this.touchpadPendingTapTimer >= 0) {
+      this.touchpadReTouchSinceTap = true;
+      clearTimeout(this.touchpadPendingTapTimer);
+      this.touchpadPendingTapTimer = setTimeout((): void => this.firePendingTouchpadTap(),
+        InputOverlayPage.TOUCHPAD_TAP_CONFIRM_MS) as number;
+    }
   }
 
   private touchpadDragInterval(): number {
@@ -392,6 +433,9 @@ struct InputOverlayPage {
       const x = Number(touch.x);
       const y = Number(touch.y);
       if (event.type === TouchType.Down) {
+        // 轻点确认窗口内手指重新落下: 可能是"抬起→再滑动"(取消点击) 或
+        // 双击第二下 (保留点击)。重启确认计时, 由后续移动决定是否取消。
+        this.extendPendingTouchpadTap();
         const beginDragCandidate = this.touchpadFingers.size === 0 && this.touchpadLastTapAt > 0 &&
           Date.now() - this.touchpadLastTapAt <= this.touchpadDragInterval();
         this.touchpadFingers.set(touch.id, {
@@ -427,6 +471,10 @@ struct InputOverlayPage {
         const deltaFromStartY = y - finger.startY;
         const movedPastSlop = Math.abs(deltaFromStartX) > 10 || Math.abs(deltaFromStartY) > 10;
         if (movedPastSlop) finger.moved = true;
+        // 确认窗口内"抬起→再触摸"并开始滑动: 之前那次 Up 是分段移动, 取消点击。
+        if (movedPastSlop && this.touchpadPendingTapTimer >= 0 && this.touchpadReTouchSinceTap) {
+          this.cancelPendingTouchpadTap();
+        }
         let dx = x - finger.lastX;
         let dy = y - finger.lastY;
         finger.lastX = x;
@@ -512,10 +560,18 @@ struct InputOverlayPage {
           }
         } else {
           if (!moved && elapsed < this.TAP_TIMEOUT_MS && event.type === TouchType.Up) {
-            this.touchpadClick(272, 'touchpad-left');
-            this.touchpadLastTapAt = Date.now();
+            // 确认窗口内出现第二次轻点 (双击): 先补发第一下的点击, 再为第二下
+            // 建立确认 — 两下间隔约等于确认窗口, Windows 双击状态机可识别。
+            if (this.touchpadPendingTapTimer >= 0 && this.touchpadReTouchSinceTap) {
+              this.cancelPendingTouchpadTap();
+              this.touchpadClick(272, 'touchpad-left');
+              this.touchpadLastTapAt = Date.now();
+            }
+            // 轻点候选: 延迟确认 (若窗口内再触摸滑动则取消, 见 Move 分支)
+            this.armPendingTouchpadTap();
           } else {
             this.touchpadLastTapAt = 0;
+            this.cancelPendingTouchpadTap();
           }
           this.touchpadTwoFinger = false;
         }
