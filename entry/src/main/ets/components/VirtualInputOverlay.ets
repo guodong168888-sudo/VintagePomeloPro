@@ -59,7 +59,8 @@ export struct VirtualInputOverlay {
   @Prop @Watch('onTouchpadModeChanged') touchpadMode: boolean = false;
   /** 编辑器模式：不注入按键，元素可拖动/缩放并支持选中框。 */
   @Prop editMode: boolean = false;
-  @Prop selectedElementId: string = '';
+  @Prop @Watch('onCrosshairStateChanged') selectedElementId: string = '';
+  private crosshairContext: CanvasRenderingContext2D = new CanvasRenderingContext2D();
   onOpenLayoutEditor: () => void = (): void => {};
   onOpenKeyMappingEditor: () => void = (): void => {};
   onControlsVisibleChange: (visible: boolean) => void = (_visible: boolean): void => {};
@@ -176,6 +177,22 @@ export struct VirtualInputOverlay {
     const base = Math.max(10, Math.min(100, elementOpacity));
     const global = Math.max(10, Math.min(100, this.opacityValue));
     return Math.max(0.16, Math.min(1, base / 100 * global / 100));
+  }
+
+  private selectedElementOrNull(): ControlElement | null {
+    if (!this.editMode || this.selectedElementId.length === 0) return null;
+    return this.elementById(this.selectedElementId);
+  }
+
+  /** 编辑器选中元素的红色十字参考线：贯穿全画布，便于网格对齐。 */
+  @Builder
+  private SelectedCrosshair(element: ControlElement | null) {
+    if (element) {
+      Canvas(this.crosshairContext)
+        .width('100%').height('100%')
+        .hitTestBehavior(HitTestMode.None)
+        .onReady(() => this.drawCrosshair(element))
+    }
   }
 
   private elementRadius(element: ControlElement): number {
@@ -1094,12 +1111,65 @@ export struct VirtualInputOverlay {
   }
 
   private onRenderRevisionChanged(): void {
+    this.redrawCrosshair();
   }
 
   private onControlsVisibleChanged(): void {
     this.controlsVisibleVisual = this.controlsVisible;
     if (this.controlsVisible) return;
     this.releaseAllElementTouches();
+  }
+
+  private onCrosshairStateChanged(): void {
+    this.redrawCrosshair();
+  }
+
+  private redrawCrosshair(): void {
+    if (!this.editMode || this.selectedElementId.length === 0) {
+      if (this.overlayW > 0 && this.overlayH > 0) {
+        this.crosshairContext.clearRect(0, 0, this.overlayW, this.overlayH);
+      }
+      return;
+    }
+    const element = this.elementById(this.selectedElementId);
+    if (element) this.drawCrosshair(element);
+  }
+
+  /** 画红色虚线十字线：段长 14、间隔 8，中心加实心点。 */
+  private drawCrosshair(element: ControlElement): void {
+    if (this.overlayW <= 0 || this.overlayH <= 0) return;
+    const ctx = this.crosshairContext;
+    ctx.clearRect(0, 0, this.overlayW, this.overlayH);
+    const center = this.elementCenter(element);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(255, 59, 48, 0.85)';
+    const dash = 14;
+    const gap = 8;
+    // 竖线
+    ctx.beginPath();
+    let y = 0;
+    while (y < this.overlayH) {
+      const end = Math.min(y + dash, this.overlayH);
+      ctx.moveTo(center.x, y);
+      ctx.lineTo(center.x, end);
+      y = end + gap;
+    }
+    ctx.stroke();
+    // 横线
+    ctx.beginPath();
+    let x = 0;
+    while (x < this.overlayW) {
+      const end = Math.min(x + dash, this.overlayW);
+      ctx.moveTo(x, center.y);
+      ctx.lineTo(end, center.y);
+      x = end + gap;
+    }
+    ctx.stroke();
+    // 中心点
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 59, 48, 0.9)';
+    ctx.fill();
   }
 
   aboutToAppear(): void {
@@ -1485,6 +1555,10 @@ export struct VirtualInputOverlay {
     Stack() {
       Text(this.renderRevision.toString()).width(0).height(0).opacity(0).hitTestBehavior(HitTestMode.None)
       if (this.overlayW > 0 && this.overlayH > 0 && (this.controlsVisibleVisual || this.editMode)) {
+        // 十字线在元素下层：不遮挡按钮，仍能看到完整参考线
+        if (this.selectedElementId.length > 0) {
+          this.SelectedCrosshair(this.elementById(this.selectedElementId))
+        }
         ForEach(this.visibleElements(), (element: ControlElement): void => {
           this.ElementView(element)
         }, (element: ControlElement): string => this.elementVisualKey(element))

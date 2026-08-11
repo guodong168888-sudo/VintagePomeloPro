@@ -6,7 +6,7 @@ import { bundleManager, common, ConfigurationConstant, Want } from '@kit.Ability
 import { BusinessError } from '@kit.BasicServicesKit';
 import { uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { systemShare } from '@kit.ShareKit';
-import { picker } from '@kit.CoreFileKit';
+import { fileUri, picker } from '@kit.CoreFileKit';
 import testNapi from 'libentry.so';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import {
@@ -1036,7 +1036,24 @@ struct SystemSettingsPage {
       const result = await documentPicker.select({ maxSelectNumber: 1 });
       if (!result || result.length === 0) return;
       const uri = result[0];
-      const content = fs.readTextSync(uri);
+      // 文档选择器返回的可能是 file://docs/ 这类虚拟 URI，直接交给
+      // readTextSync 在部分设备上会报错；先尝试原样读，失败再转成
+      // 真实路径重试（与导出侧 FileUri(uri).path 保持一致）。
+      let content = '';
+      try {
+        content = fs.readTextSync(uri);
+      } catch (readError) {
+        try {
+          const realPath = new fileUri.FileUri(uri).path;
+          hilog.warn(DOMAIN, 'Settings', 'import .icp read via raw URI failed, retry path=%{public}s err=%{public}s',
+            realPath, JSON.stringify(readError));
+          content = fs.readTextSync(realPath);
+        } catch (pathError) {
+          hilog.error(DOMAIN, 'Settings', 'import .icp read failed uri=%{public}s err=%{public}s',
+            uri, JSON.stringify(pathError));
+          throw new Error('read .icp failed');
+        }
+      }
       const service = InputProfileService.getInstance();
       const profile = await service.importProfileFromIcp(content);
       this.inputProfiles = service.getDesktopProfiles();
@@ -1044,7 +1061,8 @@ struct SystemSettingsPage {
       const total = profile.elements.length;
       promptAction.showToast({ message: '已导入 ' + profile.name + '（' +
         total.toString() + ' 个控件）' });
-    } catch (_) {
+    } catch (error) {
+      hilog.error(DOMAIN, 'Settings', 'importInputProfile failed: %{public}s', JSON.stringify(error));
       promptAction.showToast({ message: '导入失败：请选择有效的 .icp / JSON 文件' });
     }
   }

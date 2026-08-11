@@ -22,6 +22,7 @@ import { KEY_NAME_OPTIONS, keyNameLabel } from '../common/EvdevKeyNames';
 import { VirtualInputOverlay } from '../components/VirtualInputOverlay';
 import { InputProfileService } from '../service/InputProfileService';
 import { AppSettingsStore } from '../service/AppSettingsStore';
+import { hilog } from '../service/LogService';
 
 interface PickerOption {
   label: string;
@@ -29,6 +30,8 @@ interface PickerOption {
   kind: InputBindingKind;
   code: number;
 }
+
+const DOMAIN = 0x0000;
 
 interface ElementPatch {
   x?: number;
@@ -74,6 +77,7 @@ struct InputLayoutEditor {
   @State private previewH: number = 0;
   @State private selectedElementId: string = '';
   @State private previewRevision: number = 0;
+  private gridContext: CanvasRenderingContext2D = new CanvasRenderingContext2D();
   @State private showPropertyPanel: boolean = false;
   @State private pickerOpen: boolean = false;
   @State private pickerTargetSlot: number = -1;
@@ -136,6 +140,36 @@ struct InputLayoutEditor {
     }
     if (!this.orientationRestored) this.restoreEditorWindow();
     this.resumeWineAbility();
+  }
+
+  /** 绘制编辑参考网格：20px 细线 + 80px 加粗线，高密度便于对齐。 */
+  private drawEditorGrid(): void {
+    if (this.previewW <= 0 || this.previewH <= 0) {
+      hilog.info(DOMAIN, 'InputLayoutEditor', 'drawEditorGrid skip w=%{public}d h=%{public}d',
+        this.previewW, this.previewH);
+      return;
+    }
+    const ctx = this.gridContext;
+    const minor = 20;
+    const major = 80;
+    hilog.info(DOMAIN, 'InputLayoutEditor', 'drawEditorGrid w=%{public}d h=%{public}d',
+      this.previewW, this.previewH);
+    ctx.clearRect(0, 0, this.previewW, this.previewH);
+    ctx.lineWidth = 1;
+    for (let x = 0; x <= this.previewW; x += minor) {
+      ctx.strokeStyle = x % major === 0 ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.07)';
+      ctx.beginPath();
+      ctx.moveTo(x + 0.5, 0);
+      ctx.lineTo(x + 0.5, this.previewH);
+      ctx.stroke();
+    }
+    for (let y = 0; y <= this.previewH; y += minor) {
+      ctx.strokeStyle = y % major === 0 ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.07)';
+      ctx.beginPath();
+      ctx.moveTo(0, y + 0.5);
+      ctx.lineTo(this.previewW, y + 0.5);
+      ctx.stroke();
+    }
   }
 
   private async enterImmersive(): Promise<void> {
@@ -971,6 +1005,12 @@ struct InputLayoutEditor {
       }
       Stack() {
         Column().width('100%').height('100%').backgroundColor('#FF1A1A2E')
+        // 编辑参考网格：密集细线，帮助按钮对齐（只在编辑器内显示）。
+        Canvas(this.gridContext)
+          .width('100%').height('100%')
+          .onReady(() => this.drawEditorGrid())
+        .width('100%').height('100%')
+        .hitTestBehavior(HitTestMode.None)
         VirtualInputOverlay({
           profile: this.profile,
           renderRevision: this.previewRevision,
@@ -1004,6 +1044,7 @@ struct InputLayoutEditor {
       .onAreaChange((_oldValue: Area, area: Area): void => {
         this.previewW = area.width as number;
         this.previewH = area.height as number;
+        this.drawEditorGrid();
       })
     }
     .width('100%').height('100%').backgroundColor('#FF1A1A2E')
