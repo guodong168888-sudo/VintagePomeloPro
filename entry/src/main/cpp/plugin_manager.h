@@ -46,6 +46,8 @@ public:
     // RootCompositing 下所有 renderer 都渲染桌面根，letterbox 与登记 id
     // 无关；前台窗口"提升"导致根 id 上查不到 renderer 时用它仍能正确映射。
     EglRenderer* GetAnyRenderer();
+    /** 窗口可见性变化时暂停/恢复对应 renderer (后台时避免 vsync/swap 阻塞)。 */
+    void SetRendererPaused(uint32_t toplevelId, bool paused);
     // Desktop 模式: root 切换时更新渲染器的 toplevel 映射
     void MoveRendererToToplevel(uint32_t oldId, uint32_t newId);
     size_t GetRendererCount() const { return toplevelRenderers_.size(); }

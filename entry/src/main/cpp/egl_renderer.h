@@ -125,10 +125,17 @@ private:
     int lastLoggedW_ = 0, lastLoggedH_ = 0;  // 上次输出 resize 日志时的 surface 尺寸
     std::thread thread_;
     std::atomic<bool> running_{false};
+    /** 后台/窗口不可见时暂停 GPU 渲染 (vsync/eglSwapBuffers 在 surface 不可呈现
+     *  时可能阻塞导致渲染线程长时间停摆; 前台恢复后立即重新渲染)。 */
+    std::atomic<bool> renderPaused_{false};
     std::mutex vsyncMutex_;
     std::condition_variable vsyncCv_;
     uint64_t vsyncSequence_ = 0;
     std::atomic<long long> vsyncPeriodNs_{16666667};
 
     uint32_t toplevelId_ = 0;
+
+public:
+    void SetRenderPaused(bool paused) { renderPaused_.store(paused, std::memory_order_release); }
+    bool IsRenderPaused() const { return renderPaused_.load(std::memory_order_acquire); }
 };

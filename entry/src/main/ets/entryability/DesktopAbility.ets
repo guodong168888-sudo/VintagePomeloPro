@@ -1,6 +1,7 @@
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '../service/LogService';
 import { window } from '@kit.ArkUI';
+import testNapi from 'libentry.so';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { WineWindowManager } from '../service/WineWindowManager';
 import { GamepadManager } from '../service/GamepadManager';
@@ -192,6 +193,13 @@ export default class DesktopAbility extends UIAbility {
     hilog.info(DOMAIN, TAG, '[DWA] onForeground tl=%{public}d', this.toplevelId);
     WineWindowManager.getInstance().markDesktopAbilityForeground(this.toplevelId);
     InputRouter.getInstance().setActiveToplevel(WineWindowManager.getInstance().getDesktopRootId());
+    // 前台恢复: 恢复根 renderer 渲染 + 强制重绘一帧 + 重新武装 vsync
+    // (setToplevelVisible 同步暂停/恢复 renderer), 避免后台返回后画面冻结。
+    const rootId = WineWindowManager.getInstance().getDesktopRootId();
+    if (rootId > 0) {
+      try { testNapi.setToplevelVisible(rootId, true); } catch (_) {}
+      try { testNapi.refreshRenderer(rootId); } catch (_) {}
+    }
     this.attachInputOverlay();
     if (this.mainWindow) {
       this.applyKeepScreenOn(this.mainWindow);
@@ -229,6 +237,11 @@ export default class DesktopAbility extends UIAbility {
     InputDispatcher.getInstance().releaseAll('desktop-background');
     InputRouter.getInstance().releaseAllKeys();
     InputOverlayWindowCoordinator.getInstance().setVisible(false).catch(() => {});
+    // 后台: 暂停根 renderer 渲染 (避免 surface 不可呈现时 vsync/swap 阻塞)。
+    const rootId = WineWindowManager.getInstance().getDesktopRootId();
+    if (rootId > 0) {
+      try { testNapi.setToplevelVisible(rootId, false); } catch (_) {}
+    }
   }
 
   onDestroy(): void {

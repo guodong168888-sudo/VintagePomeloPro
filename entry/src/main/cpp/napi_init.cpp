@@ -853,8 +853,13 @@ static napi_value SetToplevelVisible(napi_env env, napi_callback_info info) {
     napi_get_value_uint32(env, args[0], &tl);
     napi_get_value_bool(env, args[1], &visible);
     InputManager::GetInstance()->SetToplevelVisible(tl, visible);
+    // 同步暂停/恢复渲染: 窗口不可见 (后台/HIDDEN) 时暂停 GPU 渲染, 避免
+    // surface 不可呈现时 vsync/eglSwapBuffers 阻塞渲染线程 (卡顿根因之一);
+    // 恢复可见时立即重渲染并重新武装 vsync。
+    PluginManager::GetInstance()->SetRendererPaused(tl, !visible);
     if (visible) {
         WaylandServer::GetInstance()->NotifyWindowRestored(tl);
+        PluginManager::GetInstance()->RefreshRenderer(tl);
     }
     return nullptr;
 }

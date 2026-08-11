@@ -730,7 +730,26 @@ void EglRenderer::RenderLoop() {
     OH_LOG_INFO(LOG_APP, "[MW-RNDR] tl=%{public}u render loop started pacing=%{public}s",
                 toplevelId_, nativeVsync ? "NativeVSync" : "deadline-60Hz");
 
+    auto lastHeartbeat = PerfClock::now();
     while (running_) {
+        // 1Hz 心跳: 供"卡顿"分析 — 前台期间有 HB 说明渲染线程存活, 无 HB 说明
+        // 渲染线程卡住; 与 ArkTS onForeground/onBackground 日志配合可区分
+        // "后台挂起(正常)" 与 "前台真冻结(bug)"。
+        const auto hbNow = PerfClock::now();
+        if (hbNow - lastHeartbeat >= std::chrono::seconds(1)) {
+            lastHeartbeat = hbNow;
+            OH_LOG_INFO(LOG_APP, "[HB] render tl=%{public}u alive loop=%{public}d paused=%{public}s",
+                        toplevelId_, loopCount,
+                        renderPaused_.load(std::memory_order_acquire) ? "yes" : "no");
+        }
+        if (renderPaused_.load(std::memory_order_acquire)) {
+            // 后台/窗口不可见: 暂停 GPU 渲染与 vsync/eglSwapBuffers (surface 不可
+            // 呈现时 swap 可能阻塞, 是渲染线程长时间停摆的候选根因)。保持线程
+            // 存活与心跳; 前台恢复 (SetRenderPaused(false)) 后立即重新渲染。
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+
         const uint64_t frameStartedUs = PerfNowUs();
         const uint64_t takeStartedUs = frameStartedUs;
         uint64_t uploadUs = 0;

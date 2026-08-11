@@ -144,10 +144,16 @@ export default class WineWindowAbility extends UIAbility {
 
   onForeground(): void {
     hilog.info(DOMAIN, TAG, '[WWA] onForeground tl=%{public}d', this.toplevelId);
+    // 前台恢复: 恢复输入与渲染 (setToplevelVisible 同步暂停/恢复 renderer),
+    // 并强制重绘一帧 + 重新武装 vsync, 避免后台返回后画面冻结。
+    try { testNapi.setToplevelVisible(this.toplevelId, true); } catch (_) {}
+    try { testNapi.refreshRenderer(this.toplevelId); } catch (_) {}
   }
 
   onBackground(): void {
     hilog.info(DOMAIN, TAG, '[WWA] onBackground tl=%{public}d', this.toplevelId);
+    // 后台: 暂停输入与渲染 (避免 surface 不可呈现时 vsync/swap 阻塞)。
+    try { testNapi.setToplevelVisible(this.toplevelId, false); } catch (_) {}
   }
 
   onDestroy(): void {
