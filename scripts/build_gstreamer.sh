@@ -17,9 +17,10 @@ source "$SCRIPT_DIR/env.sh"
 GLIB_SRC="$ROOT/thirdparty/glib"
 GST_SRC="$ROOT/thirdparty/gstreamer"
 PCRE2_SRC="$ROOT/thirdparty/pcre2"
-# gst-plugins-base: fd.o 独立仓库停在 1.12, 1.24 只在 monorepo subproject
-# (wrap 下载描述, 违反 submodule 要求) → 复用 CrossOver vendored 目录 (同版本同源 release 提取)
-BASE_SRC="$ROOT/.temp/crossover/gstreamer/subprojects/gst-plugins-base"
+# gst-plugins-base: fd.o 独立仓库停在 1.12, 1.24 只在 monorepo subproject。
+# gstreamer 子模块已直接跟踪 subprojects/gst-plugins-base (1.24.4, 与 core 同源),
+# 直接用它, 无需外部 .temp/crossover staging。
+BASE_SRC="$ROOT/thirdparty/gstreamer/subprojects/gst-plugins-base"
 
 GST_PREFIX="$SYSROOT_EXT/usr"
 GST_LIBDIR="$GST_PREFIX/lib/x86_64-linux-ohos"
