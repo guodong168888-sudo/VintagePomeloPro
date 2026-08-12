@@ -21,6 +21,7 @@ assemble_pad() {
     mkdir -p "$wine_data/share/wine/fonts"
     mkdir -p "$wine_data/share/wine/winmd"
     mkdir -p "$wine_data/share/wine/mono"
+    mkdir -p "$wine_data/share/wine/gecko"
     mkdir -p "$wine_data/share/X11"
 
     # SoundFont (MIDI 音色库)
@@ -469,6 +470,15 @@ EOF
         log "    wine-mono.msi → rawfile share/wine/mono/"
     elif ls "$wine_data/bin/x86_64-windows/"appwiz.cpl >/dev/null 2>&1; then
         err "appwiz.cpl packaged but wine-mono MSI missing; rebuild with BUILD_WINE_MONO=1"
+    fi
+    # Wine Gecko (IE HTML 渲染引擎): 缺它 IE 打开网页报
+    # "Could not find Wine Gecko. HTML rendering will be disabled."
+    # 与 wine-mono 同源策略: 由构建环境预置 MSI, 首次 wineboot 自动注册。
+    if ls "$BUILD_DIR/wine-ohos/share/wine/gecko/"*.msi >/dev/null 2>&1; then
+        cp "$BUILD_DIR/wine-ohos/share/wine/gecko/"*.msi "$wine_data/share/wine/gecko/"
+        log "    wine-gecko.msi → rawfile share/wine/gecko/"
+    else
+        log "warn: wine-gecko MSI 缺失, IE HTML 渲染将不可用"
     fi
     # wine.inf (含 OHOS font substitutes)
     cp "$BUILD_DIR/wine-ohos/loader/wine.inf" "$wine_data/share/wine/"

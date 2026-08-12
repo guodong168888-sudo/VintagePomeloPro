@@ -11,6 +11,54 @@
 
 #include "wine_constants.h"
 
+/**
+ * BOX64_EMULATED_LIBS 完整列表 (ARM64 真机)。
+ *
+ * 除图形/输入栈外, gnutls (schannel TLS) 与 gstreamer (winegstreamer)
+ * 链的 guest 库都是 x86_64 ELF, 必须由 box64 模拟执行。若不列出,
+ * box64 会按 native (arm64 dlopen) 加载, 对 x86_64 目标报
+ * "Error initializing native lib...: No such file" — IE/网络走 schannel
+ * 时 gnutls 加载失败, HTML 渲染则依赖 Wine Gecko (独立组件)。
+ * 与运行时 wine/bin/x86_64-unix 下实际部署的 .so 保持一致。
+ */
+static inline std::string Box64EmulatedLibs()
+{
+    return "libvulkan.so:libvulkan.so.1:"
+           "libEGL.so:libEGL.so.1:libGLESv2.so:libGLESv2.so.2:"
+           "libGLESv1_CM.so:libGLESv1_CM.so.1:libGL.so:libGL.so.1:"
+           "libwayland-client.so:libwayland-client.so.0:libwayland-server.so:"
+           "libwayland-server.so.0:libwayland-egl.so:libwayland-egl.so.1:"
+           "libdrm.so:libdrm.so.2:libffi.so:libffi.so.8:"
+           // gnutls 链 (schannel TLS)
+           "libgnutls.so:libgnutls.so.30:"
+           "libnettle.so:libnettle.so.8:"
+           "libhogweed.so:libhogweed.so.6:"
+           "libgmp.so:libgmp.so.10:"
+           "libtasn1.so:libtasn1.so.6:"
+           "libunistring.so:libunistring.so.5:"
+           // glib 链
+           "libglib-2.0.so:libglib-2.0.so.0:"
+           "libgobject-2.0.so:libgobject-2.0.so.0:"
+           "libgio-2.0.so:libgio-2.0.so.0:"
+           "libgmodule-2.0.so:libgmodule-2.0.so.0:"
+           // gstreamer 链 (winegstreamer)
+           "libgstreamer-1.0.so:libgstreamer-1.0.so.0:"
+           "libgstbase-1.0.so:libgstbase-1.0.so.0:"
+           "libgstvideo-1.0.so:libgstvideo-1.0.so.0:"
+           "libgstaudio-1.0.so:libgstaudio-1.0.so.0:"
+           "libgsttag-1.0.so:libgsttag-1.0.so.0:"
+           "libgstpbutils-1.0.so:libgstpbutils-1.0.so.0:"
+           "libgstallocators-1.0.so:libgstallocators-1.0.so.0:"
+           "libgstapp-1.0.so:libgstapp-1.0.so.0:"
+           "libgstcontroller-1.0.so:libgstcontroller-1.0.so.0:"
+           "libgstfft-1.0.so:libgstfft-1.0.so.0:"
+           "libgstnet-1.0.so:libgstnet-1.0.so.0:"
+           "libgstriff-1.0.so:libgstriff-1.0.so.0:"
+           "libgstrtp-1.0.so:libgstrtp-1.0.so.0:"
+           "libgstrtsp-1.0.so:libgstrtsp-1.0.so.0:"
+           "libgstsdp-1.0.so:libgstsdp-1.0.so.0";
+}
+
 // -- Box64 性能调优 (static inline, 供 napi_init / wine_child 共用) --
 #ifdef __aarch64__
 static inline void SetBox64PerfEnv() {

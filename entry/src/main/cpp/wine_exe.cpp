@@ -376,13 +376,7 @@ static pid_t SpawnGuestProgram(const GuestProgramOptions& options)
 #endif
 #ifdef __aarch64__
     UpsertEnv(&envStrs, "BOX64_LD_LIBRARY_PATH=" + libraryPath);
-    UpsertEnv(&envStrs,
-        "BOX64_EMULATED_LIBS=libvulkan.so:libvulkan.so.1:"
-        "libEGL.so:libEGL.so.1:libGLESv2.so:libGLESv2.so.2:"
-        "libGLESv1_CM.so:libGLESv1_CM.so.1:libGL.so:libGL.so.1:"
-        "libwayland-client.so:libwayland-client.so.0:libwayland-server.so:"
-        "libwayland-server.so.0:libwayland-egl.so:libwayland-egl.so.1:"
-        "libdrm.so:libdrm.so.2:libffi.so:libffi.so.8");
+    UpsertEnv(&envStrs, "BOX64_EMULATED_LIBS=" + Box64EmulatedLibs());
     // Library loading has its own smoke assertions.  Function-call tracing is
     // prohibitively noisy when a disconnected vtest socket is polled and can
     // otherwise grow the shared stderr log by gigabytes before the watchdog.
