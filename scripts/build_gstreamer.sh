@@ -125,7 +125,8 @@ if [ ! -f "$SYSROOT_EXT_LIB/libglib-2.0.so.0" ]; then
         -Dc_args="--target=$TARGET --sysroot=$SYSROOT -I$SYSROOT_EXT_INC -D__MUSL__" \
         -Dselinux=disabled -Dxattr=false -Dlibmount=disabled -Dman=false \
         -Ddtrace=false -Dsystemtap=false -Dgtk_doc=false -Dtests=false \
-        -Dinstalled_tests=false -Dlibelf=disabled
+        -Dinstalled_tests=false -Dlibelf=disabled \
+        -Dnls=disabled
     meson compile -C "$build" -j "$JOBS"
     DESTDIR=/ meson install -C "$build"
     stage_pcs
