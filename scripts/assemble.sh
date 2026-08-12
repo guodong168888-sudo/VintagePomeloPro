@@ -193,7 +193,15 @@ assemble_pad() {
                   libgsttag-1.0.so.0 libgstpbutils-1.0.so.0 libgstallocators-1.0.so.0 \
                   libgstapp-1.0.so.0 libgstfft-1.0.so.0 libgstriff-1.0.so.0 \
                   libgstrtp-1.0.so.0 libgstrtsp-1.0.so.0 libgstsdp-1.0.so.0; do
-            _pick_lib_pad_rf "$so" "$so"
+            # box64 按 SONAME 解析依赖时可能查找无版本名 (libgstvideo-1.0.so),
+            # 与 gnutls 链一致补上无版本软链, 否则 winegstreamer dlopen 报
+            # "Error loading shared library libgstvideo-1.0.so: No such file"
+            local unversioned="${so%.so.0}"
+            if [ "$unversioned" != "$so" ] && [[ "$so" == *.so.0 ]]; then
+                _pick_lib_pad_rf "$so" "$so" "$unversioned.so"
+            else
+                _pick_lib_pad_rf "$so" "$so"
+            fi
         done
 
         # libgnutls → bin/ (box64 按名 dlopen 搜索路径: .)
