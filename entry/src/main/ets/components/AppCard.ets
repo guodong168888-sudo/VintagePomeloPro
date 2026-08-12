@@ -62,6 +62,7 @@ export struct AppCard {
     if (this.app.id === 'builtin-desktop') return $r('app.media.builtin_desktop');
     if (this.app.id === 'builtin-explorer') return $r('app.media.builtin_explorer');
     if (this.app.id === 'builtin-winecfg') return $r('app.media.builtin_winecfg');
+    if (this.app.id === 'builtin-iexplore') return $r('app.media.builtin_iexplore');
     if (this.app.id === 'builtin-control') return $r('app.media.builtin_control');
     if (this.app.id === 'builtin-taskmgr') return $r('app.media.builtin_taskmgr');
     if (this.app.id === 'builtin-regedit') return $r('app.media.builtin_regedit');
