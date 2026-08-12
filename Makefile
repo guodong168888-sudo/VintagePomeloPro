@@ -190,7 +190,6 @@ $(STAMPS)/deps: $(SCRIPTS)/build_deps.sh $(SCRIPTS)/build_gnutls.sh $(SCRIPTS)/b
 	    ! [ "$(SCRIPTS)/build_xkbcommon.sh" -nt $@ ] && \
 	    ! [ "$(SCRIPTS)/build_xkbconfig.sh" -nt $@ ] && \
 	    ! [ "$(ROOT)/smoke/guest_vulkan_smoke.c" -nt $@ ] && \
-	    ! [ "$(ROOT)/smoke/guest_vulkan_smoke.c" -nt $@ ] && \
 	    ! [ "$(ROOT)/smoke/venus_sampled_image_probe.c" -nt $@ ] && \
 	    ! [ "$(ROOT)/smoke/venus_depth_cube_probe.inc" -nt $@ ] && \
 	    ! [ "$(ROOT)/smoke/venus_depth_cube_graphics_replay.inc" -nt $@ ] && \
