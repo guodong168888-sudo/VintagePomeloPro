@@ -203,6 +203,23 @@ assemble_pad() {
                 _pick_lib_pad_rf "$so" "$so"
             fi
         done
+        # FFmpeg 解码库 (gst-libav 依赖) → rawfile
+        for so in libavcodec.so.60 libavformat.so.60 libavutil.so.58 \
+                  libswscale.so.7 libswresample.so.4 libavfilter.so.9; do
+            _pick_lib_pad_rf "$so" "$so"
+        done
+        # GStreamer 插件 (gst-plugins-base/good + gst-libav) → rawfile
+        local gst_plugin_dir="$SYSROOT_EXT_LIB/gstreamer-1.0"
+        if [ -d "$gst_plugin_dir" ]; then
+            mkdir -p "$wine_data/bin/x86_64-unix/gstreamer-1.0"
+            for pso in "$gst_plugin_dir"/*.so; do
+                [ -f "$pso" ] || continue
+                cp "$pso" "$wine_data/bin/x86_64-unix/gstreamer-1.0/"
+            done
+            log "    GStreamer 插件 ($(ls "$gst_plugin_dir"/*.so 2>/dev/null | wc -l) 个) → rawfile gstreamer-1.0/"
+        else
+            warn "gstreamer-1.0 插件目录缺失: $gst_plugin_dir"
+        fi
 
         # libgnutls → bin/ (box64 按名 dlopen 搜索路径: .)
         cp "$wine_data/bin/x86_64-unix/libfreetype.so.6" "$wine_data/bin/"
