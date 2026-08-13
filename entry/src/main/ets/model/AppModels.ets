@@ -101,6 +101,8 @@ export const BOX64_PRESET_STABILITY = 'stability';
 export const BOX64_PRESET_CONSERVATIVE = 'conservative';
 export const BOX64_PRESET_INTERMEDIATE = 'intermediate';
 export const BOX64_PRESET_PERFORMANCE = 'performance';
+/** 按游戏启用的 Unity 专用兼容档：仅对选中的应用注入信号解释器等降速项。 */
+export const BOX64_PRESET_UNITY = 'unity';
 
 export const BOX64_PRESET_IDS: string[] = [
   BOX64_PRESET_DEFAULT,
@@ -110,10 +112,21 @@ export const BOX64_PRESET_IDS: string[] = [
   BOX64_PRESET_PERFORMANCE
 ];
 
+/**
+ * 单应用设置页可选的预设：全局预设 + Unity 兼容档。
+ * Unity 档刻意不进全局列表，避免整体性能下降，只对选中它的游戏生效。
+ */
+export const BOX64_APP_PRESET_IDS: string[] = [
+  ...BOX64_PRESET_IDS,
+  BOX64_PRESET_UNITY
+];
+
 export function box64PresetLabel(presetId: string): string {
   switch (presetId) {
     case BOX64_PRESET_STABILITY:
       return '稳定模式';
+    case BOX64_PRESET_UNITY:
+      return 'Unity 兼容';
     case BOX64_PRESET_CONSERVATIVE:
       return '兼容模式';
     case BOX64_PRESET_INTERMEDIATE:
@@ -129,6 +142,8 @@ export function box64PresetDescription(presetId: string): string {
   switch (presetId) {
     case BOX64_PRESET_STABILITY:
       return '优先保证兼容与稳定，适合新引擎、Unity 或频繁崩溃的程序。';
+    case BOX64_PRESET_UNITY:
+      return '针对 Unity 引擎的稳定档：信号处理走解释器，规避模拟层信号竞态导致的启动失败/黑屏。仅对当前游戏生效，可能略微降低帧率。';
     case BOX64_PRESET_CONSERVATIVE:
       return '兼容与性能之间偏保守，适合大部分老游戏。';
     case BOX64_PRESET_INTERMEDIATE:
@@ -148,6 +163,23 @@ export function box64PresetDescription(presetId: string): string {
  */
 export function resolveBox64PresetEnv(presetId: string): string[] {
   switch (presetId) {
+    case BOX64_PRESET_UNITY:
+      // 稳定档参数 + 信号处理强制走解释器：Unity 频繁触发 wine unix-call
+      // trap（SIGSEGV 信号回调），dynarec 信号路径偶发竞态导致调用返回
+      // E_OUTOFMEMORY。仅此档注入，不影响其他游戏的性能。
+      return [
+        'BOX64_DYNAREC_SAFEFLAGS=2',
+        'BOX64_DYNAREC_FASTNAN=0',
+        'BOX64_DYNAREC_FASTROUND=0',
+        'BOX64_DYNAREC_X87DOUBLE=1',
+        'BOX64_DYNAREC_BIGBLOCK=0',
+        'BOX64_DYNAREC_STRONGMEM=2',
+        'BOX64_DYNAREC_FORWARD=128',
+        'BOX64_DYNAREC_CALLRET=0',
+        'BOX64_DYNAREC_WAIT=0',
+        'BOX64_DYNAREC_NATIVEFLAGS=0',
+        'BOX64_DYNAREC_INTERP_SIGNAL=1'
+      ];
     case BOX64_PRESET_STABILITY:
       return [
         'BOX64_DYNAREC_SAFEFLAGS=2',
@@ -203,6 +235,18 @@ export function resolveBox64PresetEnv(presetId: string): string[] {
     default:
       return [];
   }
+}
+
+/**
+ * Unity 兼容档额外追加的启动参数。参考 Winlator：Unity 引擎游戏在
+ * Stability 预设之外还需要 -force-gfx-direct，让 Unity 跳过 GDI 间接
+ * 渲染路径，直接绘制到窗口，减少黑屏/花屏。
+ */
+export const UNITY_COMPAT_LAUNCH_ARGS: string[] = ['-force-gfx-direct'];
+
+/** 判断某预设是否启用了 Unity 兼容模式（决定是否注入启动参数）。 */
+export function isUnityCompatPreset(presetId: string): boolean {
+  return presetId === BOX64_PRESET_UNITY;
 }
 
 export interface VirtualMouseConfig {

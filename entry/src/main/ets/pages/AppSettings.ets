@@ -3,8 +3,8 @@ import promptAction from '@ohos.promptAction';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { fileUri, picker } from '@kit.CoreFileKit';
 import {
+  BOX64_APP_PRESET_IDS,
   BOX64_PRESET_DEFAULT,
-  BOX64_PRESET_IDS,
   AppDescriptor,
   AppSettings as StoredAppSettings,
   AppSource,
@@ -507,7 +507,7 @@ struct AppSettingsPage {
             Text('影响程序在兼容模拟层上的稳定性与性能；跟随全局表示使用系统设置中的预设。')
               .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
             Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
-              ForEach(BOX64_PRESET_IDS, (preset: string) => {
+              ForEach(BOX64_APP_PRESET_IDS, (preset: string) => {
                 Button(box64PresetLabel(preset))
                   .height(42)
                   .padding({ left: 12, right: 12 })

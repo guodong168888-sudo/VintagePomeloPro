@@ -13,7 +13,9 @@ import {
   NativeWineSessionInfo,
   RuntimeSession,
   SessionState,
+  UNITY_COMPAT_LAUNCH_ARGS,
   WinePresentationMode,
+  isUnityCompatPreset,
   normalizeCatalogLaunchIdentity,
   normalizeLaunchPath,
   resolveBox64PresetEnv,
@@ -230,8 +232,20 @@ export class AppSessionService {
     const presetId = appSettings.box64Preset !== BOX64_PRESET_DEFAULT
       ? appSettings.box64Preset : settings.box64Preset;
     const envOverrides = resolveBox64PresetEnv(presetId);
+    hilog.info(DOMAIN, '[SESS]', 'launch: app=%{public}s preset=%{public}s env=%{public}s',
+      app.id, presetId, JSON.stringify(envOverrides));
+    // Unity 兼容档：自动追加 -force-gfx-direct（跳过 GDI 间接渲染），
+    // 已存在同名参数时不重复注入；只对选中 Unity 档的游戏生效。
+    const launchArguments = app.launchTarget.arguments.slice();
+    if (isUnityCompatPreset(presetId)) {
+      for (const extra of UNITY_COMPAT_LAUNCH_ARGS) {
+        if (!launchArguments.some((arg: string) => arg.toLowerCase() === extra.toLowerCase())) {
+          launchArguments.push(extra);
+        }
+      }
+    }
     const result = WineEngineService.getInstance().launchExecutable(
-      app.launchTarget.executable, app.launchTarget.arguments,
+      app.launchTarget.executable, launchArguments,
       app.launchTarget.workingDirectory, envOverrides) as NativeLaunchResult;
     if (!result || result.pid <= 0) {
       hilog.error(DOMAIN, '[SESS]', 'launch: runWineExe FAILED app=%{public}s exe=%{public}s state=%{public}s',
