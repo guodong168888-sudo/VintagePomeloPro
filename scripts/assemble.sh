@@ -82,7 +82,7 @@ assemble_pad() {
         _pick_lib_pad "libm.so"                      "libm.so"
         # GStreamer 链 (winegstreamer 后端)
         for so in libglib-2.0.so.0 libgobject-2.0.so.0 libgmodule-2.0.so.0 libgio-2.0.so.0 \
-                  libgthread-2.0.so.0 libpcre2-8.so.0 libintl.so libm.so \
+                  libgthread-2.0.so.0 libpcre2-8.so.0 libintl.so.8 libintl.so libm.so \
                   libgstreamer-1.0.so.0 libgstbase-1.0.so.0 libgstcontroller-1.0.so.0 \
                   libgstnet-1.0.so.0 libgstvideo-1.0.so.0 libgstaudio-1.0.so.0 \
                   libgsttag-1.0.so.0 libgstpbutils-1.0.so.0 libgstallocators-1.0.so.0 \
@@ -187,7 +187,7 @@ assemble_pad() {
         _pick_lib_pad_rf "libm.so"                      "libm.so"
         # GStreamer 链 (winegstreamer 后端: glib + gstreamer core + gst-libs)
         for so in libglib-2.0.so.0 libgobject-2.0.so.0 libgmodule-2.0.so.0 libgio-2.0.so.0 \
-                  libgthread-2.0.so.0 libpcre2-8.so.0 libintl.so libm.so \
+                  libgthread-2.0.so.0 libpcre2-8.so.0 libintl.so.8 libintl.so libm.so \
                   libgstreamer-1.0.so.0 libgstbase-1.0.so.0 libgstcontroller-1.0.so.0 \
                   libgstnet-1.0.so.0 libgstvideo-1.0.so.0 libgstaudio-1.0.so.0 \
                   libgsttag-1.0.so.0 libgstpbutils-1.0.so.0 libgstallocators-1.0.so.0 \
