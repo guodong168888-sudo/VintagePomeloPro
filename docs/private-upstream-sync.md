@@ -182,6 +182,6 @@
   - wine 子模块 `schannel_gnutls.c`：schannel 优先级禁用 `CHACHA20-POLY1305`，强制协商 AES-GCM（与 Windows schannel 一致）；
   - glib `meson.build`（format-security/format-nonliteral 容忍）、pcre2 `config.h.in`（autoconf 重生成）：gstreamer 链 OHOS musl 交叉编译修补。
 - 验证：Windows 同源探针 0 failed；ARM64 设备 JIT 全开实测 Steam CDN 200（1.6s）、百度 http/https 200、msedge 404、WinINet 200；Steam 引导更新成功下载 manifest 并进入 336MB 客户端下载，Edge 安装器可下载。仅剩偶发原始 TCP 冷连接超时（网络抖动，重试即通）。
-- 合并 core_extract：本地分支 `core_extract`（基于 winehua/core-extract `a0226d8`）提交 `75a48a9`，仅含上述 TLS + gstreamer 子模块修补；排除 Network Test 卡片、自动启动钩子、UI/桌面改动与版本号。未推送到任何远端。
+- 合并 core_extract 并推送远端：分支 `core_extract`（基于 `winehua/feature/core-extract` `a0226d8`）两次提交 `edaefff`（TLS）+ `090cf1b`（采用 main 的 GnuTLS/GStreamer 构建链），快进推送到 `winehua/WineHua:feature/core-extract`（`a0226d8..090cf1b`）；wine 子模块 schannel 修复推送到 `winehua/wine:feature/core-extract`（`65b5128..a6a9dac`）。glib/pcre2 保持上游 tag gitlink（glib format-security 由构建期 patch 处理），保证他人 checkout 可解析。排除 Network Test 卡片、自动启动钩子、UI/桌面改动与版本号。
 - 版本：1.2.1（1002001）；wine-data 标记 `wine-engine-app-20260814.15-prod`。
 - 产物：`F:\PomeloWin\artifacts\VintagePomeloPro-1.2.1-20260814\`（release APP `963d2b55…`、release entry HAP `a1d3c026…`、debug HAP `7fa592ec…`，正式包 verify-app success，SHA384withECDSA）。
