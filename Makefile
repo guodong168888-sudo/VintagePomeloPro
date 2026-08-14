@@ -333,6 +333,8 @@ $$(STAMPS)/$(1)/assemble: $(SCRIPTS)/assemble.sh $(SCRIPTS)/env.sh $(DXVK_ARTIFA
 	$(ROOT)/smoke/winehua_d3d8_smoke.c \
 	$(ROOT)/smoke/winehua_d3d_switch_cube.c \
 	$(ROOT)/smoke/winehua_win32_driver.c \
+	$(ROOT)/smoke/winehua_network_probe.c \
+	$(ROOT)/smoke/winehua_network_wininet.c \
 	$$(STAMPS)/deps $$(STAMPS)/wine-$(1) $$(STAMPS)/$(1)/native \
 	$$(STAMPS)/$(1)/host-vulkan \
 	$$(ASSEMBLE_GUEST_INPUTS) | $$(STAMPS)/$(1)

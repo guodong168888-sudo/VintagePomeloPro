@@ -359,6 +359,13 @@ PY
     i686-w64-mingw32-gcc -O2 -s -municode -mwindows -o \
         "$smoke_dir/x86/winehua_win32_driver.exe" "$win32_driver_source" \
         -lshell32 -luser32
+    local net_source="$WINEHUA/smoke/winehua_network_probe.c"
+    local net_wininet_source="$WINEHUA/smoke/winehua_network_wininet.c"
+    x86_64-w64-mingw32-gcc -O2 -s -mwindows -o \
+        "$smoke_dir/x64/winehua_network_probe.exe" "$net_source" "$net_wininet_source" \
+        -lwinhttp -lwininet -lws2_32 -luser32 -lgdi32
+    cp "$smoke_dir/x64/winehua_network_probe.exe" "$wine_data/bin/x86_64-windows/"
+    log "  winehua_network_probe.exe → smoke/x64 + bin/x86_64-windows"
     local guest_shader_root="$BUILD_DIR/guest_vulkan/$guest_arch/share/winehua"
     local smoke_shader
     for smoke_shader in venus_storage_write venus_storage_read venus_image_fetch venus_combined_sample venus_separated_sample; do
