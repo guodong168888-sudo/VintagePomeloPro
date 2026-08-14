@@ -148,12 +148,13 @@ export struct VirtualInputOverlay {
     if (element.type === ControlElementType.PANEL) {
       return this.overlayW * Math.max(0.1, Math.min(1, element.panelWidthRatio ?? 0.84));
     }
-    const keyWidthRatio = element.keyWidthRatio;
-    if (keyWidthRatio !== undefined && keyWidthRatio > 0) {
-      return this.overlayW * keyWidthRatio;
-    }
     const viewportScale = this.viewportControlScale();
     const widthScale = element.widthScale ?? 1;
+    const keyWidthRatio = element.keyWidthRatio;
+    if (keyWidthRatio !== undefined && keyWidthRatio > 0) {
+      // 键盘键帽: keyWidthRatio 定基础宽度, 缩放与按键宽度系数继续生效。
+      return this.overlayW * keyWidthRatio * (element.scale ?? 1) * widthScale;
+    }
     if (element.type === ControlElementType.TRACKPAD) {
       return 150 * (element.scale ?? 1) * widthScale * viewportScale;
     }
@@ -168,12 +169,12 @@ export struct VirtualInputOverlay {
     if (element.type === ControlElementType.PANEL) {
       return this.overlayH * Math.max(0.1, Math.min(1, element.panelHeightRatio ?? 0.48));
     }
-    const keyHeightRatio = element.keyHeightRatio;
-    if (keyHeightRatio !== undefined && keyHeightRatio > 0) {
-      return this.overlayH * keyHeightRatio;
-    }
     const viewportScale = this.viewportControlScale();
     const heightScale = element.heightScale ?? 1;
+    const keyHeightRatio = element.keyHeightRatio;
+    if (keyHeightRatio !== undefined && keyHeightRatio > 0) {
+      return this.overlayH * keyHeightRatio * (element.scale ?? 1) * heightScale;
+    }
     if (element.type === ControlElementType.TRACKPAD) {
       return 100 * (element.scale ?? 1) * heightScale * viewportScale;
     }
@@ -333,6 +334,10 @@ export struct VirtualInputOverlay {
       '|' + (element.x ?? 0).toFixed(3) +
       '|' + (element.y ?? 0).toFixed(3) +
       '|' + (element.scale ?? 1).toFixed(2) +
+      '|' + (element.widthScale ?? 1).toFixed(2) +
+      '|' + (element.heightScale ?? 1).toFixed(2) +
+      '|' + (element.panelWidthRatio ?? 0).toFixed(3) +
+      '|' + (element.panelHeightRatio ?? 0).toFixed(3) +
       '|' + (element.opacity ?? -1).toString() +
       '|' + (element.text ?? '') +
       '|' + (element.shape ?? '') +

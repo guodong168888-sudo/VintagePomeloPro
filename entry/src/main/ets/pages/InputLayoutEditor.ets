@@ -900,10 +900,8 @@ struct InputLayoutEditor {
             .fontSize(11).fontColor('#FFFFFFAA').width('100%')
           Slider({ value: (this.selectedElement()?.scale ?? 1) * 100, min: 10, max: 500, step: 5, style: SliderStyle.OutSet })
             .width('100%').blockColor('#FF64B5F6').selectedColor('#FF64B5F6').trackColor('#FFFFFF22')
-            .onChange((value: number, mode: SliderChangeMode): void => {
-              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                this.scaleElement(this.selectedElementId, value / 100);
-              }
+            .onChange((value: number, _mode: SliderChangeMode): void => {
+              this.scaleElement(this.selectedElementId, value / 100);
             })
           if (this.selectedElement()?.type === ControlElementType.BUTTON) {
             Text('按键宽度 ' + Math.round((this.selectedElement()?.widthScale ?? 1) * 100) + '%')
@@ -911,11 +909,9 @@ struct InputLayoutEditor {
             Slider({ value: (this.selectedElement()?.widthScale ?? 1) * 100,
               min: 20, max: 1200, step: 10, style: SliderStyle.OutSet })
               .width('100%').blockColor('#FF64B5F6').selectedColor('#FF64B5F6').trackColor('#FFFFFF22')
-              .onChange((value: number, mode: SliderChangeMode): void => {
-                if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                  this.updateSelectedElement((current: ControlElement): ControlElement =>
-                    this.withElement(current, { widthScale: value / 100 }));
-                }
+              .onChange((value: number, _mode: SliderChangeMode): void => {
+                this.updateSelectedElement((current: ControlElement): ControlElement =>
+                  this.withElement(current, { widthScale: value / 100 }));
               })
           }
           Row({ space: 8 }) {
