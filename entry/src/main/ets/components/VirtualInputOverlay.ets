@@ -13,6 +13,13 @@ import { InputDispatcher } from '../service/InputDispatcher';
 
 type ToolbarAction = 'toolbar' | 'editor' | 'mapping' | 'controls' | 'mouse' | 'wake';
 
+interface KeyboardShieldRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
 interface OverlayPoint {
   x: number;
   y: number;
@@ -140,6 +147,10 @@ export struct VirtualInputOverlay {
     if (element.type === ControlElementType.PANEL) {
       return this.overlayW * Math.max(0.1, Math.min(1, element.panelWidthRatio ?? 0.84));
     }
+    const keyWidthRatio = element.keyWidthRatio;
+    if (keyWidthRatio !== undefined && keyWidthRatio > 0) {
+      return this.overlayW * keyWidthRatio;
+    }
     const viewportScale = this.viewportControlScale();
     const widthScale = element.widthScale ?? 1;
     if (element.type === ControlElementType.TRACKPAD) {
@@ -155,6 +166,10 @@ export struct VirtualInputOverlay {
   private elementHeight(element: ControlElement): number {
     if (element.type === ControlElementType.PANEL) {
       return this.overlayH * Math.max(0.1, Math.min(1, element.panelHeightRatio ?? 0.48));
+    }
+    const keyHeightRatio = element.keyHeightRatio;
+    if (keyHeightRatio !== undefined && keyHeightRatio > 0) {
+      return this.overlayH * keyHeightRatio;
     }
     const viewportScale = this.viewportControlScale();
     const heightScale = element.heightScale ?? 1;
@@ -200,6 +215,53 @@ export struct VirtualInputOverlay {
     if (element.shape === ControlElementShape.RECT) return 4;
     if (element.shape === ControlElementShape.SQUARE) return 6;
     return Math.min(this.elementWidth(element), this.elementHeight(element)) / 2;
+  }
+
+  /** 键盘键帽文字按实际键面尺寸放大, 保证平板/手机上清晰可读。 */
+  private buttonLabelFontSize(element: ControlElement): number {
+    if ((element.keyWidthRatio ?? 0) > 0) {
+      const size = Math.min(this.elementWidth(element), this.elementHeight(element));
+      return Math.max(13, Math.min(30, size * 0.38));
+    }
+    return 14 * (element.scale ?? 1);
+  }
+
+  /** 键盘区域不可见的点击屏蔽层: 防止键缝/键盘边缘的触摸穿透到 Wine 窗口。 */
+  private keyboardShieldRect(): KeyboardShieldRect | null {
+    let left = 1;
+    let top = 1;
+    let right = 0;
+    let bottom = 0;
+    let found = false;
+    for (const element of this.visibleElements()) {
+      const widthRatio = element.keyWidthRatio ?? 0;
+      const heightRatio = element.keyHeightRatio ?? 0;
+      if (widthRatio <= 0 || heightRatio <= 0) continue;
+      found = true;
+      left = Math.min(left, (element.x ?? 0.5) - widthRatio / 2);
+      right = Math.max(right, (element.x ?? 0.5) + widthRatio / 2);
+      top = Math.min(top, (element.y ?? 0.5) - heightRatio / 2);
+      bottom = Math.max(bottom, (element.y ?? 0.5) + heightRatio / 2);
+    }
+    if (!found) return null;
+    const margin = 0.014;
+    const rect: KeyboardShieldRect = {
+      left: Math.max(0, left - margin),
+      top: Math.max(0, top - margin),
+      right: Math.min(1, right + margin),
+      // 键盘下方的空白区域同样拦截, 防止触摸穿透到下层 Wine 窗口。
+      bottom: 1
+    };
+    return rect;
+  }
+
+  private keyboardShieldContains(x: number, y: number): boolean {
+    if (this.editMode || this.overlayW <= 0 || this.overlayH <= 0) return false;
+    const rect = this.keyboardShieldRect();
+    if (!rect) return false;
+    const nx = x / this.overlayW;
+    const ny = y / this.overlayH;
+    return nx >= rect.left && nx <= rect.right && ny >= rect.top && ny <= rect.bottom;
   }
 
   private rectContains(x: number, y: number, left: number, top: number, width: number, height: number): boolean {
@@ -751,7 +813,12 @@ export struct VirtualInputOverlay {
       }
     }
     if (claimed) event.stopPropagation();
-    else this.onUnhandledTouch(event);
+    else if (this.keyboardShieldContains(x, y)) {
+      // 键盘区域内的空白处吞掉触摸, 不穿透到下层 Wine 窗口。
+      event.stopPropagation();
+    } else {
+      this.onUnhandledTouch(event);
+    }
   }
 
   /** 编辑器交互：点按选中、单指拖动、双指缩放，全部由根触摸统一处理。 */
@@ -877,6 +944,10 @@ export struct VirtualInputOverlay {
       }
       return;
     }
+    if (this.keyboardShieldContains(Number(event.x), Number(event.y))) {
+      event.stopPropagation();
+      return;
+    }
     this.onUnhandledMouse(event);
   }
 
@@ -900,7 +971,7 @@ export struct VirtualInputOverlay {
   private ButtonElement(element: ControlElement) {
     Stack({ alignContent: Alignment.Center }) {
       Text(element.text.length > 0 ? element.text : '键')
-        .fontSize(14 * (element.scale ?? 1)).fontWeight(FontWeight.Bold).maxLines(1)
+        .fontSize(this.buttonLabelFontSize(element)).fontWeight(FontWeight.Bold).maxLines(1)
         .fontColor(this.isElementPressed(element.id) ? TEXT_PRESSED : TEXT_IDLE)
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))

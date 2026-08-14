@@ -451,6 +451,9 @@ export interface ControlElement {
   /** Viewport-relative size for PANEL decorations. */
   panelWidthRatio?: number;
   panelHeightRatio?: number;
+  /** 键盘键专用: 按 overlay 宽/高归一化的目标尺寸, 跨设备自适应填满槽位。 */
+  keyWidthRatio?: number;
+  keyHeightRatio?: number;
   /** -1 继承方案透明度 overlayOpacity；0-100 为元素级覆盖。 */
   opacity: number;
   bindings: InputBinding[];
@@ -580,6 +583,8 @@ export function createControlElement(
     scale: Math.max(0.35, Math.min(2, scale ?? 1)),
     widthScale: Math.max(0.5, Math.min(6, widthScale ?? 1)),
     heightScale: Math.max(0.5, Math.min(6, heightScale ?? 1)),
+    keyWidthRatio: undefined,
+    keyHeightRatio: undefined,
     opacity: -1,
     bindings: (bindings ?? []).map(cloneInputBinding),
     toggleSwitch: toggleSwitch ?? false,
@@ -604,6 +609,10 @@ export function cloneControlElement(element: ControlElement): ControlElement {
     heightScale: Math.max(0.5, Math.min(6, element.heightScale ?? 1)),
     panelWidthRatio: element.panelWidthRatio,
     panelHeightRatio: element.panelHeightRatio,
+    keyWidthRatio: element.keyWidthRatio === undefined ? undefined :
+      Math.max(0.005, Math.min(0.5, element.keyWidthRatio)),
+    keyHeightRatio: element.keyHeightRatio === undefined ? undefined :
+      Math.max(0.005, Math.min(0.5, element.keyHeightRatio)),
     opacity: element.opacity ?? -1,
     bindings: (element.bindings ?? []).map(cloneInputBinding),
     toggleSwitch: element.toggleSwitch ?? false,
@@ -658,7 +667,7 @@ export const INPUT_TEMPLATES: InputTemplate[] = [
   },
   {
     id: 'full-keyboard', name: '全键盘', description: '完整字母、数字、功能键与方向键',
-    builtInProfileId: 'builtin-full-keyboard', profileName: '全键盘', revision: 3
+    builtInProfileId: 'builtin-full-keyboard', profileName: '全键盘', revision: 5
   },
   {
     id: 'rpg', name: 'RPG', description: '移动、交互、背包、地图与技能快捷栏',
@@ -714,8 +723,8 @@ interface KeyboardTemplateKey {
 }
 
 function keyboardTemplateKeyElement(key: KeyboardTemplateKey, x: number, y: number,
-  scale: number): ControlElement {
-  return createControlElement(
+  scale: number, keyWidthRatio?: number, keyHeightRatio?: number): ControlElement {
+  const element = createControlElement(
     ControlElementType.BUTTON,
     x,
     y,
@@ -728,6 +737,9 @@ function keyboardTemplateKeyElement(key: KeyboardTemplateKey, x: number, y: numb
     'vertical',
     'keys',
     key.units ?? 1);
+  if (keyWidthRatio !== undefined) element.keyWidthRatio = keyWidthRatio;
+  if (keyHeightRatio !== undefined) element.keyHeightRatio = keyHeightRatio;
+  return element;
 }
 
 /**
@@ -736,35 +748,35 @@ function keyboardTemplateKeyElement(key: KeyboardTemplateKey, x: number, y: numb
  * physical keyboard and the alpha rows stay visually aligned on every screen.
  */
 function appendKeyboardRow(elements: ControlElement[], keys: KeyboardTemplateKey[], y: number,
-  left: number = 0.10, right: number = 0.74, scale: number = 0.44): void {
+  left: number = 0.10, right: number = 0.74, scale: number = 0.44,
+  pitch: number = 0.075): void {
   if (keys.length === 0) return;
   const totalUnits = keys.reduce((total: number, key: KeyboardTemplateKey): number =>
     total + (key.gapBefore ?? 0) + (key.units ?? 1), 0);
+  // 每个键按其真实键帽单位填满槽位: 键宽 = 槽位宽 * 94%, 键高 = 行距 * 84%,
+  // 由渲染层按 overlay 宽高换算, 在平板和手机上都不会出现大间距/过小键。
+  const unitWidthRatio = (right - left) / totalUnits;
+  const keyHeightRatio = pitch * 0.84;
   let cursor = 0;
   keys.forEach((key: KeyboardTemplateKey): void => {
     cursor += key.gapBefore ?? 0;
     const units = key.units ?? 1;
     const center = left + (right - left) * (cursor + units / 2) / totalUnits;
-    elements.push(keyboardTemplateKeyElement(key, center, y, scale));
+    const keyWidthRatio = unitWidthRatio * units * 0.94;
+    elements.push(keyboardTemplateKeyElement(key, center, y, scale, keyWidthRatio, keyHeightRatio));
     cursor += units;
   });
 }
 
 function fullKeyboardTemplateElements(): ControlElement[] {
   const elements: ControlElement[] = [];
-  const frame = createControlElement(ControlElementType.PANEL, 0.50, 0.74, '', [],
-    ControlElementShape.ROUND_RECT, 1, false, [], 'vertical', 'keys');
-  frame.panelWidthRatio = 0.84;
-  frame.panelHeightRatio = 0.48;
-  frame.opacity = 78;
-  elements.push(frame);
   appendKeyboardRow(elements, [
     { label: 'Esc', code: 1 }, { label: 'F1', code: 59, gapBefore: 0.7 }, { label: 'F2', code: 60 },
     { label: 'F3', code: 61 }, { label: 'F4', code: 62 }, { label: 'F5', code: 63, gapBefore: 0.35 },
     { label: 'F6', code: 64 }, { label: 'F7', code: 65 }, { label: 'F8', code: 66 },
     { label: 'F9', code: 67, gapBefore: 0.35 }, { label: 'F10', code: 68 }, { label: 'F11', code: 87 },
     { label: 'F12', code: 88 }
-  ], 0.545, 0.11, 0.89, 0.32);
+  ], 0.545, 0.11, 0.89, 0.32, 0.080);
   appendKeyboardRow(elements, [
     { label: '`', code: 41 },
     { label: '1', code: 2 }, { label: '2', code: 3 }, { label: '3', code: 4 },
@@ -772,33 +784,33 @@ function fullKeyboardTemplateElements(): ControlElement[] {
     { label: '7', code: 8 }, { label: '8', code: 9 }, { label: '9', code: 10 },
     { label: '0', code: 11 }, { label: '-', code: 12 }, { label: '=', code: 13 },
     { label: 'Back', code: 14, units: 1.9 }
-  ], 0.625, 0.11, 0.72, 0.38);
+  ], 0.625, 0.11, 0.72, 0.38, 0.075);
   appendKeyboardRow(elements, [
     { label: 'Tab', code: 15, units: 1.5 }, { label: 'Q', code: 16 }, { label: 'W', code: 17 },
     { label: 'E', code: 18 }, { label: 'R', code: 19 }, { label: 'T', code: 20 },
     { label: 'Y', code: 21 }, { label: 'U', code: 22 }, { label: 'I', code: 23 },
     { label: 'O', code: 24 }, { label: 'P', code: 25 }, { label: '[', code: 26 },
     { label: ']', code: 27 }, { label: '\\', code: 43, units: 1.5 }
-  ], 0.700, 0.11, 0.72, 0.38);
+  ], 0.700, 0.11, 0.72, 0.38, 0.075);
   appendKeyboardRow(elements, [
     { label: 'Caps', code: 58, units: 1.8 }, { label: 'A', code: 30 }, { label: 'S', code: 31 },
     { label: 'D', code: 32 }, { label: 'F', code: 33 }, { label: 'G', code: 34 },
     { label: 'H', code: 35 }, { label: 'J', code: 36 }, { label: 'K', code: 37 },
     { label: 'L', code: 38 }, { label: ';', code: 39 }, { label: "'", code: 40 },
     { label: 'Enter', code: 28, units: 2.2 }
-  ], 0.775, 0.11, 0.72, 0.38);
+  ], 0.775, 0.11, 0.72, 0.38, 0.075);
   appendKeyboardRow(elements, [
     { label: 'Shift', code: 42, units: 2.3 }, { label: 'Z', code: 44 }, { label: 'X', code: 45 },
     { label: 'C', code: 46 }, { label: 'V', code: 47 }, { label: 'B', code: 48 },
     { label: 'N', code: 49 }, { label: 'M', code: 50 }, { label: ',', code: 51 },
     { label: '.', code: 52 }, { label: '/', code: 53 }, { label: 'Shift', code: 54, units: 2.7 }
-  ], 0.850, 0.11, 0.72, 0.38);
+  ], 0.850, 0.11, 0.72, 0.38, 0.075);
   appendKeyboardRow(elements, [
     { label: 'Ctrl', code: 29, units: 1.5 }, { label: 'Win', code: 125, units: 1.2 },
     { label: 'Alt', code: 56, units: 1.25 }, { label: 'Space', code: 57, units: 5.6 },
     { label: 'Alt', code: 100, units: 1.25 }, { label: 'Menu', code: 127, units: 1.2 },
     { label: 'Ctrl', code: 97, units: 1.5 }
-  ], 0.925, 0.11, 0.69, 0.38);
+  ], 0.925, 0.11, 0.69, 0.38, 0.075);
 
   // Standard six-key navigation block and inverted-T arrow cluster.
   const navigationKeys: Array<[string, number, number, number]> = [
@@ -808,7 +820,9 @@ function fullKeyboardTemplateElements(): ControlElement[] {
     ['↓', 108, 0.835, 0.925], ['→', 106, 0.89, 0.925]
   ];
   navigationKeys.forEach((key: [string, number, number, number]): void => {
-    elements.push(keyboardTemplateKeyElement({ label: key[0], code: key[1], units: 0.92 }, key[2], key[3], 0.34));
+    // 导航/方向键: 三个一列, 列距 0.055, 行距 0.075, 尺寸按槽位填充。
+    elements.push(keyboardTemplateKeyElement({ label: key[0], code: key[1], units: 0.92 },
+      key[2], key[3], 0.34, 0.052, 0.063));
   });
   return elements;
 }
