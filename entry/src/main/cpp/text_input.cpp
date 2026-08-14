@@ -393,8 +393,6 @@ void TextInputManager::FlushOps() {
                 }
             }
             if (ok) {
-                OH_LOG_INFO(LOG_APP, "[TextInput] send preedit res=%{public}p len=%{public}d",
-                            op.res, (int)op.text.size());
                 zwp_text_input_v3_send_preedit_string(op.res, op.text.c_str(), op.begin, op.end);
             }
             break;
@@ -411,8 +409,6 @@ void TextInputManager::FlushOps() {
                 }
             }
             if (ok) {
-                OH_LOG_INFO(LOG_APP, "[TextInput] send commit res=%{public}p len=%{public}d",
-                            op.res, (int)op.text.size());
                 zwp_text_input_v3_send_commit_string(op.res, op.text.c_str());
             }
             break;

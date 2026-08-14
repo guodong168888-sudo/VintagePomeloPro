@@ -78,6 +78,7 @@ struct InputOverlayPage {
   private eventGate: InputEventGate = new InputEventGate();
   private hostImeController: TextInputController = new TextInputController();
   private hostImeContent: string = '';
+  private hostImeReseedPending: boolean = false;
   private pendingHostCommit: string = '';
   private static readonly HOST_SENTINEL: string = '\uF8FF';
   private readonly TAP_TIMEOUT_MS: number = 450;
@@ -435,6 +436,7 @@ struct InputOverlayPage {
       this.hostKeyboardActive ? 'on' : 'off');
     if (this.hostKeyboardActive) {
       testNapi.wineTextInputSetArmed(true);
+      this.hostImeReseedPending = true;
       this.hostImeBuffer = InputOverlayPage.HOST_SENTINEL;
       this.hostImeContent = InputOverlayPage.HOST_SENTINEL;
       focusController.requestFocus('wine-host-keyboard-input');
@@ -449,6 +451,7 @@ struct InputOverlayPage {
 
   /** 哨兵保活: 程序性重填, onChange 按 oldContent→sentinel 识别并忽略。 */
   private reseedHostSentinel(): void {
+    this.hostImeReseedPending = true;
     this.hostImeBuffer = InputOverlayPage.HOST_SENTINEL;
     this.hostImeContent = InputOverlayPage.HOST_SENTINEL;
   }
@@ -489,19 +492,15 @@ struct InputOverlayPage {
     if (!this.hostKeyboardActive) return;
     const preview = previewText !== undefined && previewText.value !== undefined ?
       previewText.value : '';
-    hilog.info(0x0000, 'HostKb',
-      'ime change valLen=%{public}d previewLen=%{public}d enabled=%{public}s',
-      value.length, preview.length, testNapi.wineTextInputEnabled() ? 'yes' : 'no');
 
-    // 程序性哨兵重填 (oldContent != sentinel -> sentinel): 只更新基线。
-    if (preview.length === 0 && value === InputOverlayPage.HOST_SENTINEL) {
-      const oldContent = options !== undefined && options.oldContent !== undefined ?
-        options.oldContent : this.hostImeContent;
-      if (oldContent !== InputOverlayPage.HOST_SENTINEL) {
-        this.hostImeContent = InputOverlayPage.HOST_SENTINEL;
-        return;
-      }
+    // 程序性哨兵重填: 只更新基线, 不注入。
+    if (preview.length === 0 && this.hostImeReseedPending &&
+        value === InputOverlayPage.HOST_SENTINEL) {
+      this.hostImeReseedPending = false;
+      this.hostImeContent = InputOverlayPage.HOST_SENTINEL;
+      return;
     }
+    this.hostImeReseedPending = false;
 
     // 拼音组合态: 经 text-input preedit 显示在 Wine, 不落字。
     if (preview.length > 0) {
@@ -512,18 +511,24 @@ struct InputOverlayPage {
     // 先冲刷上次挂起的中文提交。
     this.flushPendingHostCommit();
 
+    // 用前缀+后缀共同部分做鲁棒差分, 不依赖输入法上报的 rangeBefore/After
+    // (切换控件后个别输入法上报区间会漂移, 之前偶发退格丢失正是这里)。
     const oldContent = options !== undefined && options.oldContent !== undefined ?
       options.oldContent : this.hostImeContent;
-    const rbStart = options !== undefined && options.rangeBefore !== undefined ?
-      (options.rangeBefore.start ?? 0) : 0;
-    const rbEnd = options !== undefined && options.rangeBefore !== undefined ?
-      (options.rangeBefore.end ?? oldContent.length) : oldContent.length;
-    const raStart = options !== undefined && options.rangeAfter !== undefined ?
-      (options.rangeAfter.start ?? 0) : 0;
-    const raEnd = options !== undefined && options.rangeAfter !== undefined ?
-      (options.rangeAfter.end ?? value.length) : value.length;
-    const deleted = oldContent.substring(rbStart, rbEnd);
-    const inserted = value.substring(raStart, raEnd);
+    let commonPrefix = 0;
+    while (commonPrefix < oldContent.length && commonPrefix < value.length &&
+      oldContent.charAt(commonPrefix) === value.charAt(commonPrefix)) {
+      commonPrefix++;
+    }
+    let commonSuffix = 0;
+    while (commonSuffix < oldContent.length - commonPrefix &&
+      commonSuffix < value.length - commonPrefix &&
+      oldContent.charAt(oldContent.length - 1 - commonSuffix) ===
+        value.charAt(value.length - 1 - commonSuffix)) {
+      commonSuffix++;
+    }
+    const deleted = oldContent.substring(commonPrefix, oldContent.length - commonSuffix);
+    const inserted = value.substring(commonPrefix, value.length - commonSuffix);
     this.hostImeContent = value;
 
     // 删除: 逐字符注入 Backspace。只删掉哨兵表示删入 Wine 旧内容,
