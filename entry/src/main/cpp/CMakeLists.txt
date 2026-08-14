@@ -59,6 +59,8 @@ add_library(entry SHARED
     string_utils.cpp
     input_manager.cpp
     pointer_extras.cpp
+    text_input.cpp
+    text-input-unstable-v3-protocol.c
     xdg_shell.cpp
     xdg-shell-protocol.c
     viewporter-server-protocol.c

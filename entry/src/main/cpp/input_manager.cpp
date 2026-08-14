@@ -2,6 +2,7 @@
 #include "seat.h"
 #include "plugin_manager.h"
 #include "pointer_extras.h"
+#include "text_input.h"
 #include "wayland_server.h"
 #include <chrono>
 #include <thread>
@@ -244,6 +245,7 @@ void InputManager::ResetKeyboardEnter() {
     keyboardEntered_ = false;
     keyboardFocusedToplevel_ = 0;
     keyboardFocusedSurface_ = nullptr;
+    TextInputManager::GetInstance()->OnKeyboardLeave();
     OH_LOG_INFO(LOG_APP, "[Input] ResetKeyboardEnter OK");
 }
 
@@ -1001,6 +1003,8 @@ void InputManager::InjectKeyboardEnter(uint32_t tl, wl_resource* surface) {
         nSent++;
     }
     OH_LOG_INFO(LOG_APP, "[Input] InjectKbdEnter OK sent=%{public}d", nSent);
+    // text-input 焦点与键盘注入同源: 键盘 enter 成功后同步 text-input enter。
+    if (nSent > 0) TextInputManager::GetInstance()->OnKeyboardEnter(tl, surface);
 }
 
 void InputManager::InjectKeyboardKey(uint32_t key, uint32_t state) {
@@ -1053,6 +1057,7 @@ void InputManager::InjectKeyboardLeave() {
     keyboardEntered_ = false;
     keyboardFocusedToplevel_ = 0;
     keyboardFocusedSurface_ = nullptr;
+    TextInputManager::GetInstance()->OnKeyboardLeave();
     OH_LOG_INFO(LOG_APP, "[Input] InjectKbdLeave OK");
 }
 

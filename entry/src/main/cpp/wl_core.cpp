@@ -11,6 +11,7 @@
 #include "input_manager.h"
 #include "plugin_manager.h"
 #include "pointer_extras.h"
+#include "text_input.h"
 #include "wine_process.h"
 #include "compositor/compositor_utils.h"
 #include "compositor/compositor_constants.h"
@@ -122,6 +123,7 @@ void WaylandServer::compositor_create_surface(wl_client* client, wl_resource* co
         // 已复用的对象 id, client 报 "invalid object ... leave(uo)" 并断开。
         // 内部按指针比较, 非焦点 surface 是 no-op
         InputManager::GetInstance()->OnSurfaceDestroyed(r);
+        TextInputManager::GetInstance()->OnSurfaceDestroyed(r);
         if (sd && sd->hasToplevel) {
             {
                 self->toplevelMgr_.UnmapToplevelSurface(sd->toplevelId);
@@ -373,6 +375,7 @@ void WaylandServer::surface_destroy(wl_client*, wl_resource* r) {
         // 重置 InputManager 焦点: 防止后续 Inject*Leave 引用已销毁的 surface
         // (否则 Wine 收到 invalid object 协议错误 → 断开连接)
         InputManager::GetInstance()->OnSurfaceDestroyed(r);
+        TextInputManager::GetInstance()->OnSurfaceDestroyed(r);
         self->FireToplevelEvent(sd->toplevelId, "destroyed");
     }
     // subsurface 销毁: 清除 layer + 标记 root dirty 触发重绘 (移除残留像素)
@@ -389,6 +392,7 @@ void WaylandServer::surface_destroy(wl_client*, wl_resource* r) {
         if (removedPopup) {
             // 防止 pointer focus 悬在已销毁的 popup surface 上 (协议错误会断开 Wine)
             InputManager::GetInstance()->OnSurfaceDestroyed(r);
+            TextInputManager::GetInstance()->OnSurfaceDestroyed(r);
             char json[64];
             snprintf(json, sizeof(json), "{\"popupId\":%u}", removedPopup);
             self->FireToplevelEvent(popupParent, "popup_hide", json);
@@ -1070,4 +1074,5 @@ extern "C" void RegisterWlCoreGlobals(wl_display* display) {
     // dinput 老游戏的指针扩展 (warp 回中/指针约束; relative 故意不注册,
     // 见 pointer_extras.h 头注释)
     PointerExtras::GetInstance()->Register(display);
+    TextInputManager::GetInstance()->Register(display);
 }
