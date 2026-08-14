@@ -11,7 +11,7 @@ import {
 } from '../model/AppModels';
 import { InputDispatcher } from '../service/InputDispatcher';
 
-type ToolbarAction = 'toolbar' | 'editor' | 'mapping' | 'controls' | 'mouse' | 'wake';
+type ToolbarAction = 'toolbar' | 'editor' | 'mapping' | 'controls' | 'mouse' | 'keyboard' | 'wake';
 
 interface KeyboardShieldRect {
   left: number;
@@ -70,6 +70,7 @@ export struct VirtualInputOverlay {
   private crosshairContext: CanvasRenderingContext2D = new CanvasRenderingContext2D();
   onOpenLayoutEditor: () => void = (): void => {};
   onOpenKeyMappingEditor: () => void = (): void => {};
+  onToggleHostKeyboard: () => void = (): void => {};
   onControlsVisibleChange: (visible: boolean) => void = (_visible: boolean): void => {};
   onTouchpadModeChange: (enabled: boolean) => void = (_enabled: boolean): void => {};
   onControlBarPositionChange: (x: number, y: number) => void =
@@ -1257,12 +1258,12 @@ export struct VirtualInputOverlay {
 
   private toolbarWidth(): number {
     if (!this.toolbarExpanded) return 44;
-    return this.resolveToolbarVertical() ? 52 : 176;
+    return this.resolveToolbarVertical() ? 52 : 220;
   }
 
   private toolbarHeight(): number {
     if (!this.toolbarExpanded) return 44;
-    return this.resolveToolbarVertical() ? 188 : 52;
+    return this.resolveToolbarVertical() ? 232 : 52;
   }
 
   private toolbarOriginX(): number {
@@ -1320,12 +1321,14 @@ export struct VirtualInputOverlay {
       if (this.rectContains(x, y, originX, originY + 40, 44, 44)) return 'editor';
       if (this.rectContains(x, y, originX, originY + 84, 44, 44)) return 'controls';
       if (this.rectContains(x, y, originX, originY + 128, 44, 44)) return 'mouse';
+      if (this.rectContains(x, y, originX, originY + 172, 44, 44)) return 'keyboard';
       return null;
     }
     if (this.rectContains(x, y, originX, originY, 44, 52)) return 'toolbar';
     if (this.rectContains(x, y, originX + 44, originY, 44, 52)) return 'editor';
     if (this.rectContains(x, y, originX + 88, originY, 44, 52)) return 'controls';
     if (this.rectContains(x, y, originX + 132, originY, 44, 52)) return 'mouse';
+    if (this.rectContains(x, y, originX + 176, originY, 44, 52)) return 'keyboard';
     return null;
   }
 
@@ -1350,6 +1353,10 @@ export struct VirtualInputOverlay {
       const nextTouchpadMode = !this.touchpadModeVisual;
       this.touchpadModeVisual = nextTouchpadMode;
       this.onTouchpadModeChange(nextTouchpadMode);
+      return;
+    }
+    if (action === 'keyboard') {
+      this.onToggleHostKeyboard();
       return;
     }
     if (action === 'wake') {
@@ -1553,12 +1560,31 @@ export struct VirtualInputOverlay {
     .onClick((): void => this.invokeToolbarButtonAction((): void => this.runToolbarAction('mouse')))
   }
 
+  /** 无状态按钮: 点击即唤起/收起宿主系统键盘。 */
+  @Builder
+  private HostKeyboardButton() {
+    Button({ type: ButtonType.Circle }) {
+      SymbolGlyph($r('sys.symbol.keyboard')).fontSize(16).fontColor(['#FFFFFFFF'])
+    }
+    .width(36).height(36)
+    .backgroundColor('#BF282828')
+    .border({ width: 1, color: '#33FFFFFF' })
+    .shadow({ radius: 8, color: '#66000000', offsetX: 0, offsetY: 2 })
+    .id('wine-input-host-keyboard').hitTestBehavior(HitTestMode.Block)
+    .onTouch((event: TouchEvent): void => this.handleToolbarButtonTouch(event,
+      (): void => this.runToolbarAction('keyboard')))
+    .onMouse((event: MouseEvent): void => this.handleToolbarButtonMouse(event,
+      (): void => this.runToolbarAction('keyboard')))
+    .onClick((): void => this.invokeToolbarButtonAction((): void => this.runToolbarAction('keyboard')))
+  }
+
   @Builder
   private ExpandedToolbarButtons() {
     this.ControlBarButton($r('sys.symbol.gearshape'), 'wine-input-layout-editor', false,
       '#FFFFFFFF', '#44FFFFFF', false, (): void => this.runToolbarAction('editor'))
     this.ControlsVisibilityButton()
     this.TouchpadModeButton()
+    this.HostKeyboardButton()
   }
 
   @Builder

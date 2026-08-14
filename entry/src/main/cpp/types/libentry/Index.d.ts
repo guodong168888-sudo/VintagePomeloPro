@@ -124,3 +124,11 @@ export const termRun: (cols: number, rows: number, cb: (data: ArrayBuffer) => vo
 export const termSend: (data: ArrayBuffer) => void;
 export const termResize: (cols: number, rows: number) => void;
 export const termClose: () => void;
+/** 宿主输入法预上屏文本 (拼音组合) -> Wine text-input preedit。 */
+export const wineTextInputPreedit: (text: string) => boolean;
+/** 宿主输入法提交文本 (中文等任意 Unicode) -> Wine text-input commit。 */
+export const wineTextInputCommit: (text: string) => boolean;
+/** Wine 侧 text-input 是否已 enable (即是否已 enter 且可接收 commit)。 */
+export const wineTextInputEnabled: () => boolean;
+/** 宿主键盘打开/关闭时切换 text-input 协议激活。 */
+export const wineTextInputSetArmed: (armed: boolean) => void;

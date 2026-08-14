@@ -3,6 +3,8 @@
 #include <wayland-server-core.h>
 #include <cstdint>
 #include <mutex>
+#include <string>
+#include <utility>
 #include <vector>
 
 /*
@@ -32,6 +34,11 @@ public:
 
     bool IsEnabled() const;
 
+    // -- NAPI 线程入口 (preedit/commit 入队, Wayland 线程统一发送) --
+    bool SendPreedit(const char* utf8, int32_t cursorBegin, int32_t cursorEnd);
+    bool SendCommit(const char* utf8);
+    void SetArmed(bool armed);
+
     // -- 协议请求 (client -> server, Wayland 线程) --
     static void manager_bind(wl_client* client, void* data, uint32_t version, uint32_t id);
     static void manager_destroy(wl_client*, wl_resource* r);
@@ -54,15 +61,37 @@ private:
         uint32_t commitCount = 0;
     };
 
+    enum class OpType { Preedit, Commit, Done, SetArmed };
+
+    struct Op {
+        OpType type = OpType::Preedit;
+        wl_resource* res = nullptr;
+        std::string text;
+        int32_t begin = 0;
+        int32_t end = 0;
+        bool armed = false;
+    };
+
     TextInputManager() = default;
     static void resource_destroyed(wl_resource* r);
+    void EnqueueOp(Op op);
+    static int OnPipeReadable(int fd, uint32_t mask, void* data);
+    void FlushOps();
+    Entry* EnabledEntryLocked();
+    void LeaveAllEnteredLocked(std::vector<std::pair<wl_resource*, wl_resource*>>& actions);
 
     wl_global* global_ = nullptr;
     wl_display* display_ = nullptr;
-    // Step 1: 恒为 armed, 用于验证 enter/enable 协议链路; Step 2 由 NAPI 门控。
-    bool armed_ = true;
+    // 由 NAPI wineTextInputSetArmed 门控: 宿主键盘打开才 armed。
+    bool armed_ = false;
     uint32_t focusedToplevel_ = 0;
     wl_resource* focusedSurface_ = nullptr;
     mutable std::mutex mutex_;
     std::vector<Entry> entries_;
+
+    std::mutex opMutex_;
+    std::vector<Op> opQueue_;
+    int pipeReadFd_ = -1;
+    int pipeWriteFd_ = -1;
+    struct wl_event_source* pipeSource_ = nullptr;
 };

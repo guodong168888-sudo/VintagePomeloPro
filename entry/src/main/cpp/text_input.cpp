@@ -3,6 +3,8 @@
 #include "include/text-input-unstable-v3-server-protocol.h"
 
 #include <algorithm>
+#include <fcntl.h>
+#include <unistd.h>
 #include <vector>
 
 #undef LOG_TAG
@@ -21,6 +23,14 @@ void TextInputManager::Register(wl_display* display) {
     display_ = display;
     global_ = wl_global_create(display, &zwp_text_input_manager_v3_interface, 1,
                                this, manager_bind);
+    int fds[2];
+    if (pipe2(fds, O_NONBLOCK) == 0) {
+        pipeReadFd_ = fds[0];
+        pipeWriteFd_ = fds[1];
+        struct wl_event_loop* loop = wl_display_get_event_loop(display);
+        pipeSource_ = wl_event_loop_add_fd(loop, pipeReadFd_, WL_EVENT_READABLE,
+                                           OnPipeReadable, this);
+    }
     OH_LOG_INFO(LOG_APP, "[TextInput] manager registered armed=%{public}d",
                 armed_ ? 1 : 0);
 }
@@ -192,29 +202,30 @@ void TextInputManager::OnKeyboardEnter(uint32_t toplevelId, wl_resource* surface
 }
 
 void TextInputManager::OnKeyboardLeave() {
-    struct SendAction {
-        wl_resource* res;
-        wl_resource* surface;
-    };
-    std::vector<SendAction> actions;
+    std::vector<std::pair<wl_resource*, wl_resource*>> actions;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         focusedToplevel_ = 0;
         focusedSurface_ = nullptr;
-        for (Entry& entry : entries_) {
-            if (!entry.enteredSurface) continue;
-            actions.push_back({entry.res, entry.enteredSurface});
-            entry.enteredSurface = nullptr;
-            entry.enabled = false;
-        }
+        LeaveAllEnteredLocked(actions);
     }
-    for (const SendAction& action : actions) {
+    for (const auto& action : actions) {
         OH_LOG_INFO(LOG_APP, "[TextInput] send leave res=%{public}p surface=%{public}p",
-                    action.res, action.surface);
-        zwp_text_input_v3_send_leave(action.res, action.surface);
+                    action.first, action.second);
+        zwp_text_input_v3_send_leave(action.first, action.second);
     }
     if (!actions.empty()) {
         OH_LOG_INFO(LOG_APP, "[TextInput] focus leave actions=%{public}d", (int)actions.size());
+    }
+}
+
+void TextInputManager::LeaveAllEnteredLocked(
+    std::vector<std::pair<wl_resource*, wl_resource*>>& actions) {
+    for (Entry& entry : entries_) {
+        if (!entry.enteredSurface) continue;
+        actions.emplace_back(entry.res, entry.enteredSurface);
+        entry.enteredSurface = nullptr;
+        entry.enabled = false;
     }
 }
 
@@ -240,4 +251,189 @@ bool TextInputManager::IsEnabled() const {
         if (entry.enabled && entry.enteredSurface) return true;
     }
     return false;
+}
+
+void TextInputManager::EnqueueOp(Op op) {
+    {
+        std::lock_guard<std::mutex> lock(opMutex_);
+        opQueue_.push_back(std::move(op));
+    }
+    if (pipeWriteFd_ >= 0) {
+        char byte = 1;
+        ssize_t n = write(pipeWriteFd_, &byte, 1);
+        (void)n;
+    }
+}
+
+int TextInputManager::OnPipeReadable(int fd, uint32_t, void* data) {
+    char buffer[64];
+    while (read(fd, buffer, sizeof(buffer)) > 0) {}
+    static_cast<TextInputManager*>(data)->FlushOps();
+    return 0;
+}
+
+TextInputManager::Entry* TextInputManager::EnabledEntryLocked() {
+    for (Entry& entry : entries_) {
+        if (entry.enabled && entry.res && entry.enteredSurface) return &entry;
+    }
+    return nullptr;
+}
+
+bool TextInputManager::SendPreedit(const char* utf8, int32_t cursorBegin, int32_t cursorEnd) {
+    wl_resource* res = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        Entry* entry = EnabledEntryLocked();
+        if (!entry) return false;
+        res = entry->res;
+    }
+    Op op;
+    op.type = OpType::Preedit;
+    op.res = res;
+    op.text = utf8 ? utf8 : "";
+    op.begin = cursorBegin;
+    op.end = cursorEnd;
+    EnqueueOp(std::move(op));
+    Op done;
+    done.type = OpType::Done;
+    done.res = res;
+    EnqueueOp(std::move(done));
+    return true;
+}
+
+bool TextInputManager::SendCommit(const char* utf8) {
+    wl_resource* res = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        Entry* entry = EnabledEntryLocked();
+        if (!entry) return false;
+        res = entry->res;
+    }
+    Op op;
+    op.type = OpType::Commit;
+    op.res = res;
+    op.text = utf8 ? utf8 : "";
+    EnqueueOp(std::move(op));
+    Op done;
+    done.type = OpType::Done;
+    done.res = res;
+    EnqueueOp(std::move(done));
+    return true;
+}
+
+void TextInputManager::SetArmed(bool armed) {
+    Op op;
+    op.type = OpType::SetArmed;
+    op.armed = armed;
+    EnqueueOp(std::move(op));
+}
+
+void TextInputManager::FlushOps() {
+    std::vector<Op> batch;
+    {
+        std::lock_guard<std::mutex> lock(opMutex_);
+        batch.swap(opQueue_);
+    }
+    if (batch.empty()) return;
+
+    for (const Op& op : batch) {
+        switch (op.type) {
+        case OpType::SetArmed: {
+            struct SendAction {
+                bool enter;
+                wl_resource* res;
+                wl_resource* surface;
+            };
+            std::vector<SendAction> actions;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                armed_ = op.armed;
+                if (!armed_) {
+                    // 收键盘: 结束所有已 enter 的会话, 但保留焦点镜像,
+                    // 重新打开时可立即补 enter。
+                    std::vector<std::pair<wl_resource*, wl_resource*>> leaves;
+                    LeaveAllEnteredLocked(leaves);
+                    for (const auto& leave : leaves) {
+                        actions.push_back({false, leave.first, leave.second});
+                    }
+                } else if (focusedSurface_) {
+                    wl_client* client = wl_resource_get_client(focusedSurface_);
+                    for (Entry& entry : entries_) {
+                        if (!entry.res || wl_resource_get_client(entry.res) != client) continue;
+                        if (entry.enteredSurface == focusedSurface_) continue;
+                        entry.enteredSurface = focusedSurface_;
+                        actions.push_back({true, entry.res, focusedSurface_});
+                    }
+                }
+            }
+            for (const SendAction& action : actions) {
+                if (action.enter) {
+                    OH_LOG_INFO(LOG_APP, "[TextInput] arm on, send enter res=%{public}p surface=%{public}p",
+                                action.res, action.surface);
+                    zwp_text_input_v3_send_enter(action.res, action.surface);
+                } else {
+                    OH_LOG_INFO(LOG_APP, "[TextInput] arm off, send leave res=%{public}p surface=%{public}p",
+                                action.res, action.surface);
+                    zwp_text_input_v3_send_leave(action.res, action.surface);
+                }
+            }
+            OH_LOG_INFO(LOG_APP, "[TextInput] armed=%{public}d actions=%{public}d",
+                        armed_ ? 1 : 0, (int)actions.size());
+            break;
+        }
+        case OpType::Preedit: {
+            bool ok = false;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                for (const Entry& entry : entries_) {
+                    if (entry.res == op.res) {
+                        ok = entry.enabled && entry.enteredSurface;
+                        break;
+                    }
+                }
+            }
+            if (ok) {
+                OH_LOG_INFO(LOG_APP, "[TextInput] send preedit res=%{public}p len=%{public}d",
+                            op.res, (int)op.text.size());
+                zwp_text_input_v3_send_preedit_string(op.res, op.text.c_str(), op.begin, op.end);
+            }
+            break;
+        }
+        case OpType::Commit: {
+            bool ok = false;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                for (const Entry& entry : entries_) {
+                    if (entry.res == op.res) {
+                        ok = entry.enabled && entry.enteredSurface;
+                        break;
+                    }
+                }
+            }
+            if (ok) {
+                OH_LOG_INFO(LOG_APP, "[TextInput] send commit res=%{public}p len=%{public}d",
+                            op.res, (int)op.text.size());
+                zwp_text_input_v3_send_commit_string(op.res, op.text.c_str());
+            }
+            break;
+        }
+        case OpType::Done: {
+            uint32_t serial = 0;
+            bool alive = false;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                for (const Entry& entry : entries_) {
+                    if (entry.res == op.res) {
+                        serial = entry.commitCount;
+                        alive = true;
+                        break;
+                    }
+                }
+            }
+            if (alive) zwp_text_input_v3_send_done(op.res, serial);
+            break;
+        }
+        }
+    }
+    if (display_) wl_display_flush_clients(display_);
 }

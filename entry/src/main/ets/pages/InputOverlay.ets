@@ -1,6 +1,12 @@
 import { common, Want } from '@kit.AbilityKit';
 import { mapMouseButton } from '../common/MouseMap';
 import {
+  EVDEV_KEY_BACKSPACE,
+  EVDEV_KEY_ENTER,
+  EVDEV_KEY_LEFTSHIFT,
+  asciiToEvdevKey
+} from '../common/KeyMap';
+import {
   DisplayMode,
   GlobalSettings,
   InputProfile,
@@ -17,6 +23,8 @@ import { InputEventGate } from '../service/InputEventGate';
 import { EngineState } from '../model/AppModels';
 import { EngineStateListener, WineEngineService } from '../service/WineEngineService';
 import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import testNapi from 'libentry.so';
 
 interface DirectTouch {
   x: number;
@@ -51,6 +59,8 @@ struct InputOverlayPage {
   @State private cursorVisible: boolean = false;
   @State private cursorFlash: boolean = false;
   @State private touchpadMode: boolean = false;
+  @State private hostKeyboardActive: boolean = false;
+  @State private hostImeBuffer: string = '';
   @State private overlayW: number = 0;
   @State private overlayH: number = 0;
   @State private engineState: EngineState = WineEngineService.getInstance().getState();
@@ -66,6 +76,10 @@ struct InputOverlayPage {
   private lastDirectTapX: number = 0;
   private lastDirectTapY: number = 0;
   private eventGate: InputEventGate = new InputEventGate();
+  private hostImeController: TextInputController = new TextInputController();
+  private hostImeContent: string = '';
+  private pendingHostCommit: string = '';
+  private static readonly HOST_SENTINEL: string = '\uF8FF';
   private readonly TAP_TIMEOUT_MS: number = 450;
   private readonly TAP_SLOP_PX: number = 48;
   private cursorHideTimer: number = -1;
@@ -133,6 +147,7 @@ struct InputOverlayPage {
     this.mouseLeftActive = false;
     this.resetTouchpadGesture();
     InputDispatcher.getInstance().releaseAll('overlay-page-disappear');
+    testNapi.wineTextInputSetArmed(false);
   }
 
   private cancelCursorTimers(): void {
@@ -412,6 +427,138 @@ struct InputOverlayPage {
     }
   }
 
+  /** 点击式宿主键盘开关: 唤起/收起系统输入法, 并同步 text-input 激活。 */
+  private toggleHostKeyboard(): void {
+    this.hostKeyboardActive = !this.hostKeyboardActive;
+    const focusController = this.getUIContext().getFocusController();
+    hilog.info(0x0000, 'HostKb', 'toggle host keyboard now=%{public}s',
+      this.hostKeyboardActive ? 'on' : 'off');
+    if (this.hostKeyboardActive) {
+      testNapi.wineTextInputSetArmed(true);
+      this.hostImeBuffer = InputOverlayPage.HOST_SENTINEL;
+      this.hostImeContent = InputOverlayPage.HOST_SENTINEL;
+      focusController.requestFocus('wine-host-keyboard-input');
+    } else {
+      focusController.clearFocus();
+      testNapi.wineTextInputSetArmed(false);
+      this.pendingHostCommit = '';
+      this.hostImeBuffer = '';
+      this.hostImeContent = '';
+    }
+  }
+
+  /** 哨兵保活: 程序性重填, onChange 按 oldContent→sentinel 识别并忽略。 */
+  private reseedHostSentinel(): void {
+    this.hostImeBuffer = InputOverlayPage.HOST_SENTINEL;
+    this.hostImeContent = InputOverlayPage.HOST_SENTINEL;
+  }
+
+  private injectHostKey(code: number): void {
+    const dispatcher = InputDispatcher.getInstance();
+    dispatcher.pressKey('host-kb', code);
+    dispatcher.releaseKey('host-kb', code);
+  }
+
+  private injectHostAsciiChar(ch: string): void {
+    const mapped = asciiToEvdevKey(ch);
+    if (!mapped) return;
+    const dispatcher = InputDispatcher.getInstance();
+    if (mapped.shift) dispatcher.pressKey('host-kb-shift', EVDEV_KEY_LEFTSHIFT);
+    dispatcher.pressKey('host-kb', mapped.code);
+    dispatcher.releaseKey('host-kb', mapped.code);
+    if (mapped.shift) dispatcher.releaseKey('host-kb-shift', EVDEV_KEY_LEFTSHIFT);
+  }
+
+  private isAsciiOnly(text: string): boolean {
+    for (let index = 0; index < text.length; index++) {
+      if (asciiToEvdevKey(text.charAt(index)) === null) return false;
+    }
+    return true;
+  }
+
+  private flushPendingHostCommit(): void {
+    if (this.pendingHostCommit.length === 0) return;
+    if (testNapi.wineTextInputEnabled() && testNapi.wineTextInputCommit(this.pendingHostCommit)) {
+      this.pendingHostCommit = '';
+    }
+  }
+
+  private onHostImeChange(value: string, previewText?: PreviewText,
+                          options?: TextChangeOptions): void {
+    // 键盘已收起时, 清空/重填缓冲产生的 onChange 一律不注入 Wine。
+    if (!this.hostKeyboardActive) return;
+    const preview = previewText !== undefined && previewText.value !== undefined ?
+      previewText.value : '';
+    hilog.info(0x0000, 'HostKb',
+      'ime change valLen=%{public}d previewLen=%{public}d enabled=%{public}s',
+      value.length, preview.length, testNapi.wineTextInputEnabled() ? 'yes' : 'no');
+
+    // 程序性哨兵重填 (oldContent != sentinel -> sentinel): 只更新基线。
+    if (preview.length === 0 && value === InputOverlayPage.HOST_SENTINEL) {
+      const oldContent = options !== undefined && options.oldContent !== undefined ?
+        options.oldContent : this.hostImeContent;
+      if (oldContent !== InputOverlayPage.HOST_SENTINEL) {
+        this.hostImeContent = InputOverlayPage.HOST_SENTINEL;
+        return;
+      }
+    }
+
+    // 拼音组合态: 经 text-input preedit 显示在 Wine, 不落字。
+    if (preview.length > 0) {
+      testNapi.wineTextInputPreedit(preview);
+      return;
+    }
+
+    // 先冲刷上次挂起的中文提交。
+    this.flushPendingHostCommit();
+
+    const oldContent = options !== undefined && options.oldContent !== undefined ?
+      options.oldContent : this.hostImeContent;
+    const rbStart = options !== undefined && options.rangeBefore !== undefined ?
+      (options.rangeBefore.start ?? 0) : 0;
+    const rbEnd = options !== undefined && options.rangeBefore !== undefined ?
+      (options.rangeBefore.end ?? oldContent.length) : oldContent.length;
+    const raStart = options !== undefined && options.rangeAfter !== undefined ?
+      (options.rangeAfter.start ?? 0) : 0;
+    const raEnd = options !== undefined && options.rangeAfter !== undefined ?
+      (options.rangeAfter.end ?? value.length) : value.length;
+    const deleted = oldContent.substring(rbStart, rbEnd);
+    const inserted = value.substring(raStart, raEnd);
+    this.hostImeContent = value;
+
+    // 删除: 逐字符注入 Backspace。只删掉哨兵表示删入 Wine 旧内容,
+    // 也计一次; 哨兵与其他内容一起被删时不计哨兵本身。
+    let sentinelDeleted = 0;
+    for (let index = 0; index < deleted.length; index++) {
+      if (deleted.charAt(index) === InputOverlayPage.HOST_SENTINEL) sentinelDeleted++;
+    }
+    let backspaces = deleted.length;
+    if (sentinelDeleted > 0) {
+      backspaces = deleted === InputOverlayPage.HOST_SENTINEL ?
+        1 : (deleted.length - sentinelDeleted);
+    }
+    for (let index = 0; index < backspaces; index++) {
+      this.injectHostKey(EVDEV_KEY_BACKSPACE);
+    }
+
+    // 插入: 优先 commit_string (中文等任意 Unicode), 否则逐字符按键注入。
+    if (inserted.length > 0) {
+      if (testNapi.wineTextInputEnabled() && testNapi.wineTextInputCommit(inserted)) {
+        // 已提交
+      } else if (this.isAsciiOnly(inserted)) {
+        for (let index = 0; index < inserted.length; index++) {
+          this.injectHostAsciiChar(inserted.charAt(index));
+        }
+      } else {
+        this.pendingHostCommit += inserted;
+      }
+    }
+
+    if (value.indexOf(InputOverlayPage.HOST_SENTINEL) < 0) {
+      this.reseedHostSentinel();
+    }
+  }
+
   private touchpadClick(button: number, source: string): void {
     const x = vp2px(this.cursorX);
     const y = vp2px(this.cursorY);
@@ -672,6 +819,24 @@ struct InputOverlayPage {
 
   build() {
     Stack() {
+      // 宿主键盘载体: 平时不可见/不参与命中, 聚焦后唤起系统输入法。
+      TextInput({ placeholder: '', text: this.hostImeBuffer, controller: this.hostImeController })
+        .id('wine-host-keyboard-input')
+        .focusable(true)
+        .type(InputType.Normal)
+        .enterKeyType(EnterKeyType.NEW_LINE)
+        .width(40).height(40)
+        .opacity(0.01)
+        .position({ x: -60, y: -60 })
+        .hitTestBehavior(HitTestMode.None)
+        .onChange((value: string, previewText?: PreviewText, options?: TextChangeOptions): void => {
+          this.onHostImeChange(value, previewText, options);
+        })
+        .onSubmit((_enterKey: EnterKeyType, event?: SubmitEvent): void => {
+          this.injectHostKey(EVDEV_KEY_ENTER);
+          if (event !== undefined) event.keepEditableState();
+        })
+        .zIndex(0)
       if (this.snapshot.visible) {
         VirtualInputOverlay({
           profile: this.profile,
@@ -683,6 +848,7 @@ struct InputOverlayPage {
           touchpadMode: this.touchpadMode,
           onOpenLayoutEditor: (): void => { this.openInputEditor('input-layout'); },
           onOpenKeyMappingEditor: (): void => { this.openInputEditor('key-mapping'); },
+          onToggleHostKeyboard: (): void => { this.toggleHostKeyboard(); },
           onControlsVisibleChange: (visible: boolean): void => {
             InputOverlayWindowCoordinator.getInstance().setControlsVisible(visible);
           },

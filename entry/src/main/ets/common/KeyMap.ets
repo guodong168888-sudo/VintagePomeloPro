@@ -142,3 +142,41 @@ export const MODIFIER_CODES: number[] = [
   2076, 2077,   // META_LEFT, META_RIGHT
   2074,          // CAPS_LOCK
 ]
+
+/** evdev 键码常量, 供宿主键盘文本→按键回退注入使用。 */
+export const EVDEV_KEY_BACKSPACE: number = 14;
+export const EVDEV_KEY_ENTER: number = 28;
+export const EVDEV_KEY_SPACE: number = 57;
+export const EVDEV_KEY_LEFTSHIFT: number = 42;
+
+/** 可打印 ASCII 字符 → evdev 基础键码 (字母一律大写键位, 大小写由 shift 表达)。 */
+const ASCII_BASE_EVDEV: Record<string, number> = {
+  ' ': EVDEV_KEY_SPACE,
+  'a': 30, 'b': 48, 'c': 46, 'd': 32, 'e': 18, 'f': 33, 'g': 34, 'h': 35,
+  'i': 23, 'j': 36, 'k': 37, 'l': 38, 'm': 50, 'n': 49, 'o': 24, 'p': 25,
+  'q': 16, 'r': 19, 's': 31, 't': 20, 'u': 22, 'v': 47, 'w': 17, 'x': 45,
+  'y': 21, 'z': 44,
+  '0': 11, '1': 2, '2': 3, '3': 4, '4': 5, '5': 6, '6': 7, '7': 8, '8': 9, '9': 10,
+  '`': 41, '-': 12, '=': 13, '[': 26, ']': 27, '\\': 43, ';': 39, "'": 40,
+  ',': 51, '.': 52, '/': 53,
+  '~': 41, '_': 12, '+': 13, '{': 26, '}': 27, '|': 43, ':': 39, '"': 40,
+  '<': 51, '>': 52, '?': 53,
+  '!': 2, '@': 3, '#': 4, '$': 5, '%': 6, '^': 7, '&': 8, '*': 9, '(': 10, ')': 11
+};
+
+const ASCII_SHIFT_CHARS: string = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ~_+{}|:"<>?!@#$%^&*()';
+
+export interface AsciiKeyMap {
+  code: number;
+  shift: boolean;
+}
+
+/** 单个可打印 ASCII 字符 → 按键注入方案; 非 ASCII/控制字符返回 null。 */
+export function asciiToEvdevKey(ch: string): AsciiKeyMap | null {
+  if (ch.length !== 1) return null;
+  if (ch === '\n' || ch === '\r') return { code: EVDEV_KEY_ENTER, shift: false };
+  if (ch === '\t') return { code: 15, shift: false };
+  const base = ASCII_BASE_EVDEV[ch];
+  if (base === undefined) return null;
+  return { code: base, shift: ASCII_SHIFT_CHARS.indexOf(ch) >= 0 };
+}
