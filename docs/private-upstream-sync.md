@@ -173,3 +173,15 @@
 - DXVK/VirGL 方针对齐（`1dbed33`）：DXVK override 从全 D3D native 改回 master 的 `d3d11=n;dxgi=n`。原因：Venus/Maleoon 栈上 DXVK 对 DX9/10 兼容性弱于 WineD3D→GL→VirGL，全 D3D 走 DXVK 会破坏 VirGL 驱动游戏；上游评估文档亦确认 Maleoon 910/920 达不到 DXVK 2.x 基线，Modern 仅作独立 profile 待能力门禁。真机回归：D3D11 立方体 dxvk_legacy 80+ FPS 正常。
 - 版本：1.1.3（1001003）。
 - 产物：`F:\PomeloWin\artifacts\VintagePomeloPro-1.1.3-20260804\`（debug HAP `74F18840…`、release APP `02A6599A…`、release entry HAP `EB159976…`，均验签 Verify success）。
+
+### 2026-08-14 TLS 网络修复 + gstreamer 子模块修补（版本 1.2.1 / 1002001）
+
+- 根因（设备实测）：Box64 0.4.3 dynarec 误译 GnuTLS 的 AES-NI/PCLMULQDQ（AES-GCM 加速路径）与 ChaCha20/Poly1305（SSSE3 路径），HTTPS 响应解密得到乱码（WinHTTP 12152 / 百度 https 400）或 access violation。解释器模式下全部通过（Steam 200 / 百度 200 / msedge 404，与 Windows 基线一致），故非 UA、非环境、非 Wine 代码缺陷。
+- 修复（最小改动）：
+  - `wine_env.h`：Box64 模拟 cpuid 屏蔽 `BOX64_AES=0`、`BOX64_PCLMULQDQ=0`，GnuTLS/nettle 与 Steam 静态 OpenSSL 1.1.1i 回退纯 C AES-GCM；
+  - wine 子模块 `schannel_gnutls.c`：schannel 优先级禁用 `CHACHA20-POLY1305`，强制协商 AES-GCM（与 Windows schannel 一致）；
+  - glib `meson.build`（format-security/format-nonliteral 容忍）、pcre2 `config.h.in`（autoconf 重生成）：gstreamer 链 OHOS musl 交叉编译修补。
+- 验证：Windows 同源探针 0 failed；ARM64 设备 JIT 全开实测 Steam CDN 200（1.6s）、百度 http/https 200、msedge 404、WinINet 200；Steam 引导更新成功下载 manifest 并进入 336MB 客户端下载，Edge 安装器可下载。仅剩偶发原始 TCP 冷连接超时（网络抖动，重试即通）。
+- 合并 core_extract：本地分支 `core_extract`（基于 winehua/core-extract `a0226d8`）提交 `75a48a9`，仅含上述 TLS + gstreamer 子模块修补；排除 Network Test 卡片、自动启动钩子、UI/桌面改动与版本号。未推送到任何远端。
+- 版本：1.2.1（1002001）；wine-data 标记 `wine-engine-app-20260814.15-prod`。
+- 产物：`F:\PomeloWin\artifacts\VintagePomeloPro-1.2.1-20260814\`（release APP `963d2b55…`、release entry HAP `a1d3c026…`、debug HAP `7fa592ec…`，正式包 verify-app success，SHA384withECDSA）。
