@@ -77,7 +77,6 @@ struct InputLayoutEditor {
   @State private previewH: number = 0;
   @State private selectedElementId: string = '';
   @State private previewRevision: number = 0;
-  @State private editorCollapsed: boolean = false;
   private gridContext: CanvasRenderingContext2D = new CanvasRenderingContext2D();
   @State private showPropertyPanel: boolean = false;
   @State private pickerOpen: boolean = false;
@@ -275,16 +274,6 @@ struct InputLayoutEditor {
     await this.restoreEditorWindow();
     router.back();
     this.resumeWineAbility();
-  }
-
-  private toggleEditorCollapsed(): void {
-    this.editorCollapsed = !this.editorCollapsed;
-    if (this.editorCollapsed) {
-      this.showPropertyPanel = false;
-      this.pickerOpen = false;
-      this.pickerTargetSlot = -1;
-      this.pickerTargetKeyList = false;
-    }
   }
 
   private resumeWineAbility(): void {
@@ -565,14 +554,18 @@ struct InputLayoutEditor {
   }
 
   private reset(): void {
-    const defaults = createDefaultInputProfile();
-    this.profile = cloneInputProfile(defaults);
+    // 恢复“本次编辑前”的状态: 重新读取已保存的当前方案, 不重置为出厂模板。
+    let saved = InputProfileService.getInstance().getProfile(this.profileId);
+    if (saved.id !== this.profileId) {
+      saved = InputProfileService.getInstance().getProfile(this.baseProfileId);
+    }
+    this.profile = cloneInputProfile(saved);
     this.profile.id = this.profileId;
     this.profile.name = this.profileName;
     this.selectedElementId = '';
     this.showPropertyPanel = false;
     this.previewRevision++;
-    promptAction.showToast({ message: '已恢复默认模板' });
+    promptAction.showToast({ message: '已恢复本次修改前的方案' });
   }
 
   private async save(): Promise<void> {
@@ -733,7 +726,7 @@ struct InputLayoutEditor {
       this.AddChip('触摸板', '#FFFFB74D', (): void => this.addElement(ControlElementType.TRACKPAD), 'editor-add-trackpad')
       this.AddChip('滚动键', '#FFAB47BC', (): void => this.addElement(ControlElementType.RANGE_BUTTON), 'editor-add-range')
       Row().width(1).height(24).backgroundColor('#33FFFFFF')
-      this.ToolbarIconButton('⌄', '#FF64B5F6', (): void => { this.toggleEditorCollapsed(); }, 'input-layout-fold')
+      this.ToolbarIconButton('✕', '#FFFF5252', (): void => { this.finishEditor(); }, 'input-layout-back')
       this.ToolbarIconButton('↺', '#FFFFB74D', (): void => { this.reset(); }, 'input-layout-reset')
       this.ToolbarIconButton('⧉', '#FFAB47BC', (): void => { this.duplicateSelectedElement(); }, 'input-layout-duplicate')
       this.ToolbarIconButton('删', '#FFFF5252', (): void => { this.removeSelectedElement(); }, 'input-layout-delete')
@@ -865,7 +858,6 @@ struct InputLayoutEditor {
               .fontColor('#FFFFFFFF').fontWeight(FontWeight.Medium)
           }
           .layoutWeight(1)
-          Text('✕').fontSize(14).fontColor('#FFFF5252').onClick((): void => { this.showPropertyPanel = false; })
         }
         .width('100%').height(34).padding({ left: 12, right: 12 })
         .hitTestBehavior(HitTestMode.Block)
@@ -1012,48 +1004,43 @@ struct InputLayoutEditor {
   build() {
     Column() {
       if (this.safeAreaTop > 0) {
-        Row().width('100%').height(this.safeAreaTop + 'px')
-          .backgroundColor(this.editorCollapsed ? '#00000000' : '#FF000000')
+        Row().width('100%').height(this.safeAreaTop + 'px').backgroundColor('#FF000000')
       }
       Stack() {
-        if (this.editorCollapsed) {
-          this.CollapsedHandle()
-        } else {
-          Column().width('100%').height('100%').backgroundColor('#FF1A1A2E')
-          // 编辑参考网格：密集细线，帮助按钮对齐（只在编辑器内显示）。
-          Canvas(this.gridContext)
-            .width('100%').height('100%')
-            .onReady(() => this.drawEditorGrid())
+        Column().width('100%').height('100%').backgroundColor('#FF1A1A2E')
+        // 编辑参考网格：密集细线，帮助按钮对齐（只在编辑器内显示）。
+        Canvas(this.gridContext)
           .width('100%').height('100%')
-          .hitTestBehavior(HitTestMode.None)
-          VirtualInputOverlay({
-            profile: this.profile,
-            renderRevision: this.previewRevision,
-            interactive: false,
-            hideToolbar: true,
-            editMode: true,
-            selectedElementId: this.selectedElementId,
-            onElementMove: (id: string, x: number, y: number): void => this.moveElement(id, x, y),
-            onElementScale: (id: string, scale: number): void => this.scaleElement(id, scale),
-            onElementSelected: (id: string): void => {
-              this.selectedElementId = id;
-              this.showPropertyPanel = id.length > 0;
-            }
-          })
-            .width('100%').height('100%')
-          this.ToolbarContainer()
-          if (this.showPropertyPanel && this.selectedElementId.length > 0) {
-            this.PropertyPanel()
+          .onReady(() => this.drawEditorGrid())
+        .width('100%').height('100%')
+        .hitTestBehavior(HitTestMode.None)
+        VirtualInputOverlay({
+          profile: this.profile,
+          renderRevision: this.previewRevision,
+          interactive: false,
+          hideToolbar: true,
+          editMode: true,
+          selectedElementId: this.selectedElementId,
+          onElementMove: (id: string, x: number, y: number): void => this.moveElement(id, x, y),
+          onElementScale: (id: string, scale: number): void => this.scaleElement(id, scale),
+          onElementSelected: (id: string): void => {
+            this.selectedElementId = id;
+            this.showPropertyPanel = id.length > 0;
           }
-          if (this.pickerOpen) {
-            Column().width('100%').height('100%').backgroundColor('#66000000')
-              .onClick((): void => {
-                this.pickerOpen = false;
-                this.pickerTargetSlot = -1;
-                this.pickerTargetKeyList = false;
-              })
-            this.KeyPicker()
-          }
+        })
+          .width('100%').height('100%')
+        this.ToolbarContainer()
+        if (this.showPropertyPanel && this.selectedElementId.length > 0) {
+          this.PropertyPanel()
+        }
+        if (this.pickerOpen) {
+          Column().width('100%').height('100%').backgroundColor('#66000000')
+            .onClick((): void => {
+              this.pickerOpen = false;
+              this.pickerTargetSlot = -1;
+              this.pickerTargetKeyList = false;
+            })
+          this.KeyPicker()
         }
       }
       .width('100%').height('100%')
@@ -1063,25 +1050,6 @@ struct InputLayoutEditor {
         this.drawEditorGrid();
       })
     }
-    .width('100%').height('100%')
-    .backgroundColor(this.editorCollapsed ? '#00000000' : '#FF1A1A2E')
-  }
-
-  @Builder
-  private CollapsedHandle() {
-    Row({ space: 8 }) {
-      Text('▴').fontSize(15).fontColor('#FFFFFFFF').width(30).height(30).textAlign(TextAlign.Center)
-        .backgroundColor('#33262626').borderRadius(15)
-        .id('editor-collapsed-expand').hitTestBehavior(HitTestMode.Block)
-        .onClick((): void => { this.toggleEditorCollapsed(); })
-      Text('✓ 保存').fontSize(12).fontColor('#FFFFFFFF').padding({ left: 8, right: 10, top: 6, bottom: 6 })
-        .backgroundColor('#335C8DFF').borderRadius(13)
-        .id('editor-collapsed-save').hitTestBehavior(HitTestMode.Block)
-        .onClick((): void => { this.save(); })
-    }
-    .padding(6)
-    .backgroundColor('#D914141C').borderRadius(18).border({ width: 1, color: '#44FFFFFF' })
-    .position({ x: this.toolbarPositionX(), y: this.toolbarPositionY() })
-    .zIndex(130).id('editor-collapsed-handle')
+    .width('100%').height('100%').backgroundColor('#FF1A1A2E')
   }
 }
