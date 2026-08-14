@@ -553,6 +553,7 @@ export class AppCatalogService {
         { id: 'builtin-taskmgr', title: '任务管理器', launchKind: 'wine-system', launchParams: { executable: 'taskmgr.exe' }, cover: '' },
         { id: 'builtin-regedit', title: '注册表编辑器', launchKind: 'wine-system', launchParams: { executable: 'regedit.exe' }, cover: '' },
         { id: 'builtin-cmd', title: '命令提示符', launchKind: 'wine-system', launchParams: { executable: 'wineconsole.exe', arguments: ['cmd.exe'] }, cover: '' },
+        { id: 'builtin-notepad', title: '记事本', launchKind: 'wine-system', launchParams: { executable: 'C:\\windows\\system32\\notepad.exe' }, cover: '' },
         { id: 'builtin-graphics-smoke', title: '图形测试', launchKind: 'wine-system', launchParams: { executable: 'winehua_graphics_smoke.exe' }, cover: '' },
         { id: 'builtin-dxvk-cube', title: 'DXVK 立方体测试', launchKind: 'wine-system', launchParams: {
           executable: 'C:\\smoke\\x64\\winehua_d3d_switch_cube.exe', arguments: ['--d3d11'],

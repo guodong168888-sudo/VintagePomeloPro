@@ -67,6 +67,7 @@ export struct AppCard {
     if (this.app.id === 'builtin-taskmgr') return $r('app.media.builtin_taskmgr');
     if (this.app.id === 'builtin-regedit') return $r('app.media.builtin_regedit');
     if (this.app.id === 'builtin-cmd') return $r('app.media.builtin_cmd');
+    if (this.app.id === 'builtin-notepad') return $r('app.media.builtin_notepad');
     if (this.app.id === 'builtin-graphics-smoke') return $r('app.media.builtin_graphics');
     if (this.app.id === 'builtin-dxvk-cube') return $r('app.media.builtin_graphics');
     if (this.app.id === 'builtin-audio-smoke') return $r('app.media.builtin_audio');
@@ -175,8 +176,9 @@ export struct AppCard {
 
       if (this.viewMode === ViewMode.COMPACT) {
         Row({ space: 4 }) {
-          this.CompactBadge(this.app.source === AppSource.BUILTIN ? '内建' : 'Download',
-            this.app.source === AppSource.BUILTIN ? '#E02979B8' : '#E02C7666')
+          if (this.app.source === AppSource.BUILTIN) {
+            this.CompactBadge('内建', '#E02979B8')
+          }
         }
         .padding({ left: 8, right: 8, top: 8 })
         if (this.running) {
@@ -187,8 +189,9 @@ export struct AppCard {
         }
       } else {
         Row({ space: 5 }) {
-          this.Badge(this.app.source === AppSource.BUILTIN ? '内建' : 'Download',
-            this.app.source === AppSource.BUILTIN ? '#DE2979B8' : '#DE2C7B64')
+          if (this.app.source === AppSource.BUILTIN) {
+            this.Badge('内建', '#DE2979B8')
+          }
           if (this.running) {
             this.Badge('运行中', '#CC22A06B')
           }

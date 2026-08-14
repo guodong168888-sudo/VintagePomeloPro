@@ -58,6 +58,13 @@
       "cover": ""
     },
     {
+      "id": "builtin-notepad",
+      "title": "记事本",
+      "launchKind": "wine-system",
+      "launchParams": { "executable": "C:\\windows\\system32\\notepad.exe", "arguments": [], "workingDirectory": "" },
+      "cover": ""
+    },
+    {
       "id": "builtin-graphics-smoke",
       "title": "图形测试",
       "launchKind": "wine-system",

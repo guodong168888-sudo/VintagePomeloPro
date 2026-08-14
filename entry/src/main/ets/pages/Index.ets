@@ -64,6 +64,12 @@ const SUPPORTS_HDS_FLOATING: boolean =
   canIUse('SystemCapability.UIDesign.HDSComponent.Core') && DEVICE_SDK_API_VERSION >= 23;
 const HDS_MATERIAL_TYPE_IMMERSIVE: number = 101;
 const HDS_MATERIAL_LEVEL_EXQUISITE: number = 0;
+
+interface ScrollOffsetSnapshot {
+  xOffset: number;
+  yOffset: number;
+}
+
 @Entry
 @Component
 struct Index {
@@ -93,6 +99,7 @@ struct Index {
   private windowsScroller: Scroller = new Scroller();
   private favoriteScroller: Scroller = new Scroller();
   private runningScroller: Scroller = new Scroller();
+  private scrollOffsets: Record<string, ScrollOffsetSnapshot> = {};
   private breakpointCallback: ((value: BreakpointType) => void) | null = null;
   private engineCallback: ((state: EngineState, message: string) => void) | null = null;
   private settingsCallback: ThemeSettingsListener | null = null;
@@ -184,7 +191,9 @@ struct Index {
     if (this.catalogInitialized) {
       // Wine/File Explorer can add, rename or remove programs while this page
       // is hidden. Reconcile the catalog whenever it becomes visible again.
-      void this.rescan();
+      void this.rescan().then((): void => {
+        setTimeout((): void => this.restoreScrollOffset(this.filter), 0);
+      });
     } else {
       this.refreshRunningState();
     }
@@ -192,7 +201,33 @@ struct Index {
   }
 
   onPageHide(): void {
+    this.captureScrollOffsets();
     this.stopWindowInsetObserver();
+  }
+
+  private captureScrollOffsets(): void {
+    this.scrollOffsets['builtin'] = this.safeScrollOffset(this.builtinScroller);
+    this.scrollOffsets['windows'] = this.safeScrollOffset(this.windowsScroller);
+    this.scrollOffsets['favorite'] = this.safeScrollOffset(this.favoriteScroller);
+    this.scrollOffsets['running'] = this.safeScrollOffset(this.runningScroller);
+  }
+
+  private safeScrollOffset(scroller: Scroller): ScrollOffsetSnapshot {
+    try {
+      const offset = scroller.currentOffset();
+      return { xOffset: offset.xOffset, yOffset: offset.yOffset };
+    } catch (_) {
+      return { xOffset: 0, yOffset: 0 };
+    }
+  }
+
+  private restoreScrollOffset(filter: CatalogFilter): void {
+    const saved = this.scrollOffsets[filter];
+    if (!saved) return;
+    try {
+      this.catalogScroller(filter).scrollTo({ xOffset: saved.xOffset, yOffset: saved.yOffset });
+    } catch (_) {
+    }
   }
 
   private async applyPageWindowShell(): Promise<void> {
@@ -347,8 +382,10 @@ struct Index {
   }
 
   private selectFilter(value: CatalogFilter, syncPhoneNavigation: boolean = true): void {
+    this.captureScrollOffsets();
     this.filter = value;
     this.visibleApps = this.filterApps(this.searchQuery, value);
+    setTimeout((): void => this.restoreScrollOffset(value), 0);
     if (syncPhoneNavigation && this.isPhone()) {
       const index = this.phoneNavIndexForFilter(value);
       if (index !== this.phoneNavIndex) {
