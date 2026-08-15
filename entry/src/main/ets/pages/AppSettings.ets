@@ -1,5 +1,6 @@
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
+import fs from '@ohos.file.fs';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { fileUri, picker } from '@kit.CoreFileKit';
 import {
@@ -230,6 +231,8 @@ struct AppSettingsPage {
     this.stopWindowInsetObserver();
     if (this.executablePickerController) this.executablePickerController.close();
     this.executablePickerController = null;
+    // 修改即保存：离开页面时兜底持久化，确保直接返回也不丢失任何修改。
+    void this.persist();
   }
 
   onPageShow(): void {
@@ -289,11 +292,16 @@ struct AppSettingsPage {
     };
   }
 
-  private async save(): Promise<void> {
+  /** 修改即保存：仅持久化设置，目录卡片在返回主页面时自动刷新。 */
+  private async persist(): Promise<void> {
+    await AppSettingsStore.getInstance().saveAppSettings(this.value);
+  }
+
+  /** 持久化并刷新目录缓存（封面、主程序等需要立即反映到卡片）。 */
+  private async persistAndScan(message: string): Promise<void> {
     await AppSettingsStore.getInstance().saveAppSettings(this.value);
     await AppCatalogService.getInstance().scan();
-    promptAction.showToast({ message: '应用设置已保存' });
-    router.back();
+    if (message.length > 0) promptAction.showToast({ message: message });
   }
 
   private relativeExecutablePath(directory: string, executable: string): string {
@@ -303,13 +311,13 @@ struct AppSettingsPage {
     return target;
   }
 
-  private selectExecutableCandidate(executable: string): void {
+  private async selectExecutableCandidate(executable: string): Promise<void> {
     const separator = executable.lastIndexOf('/');
     const workingDirectory = separator > 0 ? executable.substring(0, separator) : this.value.workingDirectory;
     this.replace(this.value.customTitle, this.value.customCover, executable,
       workingDirectory, this.value.displayModeOverride);
     this.executablePickerController = null;
-    promptAction.showToast({ message: '已选择主程序，请点击右上角保存' });
+    await this.persistAndScan('已选择主程序');
   }
 
   private async openExecutablePicker(): Promise<void> {
@@ -329,7 +337,7 @@ struct AppSettingsPage {
       builder: WindowsExecutablePickerDialog({
         choices: choices,
         selectedPath: this.value.executable,
-        onSelect: (path: string): void => this.selectExecutableCandidate(path)
+        onSelect: (path: string): void => { void this.selectExecutableCandidate(path); }
       }),
       cancel: (): void => { this.executablePickerController = null; },
       autoCancel: true,
@@ -346,17 +354,71 @@ struct AppSettingsPage {
 
   private async selectCover(): Promise<void> {
     try {
-      const documentPicker = new picker.DocumentViewPicker(this.context);
-      const options = new picker.DocumentSelectOptions();
-      options.fileSuffixFilters = ['图片|.png,.jpg,.jpeg,.webp,.bmp'];
-      options.maxSelectNumber = 1;
-      const result = await documentPicker.select(options);
-      if (!result || result.length === 0) return;
-      const cover = new fileUri.FileUri(result[0]).path;
+      // 用图片选择器（相册）而非文件选择器：直接浏览图片，体验更符合"选择封面"。
+      const photoPicker = new picker.PhotoViewPicker();
+      const photoSelectOptions = new picker.PhotoSelectOptions();
+      photoSelectOptions.MIMEType = picker.PhotoViewMIMETypes.IMAGE_TYPE;
+      photoSelectOptions.maxSelectNumber = 1;
+      const result = await photoPicker.select(photoSelectOptions);
+      if (!result || result.photoUris.length === 0) return;
+      const cover = await this.importCover(result.photoUris[0]);
+      if (cover.length === 0) {
+        promptAction.showToast({ message: '封面复制失败，请重试' });
+        return;
+      }
       this.replace(this.value.customTitle, cover, this.value.executable,
         this.value.workingDirectory, this.value.displayModeOverride);
+      await this.persistAndScan('封面已更新');
     } catch (_) {
       promptAction.showToast({ message: '未选择封面' });
+    }
+  }
+
+  /**
+   * 把选择器授权的封面图片复制到应用私有目录（filesDir/covers）后返回本地路径。
+   * picker 返回的 URI 授权只在当次会话有效，且媒体库/文档 URI 需要额外权限；
+   * 直接保存原始 URI 会导致卡片封面在重启或切换应用后无法显示。
+   * 复制到应用沙箱内则始终可读，Image 加载 file:// 本地路径即可稳定展示。
+   */
+  private async importCover(uri: string): Promise<string> {
+    let srcFd: number = -1;
+    try {
+      const coverBase = this.value.appId.replace(/[^a-zA-Z0-9_-]/g, '_');
+      // 媒体库 URI 可能带缩略图 query（?timestampApp=...&path=...），
+      // 取文件名前先剥离，避免 query 里的分隔符污染扩展名。
+      const cleanUri = uri.split('?')[0];
+      const coverName = new fileUri.FileUri(cleanUri).name;
+      const dot = coverName.lastIndexOf('.');
+      const ext = dot > 0 ? coverName.substring(dot).toLowerCase() : '.png';
+      const dir = this.context.filesDir + '/covers';
+      await fs.mkdir(dir, true);
+      const dest = dir + '/' + coverBase + ext;
+      srcFd = fs.openSync(uri, fs.OpenMode.READ_ONLY).fd;
+      await fs.copyFile(srcFd, dest);
+      await this.cleanupOldCovers(dir, coverBase, dest);
+      return dest;
+    } catch (_) {
+      return '';
+    } finally {
+      if (srcFd >= 0) {
+        try { fs.closeSync(srcFd); } catch (_) {}
+      }
+    }
+  }
+
+  /** 清理同一应用旧扩展名的封面文件，避免私有目录无限增长。 */
+  private async cleanupOldCovers(dir: string, coverBase: string, keep: string): Promise<void> {
+    try {
+      const names: string[] = await fs.listFile(dir);
+      const keepName = keep.substring(keep.lastIndexOf('/') + 1);
+      for (let index = 0; index < names.length; index++) {
+        const name = names[index];
+        if (name === keepName) continue;
+        if (name.startsWith(coverBase + '.')) {
+          try { fs.unlinkSync(dir + '/' + name); } catch (_) {}
+        }
+      }
+    } catch (_) {
     }
   }
 
@@ -436,6 +498,7 @@ struct AppSettingsPage {
       inputProfileId: this.value.inputProfileId,
       prefixId: this.value.prefixId
     };
+    void this.persist();
   }
 
   private setBox64Preset(preset: string): void {
@@ -453,6 +516,7 @@ struct AppSettingsPage {
       inputProfileId: this.value.inputProfileId,
       prefixId: this.value.prefixId
     };
+    void this.persist();
   }
 
   @Builder
@@ -471,7 +535,11 @@ struct AppSettingsPage {
         Column({ space: 18 }) {
           Column({ space: 16 }) {
             Text('卡片与启动').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
-            this.Field('显示名称', this.value.customTitle, (text: string): void => this.replace(text, this.value.customCover, this.value.executable, this.value.workingDirectory, this.value.displayModeOverride))
+            this.Field('显示名称', this.value.customTitle, (text: string): void => {
+              this.replace(text, this.value.customCover, this.value.executable,
+                this.value.workingDirectory, this.value.displayModeOverride);
+              void this.persist();
+            })
             Row() {
               Column({ space: 4 }) {
                 Text('收藏').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
@@ -625,14 +693,7 @@ struct AppSettingsPage {
             subTitle: this.isCompact() ? undefined : '封面、启动方式、显示模式和专用输入布局'
           },
           menu: {
-            value: [
-              {
-                content: {
-                  icon: $r('sys.symbol.checkmark'),
-                  action: (): void => { this.save(); }
-                }
-              }
-            ],
+            value: [],
             maxCount: 1
           } as HdsNavigationMenuContentOptions,
           divider: { showType: DividerShowType.OFF }
