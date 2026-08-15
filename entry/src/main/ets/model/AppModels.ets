@@ -667,7 +667,7 @@ export const INPUT_TEMPLATES: InputTemplate[] = [
   },
   {
     id: 'full-keyboard', name: '全键盘', description: '完整字母、数字、功能键与方向键',
-    builtInProfileId: 'builtin-full-keyboard', profileName: '全键盘', revision: 5
+    builtInProfileId: 'builtin-full-keyboard', profileName: '全键盘', revision: 14
   },
   {
     id: 'rpg', name: 'RPG', description: '移动、交互、背包、地图与技能快捷栏',
@@ -736,7 +736,7 @@ function keyboardTemplateKeyElement(key: KeyboardTemplateKey, x: number, y: numb
     [],
     'vertical',
     'keys',
-    key.units ?? 1);
+    1);
   if (keyWidthRatio !== undefined) element.keyWidthRatio = keyWidthRatio;
   if (keyHeightRatio !== undefined) element.keyHeightRatio = keyHeightRatio;
   return element;
@@ -762,7 +762,7 @@ function appendKeyboardRow(elements: ControlElement[], keys: KeyboardTemplateKey
     cursor += key.gapBefore ?? 0;
     const units = key.units ?? 1;
     const center = left + (right - left) * (cursor + units / 2) / totalUnits;
-    const keyWidthRatio = unitWidthRatio * units * 0.94;
+    const keyWidthRatio = unitWidthRatio * units * 0.985;
     elements.push(keyboardTemplateKeyElement(key, center, y, scale, keyWidthRatio, keyHeightRatio));
     cursor += units;
   });
@@ -771,46 +771,46 @@ function appendKeyboardRow(elements: ControlElement[], keys: KeyboardTemplateKey
 function fullKeyboardTemplateElements(): ControlElement[] {
   const elements: ControlElement[] = [];
   appendKeyboardRow(elements, [
-    { label: 'Esc', code: 1 }, { label: 'F1', code: 59, gapBefore: 0.7 }, { label: 'F2', code: 60 },
-    { label: 'F3', code: 61 }, { label: 'F4', code: 62 }, { label: 'F5', code: 63, gapBefore: 0.35 },
+    { label: 'Esc', code: 1 }, { label: 'F1', code: 59, gapBefore: 0.5 }, { label: 'F2', code: 60 },
+    { label: 'F3', code: 61 }, { label: 'F4', code: 62 }, { label: 'F5', code: 63, gapBefore: 0.25 },
     { label: 'F6', code: 64 }, { label: 'F7', code: 65 }, { label: 'F8', code: 66 },
-    { label: 'F9', code: 67, gapBefore: 0.35 }, { label: 'F10', code: 68 }, { label: 'F11', code: 87 },
+    { label: 'F9', code: 67, gapBefore: 0.25 }, { label: 'F10', code: 68 }, { label: 'F11', code: 87 },
     { label: 'F12', code: 88 }
-  ], 0.545, 0.11, 0.89, 0.32, 0.080);
+  ], 0.545, 0.08, 0.93, 1.00, 0.085);
   appendKeyboardRow(elements, [
     { label: '`', code: 41 },
     { label: '1', code: 2 }, { label: '2', code: 3 }, { label: '3', code: 4 },
     { label: '4', code: 5 }, { label: '5', code: 6 }, { label: '6', code: 7 },
     { label: '7', code: 8 }, { label: '8', code: 9 }, { label: '9', code: 10 },
     { label: '0', code: 11 }, { label: '-', code: 12 }, { label: '=', code: 13 },
-    { label: 'Back', code: 14, units: 1.9 }
-  ], 0.625, 0.11, 0.72, 0.38, 0.075);
+    { label: 'Back', code: 14, units: 0.9 }
+  ], 0.625, 0.07, 0.75, 1.00, 0.082);
   appendKeyboardRow(elements, [
-    { label: 'Tab', code: 15, units: 1.5 }, { label: 'Q', code: 16 }, { label: 'W', code: 17 },
+    { label: 'Tab', code: 15, units: 0.9 }, { label: 'Q', code: 16 }, { label: 'W', code: 17 },
     { label: 'E', code: 18 }, { label: 'R', code: 19 }, { label: 'T', code: 20 },
     { label: 'Y', code: 21 }, { label: 'U', code: 22 }, { label: 'I', code: 23 },
     { label: 'O', code: 24 }, { label: 'P', code: 25 }, { label: '[', code: 26 },
-    { label: ']', code: 27 }, { label: '\\', code: 43, units: 1.5 }
-  ], 0.700, 0.11, 0.72, 0.38, 0.075);
+    { label: ']', code: 27 }, { label: '\\', code: 43, units: 1.4 }
+  ], 0.700, 0.07, 0.75, 1.00, 0.082);
   appendKeyboardRow(elements, [
-    { label: 'Caps', code: 58, units: 1.8 }, { label: 'A', code: 30 }, { label: 'S', code: 31 },
+    { label: 'Caps', code: 58, units: 1.0 }, { label: 'A', code: 30 }, { label: 'S', code: 31 },
     { label: 'D', code: 32 }, { label: 'F', code: 33 }, { label: 'G', code: 34 },
     { label: 'H', code: 35 }, { label: 'J', code: 36 }, { label: 'K', code: 37 },
     { label: 'L', code: 38 }, { label: ';', code: 39 }, { label: "'", code: 40 },
-    { label: 'Enter', code: 28, units: 2.2 }
-  ], 0.775, 0.11, 0.72, 0.38, 0.075);
+    { label: 'Enter', code: 28, units: 1.0 }
+  ], 0.775, 0.07, 0.75, 1.00, 0.082);
   appendKeyboardRow(elements, [
-    { label: 'Shift', code: 42, units: 2.3 }, { label: 'Z', code: 44 }, { label: 'X', code: 45 },
+    { label: 'Shift', code: 42, units: 1.0 }, { label: 'Z', code: 44 }, { label: 'X', code: 45 },
     { label: 'C', code: 46 }, { label: 'V', code: 47 }, { label: 'B', code: 48 },
     { label: 'N', code: 49 }, { label: 'M', code: 50 }, { label: ',', code: 51 },
-    { label: '.', code: 52 }, { label: '/', code: 53 }, { label: 'Shift', code: 54, units: 2.7 }
-  ], 0.850, 0.11, 0.72, 0.38, 0.075);
+    { label: '.', code: 52 }, { label: '/', code: 53 }, { label: 'Shift', code: 54, units: 1.0 }
+  ], 0.850, 0.07, 0.75, 1.00, 0.082);
   appendKeyboardRow(elements, [
-    { label: 'Ctrl', code: 29, units: 1.5 }, { label: 'Win', code: 125, units: 1.2 },
-    { label: 'Alt', code: 56, units: 1.25 }, { label: 'Space', code: 57, units: 5.6 },
-    { label: 'Alt', code: 100, units: 1.25 }, { label: 'Menu', code: 127, units: 1.2 },
-    { label: 'Ctrl', code: 97, units: 1.5 }
-  ], 0.925, 0.11, 0.69, 0.38, 0.075);
+    { label: 'Ctrl', code: 29, units: 0.9 }, { label: 'Win', code: 125, units: 0.75 },
+    { label: 'Alt', code: 56, units: 0.8 }, { label: 'Space', code: 57, units: 0.8 },
+    { label: 'Alt', code: 100, units: 0.8 }, { label: 'Menu', code: 127, units: 0.75 },
+    { label: 'Ctrl', code: 97, units: 0.9 }
+  ], 0.925, 0.07, 0.71, 1.00, 0.082);
 
   // Standard six-key navigation block and inverted-T arrow cluster.
   const navigationKeys: Array<[string, number, number, number]> = [
@@ -822,7 +822,7 @@ function fullKeyboardTemplateElements(): ControlElement[] {
   navigationKeys.forEach((key: [string, number, number, number]): void => {
     // 导航/方向键: 三个一列, 列距 0.055, 行距 0.075, 尺寸按槽位填充。
     elements.push(keyboardTemplateKeyElement({ label: key[0], code: key[1], units: 0.92 },
-      key[2], key[3], 0.34, 0.052, 0.063));
+      key[2], key[3], 1.00, 0.052, 0.075));
   });
   return elements;
 }

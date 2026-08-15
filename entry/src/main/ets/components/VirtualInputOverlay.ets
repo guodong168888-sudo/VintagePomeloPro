@@ -240,10 +240,11 @@ export struct VirtualInputOverlay {
       const heightRatio = element.keyHeightRatio ?? 0;
       if (widthRatio <= 0 || heightRatio <= 0) continue;
       found = true;
-      left = Math.min(left, (element.x ?? 0.5) - widthRatio / 2);
-      right = Math.max(right, (element.x ?? 0.5) + widthRatio / 2);
-      top = Math.min(top, (element.y ?? 0.5) - heightRatio / 2);
-      bottom = Math.max(bottom, (element.y ?? 0.5) + heightRatio / 2);
+      const elementScale = element.scale ?? 1;
+      left = Math.min(left, (element.x ?? 0.5) - widthRatio * elementScale / 2);
+      right = Math.max(right, (element.x ?? 0.5) + widthRatio * elementScale / 2);
+      top = Math.min(top, (element.y ?? 0.5) - heightRatio * elementScale / 2);
+      bottom = Math.max(bottom, (element.y ?? 0.5) + heightRatio * elementScale / 2);
     }
     if (!found) return null;
     const margin = 0.014;
