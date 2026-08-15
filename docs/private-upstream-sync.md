@@ -197,5 +197,5 @@
   - `6081dcf` fix(audio) 来电打断后恢复发声：**已包含**——该修复此前经 PR #58 合入 master，main 已有等价 `f5d807b`，无新内容。
   - `5576283` wine 子模块 → `037984b`（win32u 最小化豁免 present_rect）：**分叉分支**（与当前 `4e8f9f5` 共同祖先 `b7f43d4`），直接切换会**丢失私有仓 secur32 CHACHA20-POLY1305 禁用修复**（4e8f9f5 独有，TLS 1.2.1 验证过）。如需 win32u 修复，应在 wine 子模块内基于 4e8f9f5 单独 cherry-pick，另行评估。
   - `0cbb1aa` fix(files) 文件页自动加载 C: 根目录：依赖上游 "engine service 化" 大规模重构（`prefixReady/curDir/DRIVE_C` 结构），私有 UI 未做该重构，跳过。
-  - 其余 ~195 提交：跨版本重构（engine service 化/几何收敛/UI 状态机）、品牌、CI/构建、docs，按维护约定不整体合并；后续如需 PC 相关（`c1e3e91` PC 多窗口触控、`8e6043e` popup 菜单触控、`8089968` relative_pointer 等）再分批评估（部分涉及 `WineWindow.ets` 私有 UI，需单独审阅）。
-- 未构建验证前先记录；后续需 `make hap` 回归确认 native 编译与行为。
+- **补充审计（`git cherry -v` patch-id 内容对比）**：`main..winehua/master` 201 提交中，**32 个已在 main**（patch-id 等价，含此前各轮跟进合并的 `46571f0`/`a580efe`/`ed8dcac`/`6c02db6`/`1cc57e2`/`8089968`/`dc6b92f`/`6ab1371`/`4ce959e`/合成阶段2-4/gnutls+gstreamer 链等）。剩余 `+` 未合并项绝大多数为 docs/checkpoint/诊断/重构（engine service 化/几何收敛）/UI/品牌/CI/version，按维护约定不合并。抽查 14 个疑似功能修复候选，13 个本地已有等价实现（`SpawnWineProgram`/CoordTransform/zIndex/app_id/shell desktop/NCP 判活/guest_gfx Upsert 等）；仅 `d9d729b`（wineboot 抑制窗口创建）本地未见，但依赖上游 engine 架构，收益有限，暂不引入。**本地当前状态即合理终态，无需进一步合并。**
+- 验证：`make hap` 构建通过（native 重编 + 签名），PC 适配 3 提交编译与行为无回归。
