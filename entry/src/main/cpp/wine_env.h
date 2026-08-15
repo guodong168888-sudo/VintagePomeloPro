@@ -56,7 +56,18 @@ static inline std::string Box64EmulatedLibs()
            "libgstriff-1.0.so:libgstriff-1.0.so.0:"
            "libgstrtp-1.0.so:libgstrtp-1.0.so.0:"
            "libgstrtsp-1.0.so:libgstrtsp-1.0.so.0:"
-           "libgstsdp-1.0.so:libgstsdp-1.0.so.0";
+           "libgstsdp-1.0.so:libgstsdp-1.0.so.0:"
+           // libgstcodecparsers: gst-plugins-bad videoparsersbad (h264parse 等)
+           // 的依赖库; 不在列表时 box64 无法加载插件, GStreamer 报
+           // "Failed to load plugin libgstvideoparsersbad.so"。
+           "libgstcodecparsers-1.0.so:libgstcodecparsers-1.0.so.0:"
+           // libgstmpegts: libgstmpegtsdemux (MPEG-TS) 的依赖库。
+           "libgstmpegts-1.0.so:libgstmpegts-1.0.so.0:"
+           // libxml2/libz: gst-plugins-bad 类插件 (libgstadaptivedemux2 等) 依赖。
+           // 不在列表时 box64 重定位其版本化符号 (LIBXML2_2.9.0) 失败,
+           // 插件 dlopen 失败, GStreamer 报 "Failed to load plugin"。
+           "libxml2.so:libxml2.so.2:"
+           "libz.so:libz.so.1";
 }
 
 // -- Box64 性能调优 (static inline, 供 napi_init / wine_child 共用) --

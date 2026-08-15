@@ -87,7 +87,8 @@ assemble_pad() {
                   libgstnet-1.0.so.0 libgstvideo-1.0.so.0 libgstaudio-1.0.so.0 \
                   libgsttag-1.0.so.0 libgstpbutils-1.0.so.0 libgstallocators-1.0.so.0 \
                   libgstapp-1.0.so.0 libgstfft-1.0.so.0 libgstriff-1.0.so.0 \
-                  libgstrtp-1.0.so.0 libgstrtsp-1.0.so.0 libgstsdp-1.0.so.0; do
+                  libgstrtp-1.0.so.0 libgstrtsp-1.0.so.0 libgstsdp-1.0.so.0 \
+                  libgstcodecparsers-1.0.so.0 libgstmpegts-1.0.so.0; do
             _pick_lib_pad "$so" "$so"
         done
         log "    交叉编译依赖 → libs/x86_64/"
@@ -192,7 +193,8 @@ assemble_pad() {
                   libgstnet-1.0.so.0 libgstvideo-1.0.so.0 libgstaudio-1.0.so.0 \
                   libgsttag-1.0.so.0 libgstpbutils-1.0.so.0 libgstallocators-1.0.so.0 \
                   libgstapp-1.0.so.0 libgstfft-1.0.so.0 libgstriff-1.0.so.0 \
-                  libgstrtp-1.0.so.0 libgstrtsp-1.0.so.0 libgstsdp-1.0.so.0; do
+                  libgstrtp-1.0.so.0 libgstrtsp-1.0.so.0 libgstsdp-1.0.so.0 \
+                  libgstcodecparsers-1.0.so.0 libgstmpegts-1.0.so.0; do
             # box64 按 SONAME 解析依赖时可能查找无版本名 (libgstvideo-1.0.so),
             # 与 gnutls 链一致补上无版本软链, 否则 winegstreamer dlopen 报
             # "Error loading shared library libgstvideo-1.0.so: No such file"
@@ -305,6 +307,12 @@ assemble_pad() {
             log "  $smoke.exe → x86_64-windows/"
         fi
     done
+    # GStreamer 解码流程探针 (调试用): mingw 编译的自包含 PE, 生成测试 WAV
+    # 并用 DirectShow 播放以验证 winegstreamer→GStreamer 链路是否工作。
+    if [ -f "$WINEHUA/smoke/gst_probe.exe" ]; then
+        cp "$WINEHUA/smoke/gst_probe.exe" "$wine_data/bin/x86_64-windows/"
+        log "  gst_probe.exe → x86_64-windows/ (GStreamer 解码探针)"
+    fi
     # The built-in audio smoke must be self-contained and use a format accepted
     # by wineohos.drv.  Wine's idw_testsound.wav is IMA ADPCM, while the native
     # bridge accepts PCM/float input, so generate a deterministic PCM16 stereo
