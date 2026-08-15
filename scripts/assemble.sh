@@ -665,6 +665,20 @@ HKLM,%FontSubStr%,"Lucida Console",,"Noto Sans Mono"' "$wine_data/share/wine/win
   "smokeSuiteVersion": "$smoke_suite_version"
 }
 EOF
+    # 自动生成运行时版本标记：payload 内容哈希 + 影响 runtime/prefix 的子模块
+    # git SHA。任何 Wine 相关更新都会改变该串，设备端据此判断是否需要解压
+    # 新 runtime，再经 wineboot --init 增量重建 prefix 系统部分（保留
+    # user.reg / drive_c/users / 已安装程序等用户数据）。该文件是纯构建产物，
+    # 不要手动提交或手动 bump。
+    local runtime_version
+    runtime_version="payload=${payload_sha:0:16}"
+    for m in wine box64 mesa virglrenderer gstreamer gnutls glib pcre2 dxvk; do
+        local m_sha
+        m_sha="$(git -C "$WINEHUA/thirdparty/$m" rev-parse --short HEAD 2>/dev/null || echo none)"
+        runtime_version="${runtime_version};${m}=${m_sha}"
+    done
+    printf '%s\n' "$runtime_version" > "$rawfile_dir/wine_runtime.version"
+    log "  wine_runtime.version → rawfile/ ($runtime_version)"
     log "  $zip_name → rawfile/ ($(du -h "$rawfile_dir/$zip_name" | cut -f1))"
 
     log "Pad 布局组装完成 ($NATIVE_ARCH)"
