@@ -672,9 +672,17 @@ EOF
     # 不要手动提交或手动 bump。
     local runtime_version
     runtime_version="payload=${payload_sha:0:16}"
+    # 容器内以 root 跑 git 会因 dubious ownership 拒绝仓库；先幂等豁免。
+    # 优先从 superproject 读 gitlink SHA（不依赖子模块自己的 .git，该 .git
+    # 文件指向宿主绝对路径，容器内不可解析）。
+    git config --global --add safe.directory "$WINEHUA" 2>/dev/null || true
     for m in wine box64 mesa virglrenderer gstreamer gnutls glib pcre2 dxvk; do
         local m_sha
-        m_sha="$(git -C "$WINEHUA/thirdparty/$m" rev-parse --short HEAD 2>/dev/null || echo none)"
+        m_sha="$(git -C "$WINEHUA" ls-tree HEAD "thirdparty/$m" 2>/dev/null | awk '{print substr($3,1,10)}')"
+        if [ -z "$m_sha" ]; then
+            m_sha="$(git -C "$WINEHUA/thirdparty/$m" rev-parse --short HEAD 2>/dev/null || true)"
+        fi
+        [ -n "$m_sha" ] || m_sha="none"
         runtime_version="${runtime_version};${m}=${m_sha}"
     done
     printf '%s\n' "$runtime_version" > "$rawfile_dir/wine_runtime.version"
