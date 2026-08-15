@@ -185,3 +185,17 @@
 - 合并 core_extract 并推送远端：分支 `core_extract`（基于 `winehua/feature/core-extract` `a0226d8`）两次提交 `edaefff`（TLS）+ `090cf1b`（采用 main 的 GnuTLS/GStreamer 构建链），快进推送到 `winehua/WineHua:feature/core-extract`（`a0226d8..090cf1b`）；wine 子模块 schannel 修复推送到 `winehua/wine:feature/core-extract`（`65b5128..a6a9dac`）。glib/pcre2 保持上游 tag gitlink（glib format-security 由构建期 patch 处理），保证他人 checkout 可解析。排除 Network Test 卡片、自动启动钩子、UI/桌面改动与版本号。
 - 版本：1.2.1（1002001）；wine-data 标记 `wine-engine-app-20260814.15-prod`。
 - 产物：`F:\PomeloWin\artifacts\VintagePomeloPro-1.2.1-20260814\`（release APP `963d2b55…`、release entry HAP `a1d3c026…`、debug HAP `7fa592ec…`，正式包 verify-app success，SHA384withECDSA）。
+
+### 2026-08-15 选择性同步：PC 适配（compositor/input 修复，版本 1.2.3 之上）
+
+- 上游区间：`winehua/master` 自上次同步点以来的新增提交（fetch 后 `a2b5b36`，`main..winehua/master` 共 201 提交）。本次仅选取**最近的纯 native PC 适配**，全部自动合并成功、未改私有 UI。
+- 选用（3 个，按上游顺序 cherry-pick）：
+  - `79714a5` → `c5e87d2`：fix(compositor) PC 模式 D3D 游戏全屏画面缩左上角 + 首启自动最小化（`wl_core.cpp`）
+  - `55b8d62` → `c1b9eb5`：fix(compositor) 最小化期间不向 Wine 发 configure（`wayland_server.cpp`）
+  - `a008a49` → `091c289`：fix(input) host 侧钳制全屏黑边越界坐标，防相对增量差分幽灵位移（`input_resolver/input_manager`）
+- 跳过（含原因）：
+  - `6081dcf` fix(audio) 来电打断后恢复发声：**已包含**——该修复此前经 PR #58 合入 master，main 已有等价 `f5d807b`，无新内容。
+  - `5576283` wine 子模块 → `037984b`（win32u 最小化豁免 present_rect）：**分叉分支**（与当前 `4e8f9f5` 共同祖先 `b7f43d4`），直接切换会**丢失私有仓 secur32 CHACHA20-POLY1305 禁用修复**（4e8f9f5 独有，TLS 1.2.1 验证过）。如需 win32u 修复，应在 wine 子模块内基于 4e8f9f5 单独 cherry-pick，另行评估。
+  - `0cbb1aa` fix(files) 文件页自动加载 C: 根目录：依赖上游 "engine service 化" 大规模重构（`prefixReady/curDir/DRIVE_C` 结构），私有 UI 未做该重构，跳过。
+  - 其余 ~195 提交：跨版本重构（engine service 化/几何收敛/UI 状态机）、品牌、CI/构建、docs，按维护约定不整体合并；后续如需 PC 相关（`c1e3e91` PC 多窗口触控、`8e6043e` popup 菜单触控、`8089968` relative_pointer 等）再分批评估（部分涉及 `WineWindow.ets` 私有 UI，需单独审阅）。
+- 未构建验证前先记录；后续需 `make hap` 回归确认 native 编译与行为。
