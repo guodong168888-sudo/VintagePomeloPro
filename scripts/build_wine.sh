@@ -33,8 +33,12 @@ build_native_tools() {
         else
             export FREETYPE_CFLAGS="-I/usr/include/freetype2"
             export FREETYPE_LIBS="-lfreetype"
+            # --datadir 指向源码父目录: wrc 的 nlsdirs 含 DATADIR/wine/nls,
+            # out-of-tree 构建时默认 datadir=/usr/local/share 找不到 locale.nls
+            # (clean 构建 wrc 编译 .rc 报 "unable to load locale.nls")。
             "$CONFIGURE_BIN" --srcdir="$WINE_SRC" --enable-win64 --disable-tests \
-                --without-x --without-alsa --without-opengl --without-vulkan
+                --without-x --without-alsa --without-opengl --without-vulkan \
+                --datadir="$WINE_SRC/.."
         fi
     fi
     # 只编译 OHOS 交叉构建实际需要的 host 工具 (~44 .o 文件)

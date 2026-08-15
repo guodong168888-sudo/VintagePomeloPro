@@ -268,8 +268,11 @@ export class WineEngineService {
       const prefixRefreshRequired = await this.ensureRuntimeInstalled(bundledRuntimeVersion);
       this.prefixRefreshRequired = prefixRefreshRequired;
       this.pendingPrefixVersion = prefixRefreshRequired ? bundledRuntimeVersion : new Uint8Array(0);
-      WineWindowManager.getInstance().setPresentationMode(presentationMode);
-      if (presentationMode !== WinePresentationMode.MANAGED_WINDOWS) {
+      // 桌面模式按最新设置统一判定 (PC: 融合=独立窗口 / 虚拟桌面; Pad/phone 恒桌面)。
+      // 切换后重启引擎即生效 — applyModePolicy 内部已同步 native setDesktopMode。
+      WineWindowManager.getInstance().applyModePolicy();
+      this.presentationMode = WineWindowManager.getInstance().presentationMode;
+      if (this.presentationMode !== WinePresentationMode.MANAGED_WINDOWS) {
         const orientation = AppSettingsStore.getInstance().getGlobalSettings().desktopOrientation
           ?? ScreenOrientationSetting.SENSOR_LANDSCAPE;
         // This must happen before startServer/launchClient. A later ArkUI

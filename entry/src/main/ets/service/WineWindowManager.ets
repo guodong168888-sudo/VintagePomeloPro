@@ -11,6 +11,8 @@ import {
 import { PopupWindowManager } from './PopupWindowManager';
 import { ArgbWindowManager } from './ArgbWindowManager';
 import { AppSettingsStore } from './AppSettingsStore';
+import { DesktopModeService, MODE_VIRTUAL, MODE_FUSION } from './DesktopModeService';
+import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
 
 const DOMAIN = 0x0000;
 const TAG = 'WineWM';
@@ -36,9 +38,11 @@ export class WineWindowManager {
   // 校准计数: 前几轮不做 EMA 平滑, 快速收敛
   private barCalibrationCount: number = 0;
 
-  // -- Desktop 模式 (Tablet) --
-  private isDesktopMode: boolean = true;
-  private presentationMode: WinePresentationMode = WinePresentationMode.DESKTOP;
+  // -- Desktop 模式 (Tablet / PC 虚拟桌面) --
+  // 公开: WineEngineService 镜像给 ArkTS 上层
+  isDesktopMode: boolean = true;
+  // 公开: 由 applyModePolicy 统一判定 (PC 按 DesktopModeService 设置)
+  presentationMode: WinePresentationMode = WinePresentationMode.DESKTOP;
   private desktopRootId: number = 0;
   private desktopAbilityRunning: boolean = false;
   private desktopAbilityForeground: boolean = false;
@@ -46,6 +50,30 @@ export class WineWindowManager {
   private desktopAbilityCtx: common.UIAbilityContext | null = null;
   // 主窗口 windowStage (ARGB 异型子窗口/popup 回退宿主)
   private mainWindowStage: window.WindowStage | null = null;
+
+  /**
+   * 桌面模式统一判定 (与上游 master 同构):
+   * - Pad/phone 恒走桌面合成器 (isDesktopMode=true)
+   * - PC/2in1 按 DesktopModeService 用户设置 (MODE_FUSION=独立窗口 / MODE_VIRTUAL=虚拟桌面)
+   * 调用点: app 启动 (init) + 引擎每次启动前 (WineEngineService), 切换后重启引擎即生效。
+   */
+  applyModePolicy(): void {
+    const isPadOrPhone = DeviceCapabilityPolicy.isTabletDevice() ||
+      DeviceCapabilityPolicy.isPhoneDevice();
+    if (isPadOrPhone) {
+      this.isDesktopMode = true;
+      this.presentationMode = WinePresentationMode.DESKTOP;
+    } else {
+      const mode = DesktopModeService.getInstance().mode;
+      this.isDesktopMode = (mode === MODE_VIRTUAL);
+      this.presentationMode = this.isDesktopMode ?
+        WinePresentationMode.DESKTOP : WinePresentationMode.MANAGED_WINDOWS;
+    }
+    this.desktopRootId = 0;
+    testNapi.setDesktopMode(this.isDesktopMode);
+    hilog.info(DOMAIN, TAG, '[MW] applyModePolicy=%{public}s nativeDesktop=%{public}s',
+      this.presentationMode, this.isDesktopMode ? 'yes' : 'no');
+  }
 
   // toplevelId -> UIAbilityContext (用于 terminateSelf)
   private abilityContexts: Map<number, common.UIAbilityContext> = new Map();
@@ -123,14 +151,14 @@ export class WineWindowManager {
     hilog.info(DOMAIN, TAG, '[MW] init: mainWindow=%{public}s ctx=%{public}s',
       this.mainWindow ? 'ok' : 'NULL', this.uiAbilityContext ? 'ok' : 'NULL');
 
-    // EntryAbility owns the window stage and reaches this point before the
-    // asynchronous settings load. Resolve the host policy synchronously so a
-    // PC never registers callbacks using the temporary desktop default.
-    if (AppSettingsStore.getInstance().usesManagedWineWindows()) {
-      this.presentationMode = WinePresentationMode.MANAGED_WINDOWS;
-      this.isDesktopMode = false;
+    // 桌面模式统一判定: PC/2in1 按 DesktopModeService 设置 (融合/虚拟桌面),
+    // Pad/phone 恒走桌面合成器。同步 native setDesktopMode (explorer 是否启动)。
+    try {
+      DesktopModeService.getInstance().init(this.uiAbilityContext);
+    } catch (_) {
+      hilog.warn(DOMAIN, TAG, '[MW] DesktopModeService init failed, fallback policy');
     }
-    testNapi.setDesktopMode(this.isDesktopMode);
+    this.applyModePolicy();
     hilog.info(DOMAIN, TAG, '[MW] configured presentation mode=%{public}s', this.presentationMode);
 
     // 获取设备显示密度 + 主窗口可用区域
