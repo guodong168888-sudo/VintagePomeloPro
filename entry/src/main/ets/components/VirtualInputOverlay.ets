@@ -134,7 +134,7 @@ export struct VirtualInputOverlay {
   private static readonly DRAG_THRESHOLD: number = 10;      // 物理 px, 区分点击抖动
   private static readonly DOUBLE_TAP_MS: number = 300;       // 双击判定窗口
   private static readonly DOUBLE_TAP_DIST: number = 24;      // 双击允许光标位移 (px)
-  private static readonly LONG_PRESS_MS: number = 600;       // 长按=右键
+  private static readonly TWO_FINGER_TAP_MS: number = 250;   // 双指轻点=右键 判定窗口
   private static readonly SCROLL_STEP_PX: number = 30;       // 滚动步进 (px)
   private vcX: number = 0;        // 虚拟光标 (物理 px)
   private vcY: number = 0;
@@ -143,6 +143,12 @@ export struct VirtualInputOverlay {
   private scrHPx: number = 0;
   @State private cursorVpX: number = -100;  // 指示点 vp 坐标 (屏外=隐藏)
   @State private cursorVpY: number = -100;
+  @State private tpFlash: boolean = false;  // 点击 flash 动画
+  private tpFlashTimer: number = -1;
+  // 双指轻点=右键: 两指快速落下又抬起且中点几乎不动
+  private tpTwoFingerStartAt: number = 0;
+  private tpTwoFingerStartMidX: number = 0;
+  private tpTwoFingerStartMidY: number = 0;
   private tpDown: boolean = false;
   private tpMoved: boolean = false;
   private tpDownX: number = 0;
@@ -845,8 +851,34 @@ export struct VirtualInputOverlay {
     this.cursorVpY = px2vp(this.vcY) - 7;
   }
 
+  /** 点击 flash: 指示点短暂放大变绿 (对齐 InputOverlay 原反馈)。 */
+  private flashCursorIndicator(): void {
+    this.tpFlash = true;
+    if (this.tpFlashTimer >= 0) clearTimeout(this.tpFlashTimer);
+    this.tpFlashTimer = setTimeout((): void => {
+      this.tpFlashTimer = -1;
+      this.tpFlash = false;
+    }, 90) as number;
+  }
+
+  // 性能: 光标移动时缓存目标 toplevel, 避免每次 move 都 native 查询
+  // (findToplevelAt 跨 JSI/NAPI 开销大)。仅当光标明显跨窗口时才重查。
+  private cachedMoveTl: number = -1;
+  private cachedMoveTlX: number = -1e9;
+  private cachedMoveTlY: number = -1e9;
+
   private tlAtCursor(): number {
-    return (testNapi.findToplevelAt(Math.round(this.vcX), Math.round(this.vcY)) as number) ?? 0;
+    const x = Math.round(this.vcX);
+    const y = Math.round(this.vcY);
+    if (this.cachedMoveTl >= 0 &&
+      Math.abs(x - this.cachedMoveTlX) < 4 && Math.abs(y - this.cachedMoveTlY) < 4) {
+      return this.cachedMoveTl;
+    }
+    const tl = (testNapi.findToplevelAt(x, y) as number) ?? 0;
+    this.cachedMoveTl = tl;
+    this.cachedMoveTlX = x;
+    this.cachedMoveTlY = y;
+    return tl;
   }
 
   private clickAtCursor(btn: number): void {
@@ -871,6 +903,12 @@ export struct VirtualInputOverlay {
     this.tpDragTl = 0;
     this.tpTwoFinger = false;
     this.tpLastTapTime = 0;
+    this.cachedMoveTl = -1;
+    if (this.tpFlashTimer >= 0) {
+      clearTimeout(this.tpFlashTimer);
+      this.tpFlashTimer = -1;
+    }
+    this.tpFlash = false;
   }
 
   private handleTouchpad(ev: TouchEvent): void {
@@ -883,7 +921,7 @@ export struct VirtualInputOverlay {
       this.syncCursorIndicator();
     }
 
-    // 双指: 滚动作用于光标处 (触控板语义), 打断单指/拖拽
+    // 双指: 轻点=右键 (本地语义), 滑动=滚动作用于光标处 (触控板语义)
     if (ev.touches.length >= 2) {
       let midX = 0, midY = 0;
       for (let i = 0; i < ev.touches.length; i++) {
@@ -902,6 +940,9 @@ export struct VirtualInputOverlay {
         this.tpDragTl = 0;
         this.tpDragArmed = false;
         this.tpTwoFinger = true;
+        this.tpTwoFingerStartAt = Date.now();
+        this.tpTwoFingerStartMidX = midX;
+        this.tpTwoFingerStartMidY = midY;
         this.tpTwoFingerLastMidX = midX;
         this.tpTwoFingerLastMidY = midY;
         this.tpScrollAccumX = 0;
@@ -930,7 +971,14 @@ export struct VirtualInputOverlay {
       return;
     }
     if (this.tpTwoFinger) {
+      // 双指抬起: 若快速 (轻点) 且中点几乎没动 → 右键; 否则是滑动滚动结束
       this.tpTwoFinger = false;
+      const elapsed = Date.now() - this.tpTwoFingerStartAt;
+      const dmid = Math.abs(this.tpTwoFingerLastMidX - this.tpTwoFingerStartMidX) +
+        Math.abs(this.tpTwoFingerLastMidY - this.tpTwoFingerStartMidY);
+      if (elapsed < VirtualInputOverlay.TWO_FINGER_TAP_MS && dmid < VirtualInputOverlay.DRAG_THRESHOLD * 2) {
+        this.clickAtCursor(mapMouseButton(2));
+      }
       return;
     }
 
@@ -998,16 +1046,12 @@ export struct VirtualInputOverlay {
       }
       this.tpDragArmed = false;
       if (!this.tpMoved) {
-        const elapsed = Date.now() - this.tpDownTime;
-        if (elapsed >= VirtualInputOverlay.LONG_PRESS_MS) {
-          this.clickAtCursor(mapMouseButton(2));
-          this.tpLastTapTime = 0;
-        } else {
-          this.clickAtCursor(mapMouseButton(1));
-          this.tpLastTapTime = Date.now();
-          this.tpLastTapVcX = this.vcX;
-          this.tpLastTapVcY = this.vcY;
-        }
+        // 轻点 = 左键 (无长按右键; 右键走双指轻点, 保持本地语义)
+        this.clickAtCursor(mapMouseButton(1));
+        this.flashCursorIndicator();
+        this.tpLastTapTime = Date.now();
+        this.tpLastTapVcX = this.vcX;
+        this.tpLastTapVcY = this.vcY;
       }
     } else if (ev.type === TouchType.Cancel) {
       this.resetTouchpadState();
@@ -1888,12 +1932,13 @@ export struct VirtualInputOverlay {
   build() {
     Stack() {
       Text(this.renderRevision.toString()).width(0).height(0).opacity(0).hitTestBehavior(HitTestMode.None)
-      // 触摸板模式虚拟光标指示点 (14vp 圆, 浅灰描边保证白底可见)
+      // 触摸板模式虚拟光标指示点 (原样式: 小圆 7px, 点击 flash 10px 绿)
       if (this.touchpadModeVisual && this.cursorVpX >= 0 && this.cursorVpY >= 0) {
-        Circle({ width: 14, height: 14 })
-          .fill('#66808080')
-          .stroke('#CCAAAAAA')
-          .strokeWidth(2)
+        Circle({ width: this.tpFlash ? 10 : 7, height: this.tpFlash ? 10 : 7 })
+          .fill(this.tpFlash ? '#FF4CAF50' : '#E6FFFFFF')
+          .stroke(this.tpFlash ? '#CCB9F6CA' : '#D9000000')
+          .strokeWidth(1)
+          .shadow({ radius: this.tpFlash ? 8 : 4, color: '#66000000', offsetX: 0, offsetY: 1 })
           .position({ x: this.cursorVpX, y: this.cursorVpY })
           .hitTestBehavior(HitTestMode.None)
           .zIndex(50)
