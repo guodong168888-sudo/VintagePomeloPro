@@ -419,10 +419,9 @@ struct InputOverlayPage {
     this.resetDirectTapSequence();
     this.resetTouchpadGesture();
     this.touchpadMode = enabled;
-    if (enabled) {
-      this.ensureTouchpadCursor();
-      this.showCursorAt(this.cursorX, this.cursorY);
-    } else {
+    // 触摸板光标统一由 VirtualInputOverlay 的虚拟光标指示点显示 (新状态机
+    // 所在), 这里不再单独显示 wine-virtual-mouse-cursor, 避免切换瞬间双光点。
+    if (!enabled) {
       this.cursorVisible = false;
       this.cancelCursorTimers();
     }
@@ -869,7 +868,9 @@ struct InputOverlayPage {
         })
         .zIndex(10)
       }
-      if (this.touchpadMode && this.cursorVisible && this.settings.virtualMouseConfig.showCursor) {
+      // 触摸板虚拟光标统一由 VirtualInputOverlay 显示 (新状态机), 此处禁用
+      // 避免切换瞬间双光点。保留 cursorX/Y 状态供 InputDispatcher 逻辑使用。
+      if (false && this.touchpadMode && this.cursorVisible && this.settings.virtualMouseConfig.showCursor) {
         Stack({ alignContent: Alignment.Center }) {
           Circle()
             .width(this.cursorFlash ? 10 : 7)
