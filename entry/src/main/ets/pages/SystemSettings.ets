@@ -611,9 +611,11 @@ struct SystemSettingsPage {
    * PC 桌面模式切换 (融合=每程序独立窗口 / 虚拟桌面=独立窗口承载 Wine 桌面)。
    * 持久化到 DesktopService (Preferences); 模式需重启 Wine 才生效 —
    * 直接重启应用最干净 (结束 Wine 进程并重新初始化), 弹窗给用户选择。
+   * await setMode: 确保 Preferences 落盘完成再给"重启应用"入口, 否则立即
+   * 重启会读到旧模式 (flush 未完成丢失写入)。
    */
-  private updateDesktopMode(mode: string): void {
-    DesktopModeService.getInstance().setMode(mode);
+  private async updateDesktopMode(mode: string): Promise<void> {
+    await DesktopModeService.getInstance().setMode(mode);
     AlertDialog.show({
       title: '桌面模式已切换',
       message: '需要重启应用（结束 Wine 进程并重新初始化桌面）才能生效。是否立即重启？',
@@ -1552,13 +1554,13 @@ struct SystemSettingsPage {
                 .padding({ left: this.isNarrowPhone() ? 4 : 12, right: this.isNarrowPhone() ? 4 : 12 })
                 .backgroundColor(DesktopModeService.getInstance().mode === MODE_FUSION ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(DesktopModeService.getInstance().mode === MODE_FUSION ? '#FFFFFFFF' : $r('app.color.text_primary'))
-                .onClick(() => this.updateDesktopMode(MODE_FUSION))
+                .onClick(() => { this.updateDesktopMode(MODE_FUSION); })
               Button('虚拟桌面').layoutWeight(1).height(48).borderRadius(14)
                 .fontSize(this.isNarrowPhone() ? 11 : 13)
                 .padding({ left: this.isNarrowPhone() ? 4 : 12, right: this.isNarrowPhone() ? 4 : 12 })
                 .backgroundColor(DesktopModeService.getInstance().mode === MODE_VIRTUAL ? $r('app.color.accent') : $r('app.color.search_background'))
                 .fontColor(DesktopModeService.getInstance().mode === MODE_VIRTUAL ? '#FFFFFFFF' : $r('app.color.text_primary'))
-                .onClick(() => this.updateDesktopMode(MODE_VIRTUAL))
+                .onClick(() => { this.updateDesktopMode(MODE_VIRTUAL); })
             }.width('100%')
             Text('融合：每个程序独立窗口；虚拟桌面：独立窗口承载 Wine 桌面（重启引擎后生效）。').fontSize(12)
               .fontColor($r('app.color.text_secondary')).width('100%')

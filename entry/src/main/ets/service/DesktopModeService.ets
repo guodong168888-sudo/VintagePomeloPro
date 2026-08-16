@@ -45,7 +45,12 @@ export class DesktopModeService {
     }
   }
 
-  setMode(v: string): void {
+  /**
+   * 持久化桌面模式并等待落盘完成。调用方 (设置页) 在切模式后可能立即重启
+   * 应用 — 若 flush 未完成就重启, 新进程会读到旧值 (Preferences 丢失),
+   * 导致重启后仍处于原模式。返回 Promise 让调用方 await 后再弹重启提示。
+   */
+  async setMode(v: string): Promise<void> {
     if (v !== MODE_VIRTUAL && v !== MODE_FUSION) {
       return;
     }
@@ -55,7 +60,7 @@ export class DesktopModeService {
     }
     try {
       this.store.putSync(KEY_MODE, this.mode);
-      this.store.flush();
+      await this.store.flush();
     } catch (e) {
       hilog.error(DOMAIN, 'wine', 'desktop mode persist fail: %{public}s', JSON.stringify(e));
     }
