@@ -1,6 +1,6 @@
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '../service/LogService';
-import { window } from '@kit.ArkUI';
+import { window, display } from '@kit.ArkUI';
 import testNapi from 'libentry.so';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { WineWindowManager } from '../service/WineWindowManager';
@@ -143,12 +143,25 @@ export default class DesktopAbility extends UIAbility {
           target.setSpecificSystemBarEnabled('navigationIndicator', true)
         ]);
         await target.setWindowBackgroundColor('#000000');
+        // 浮窗初始尺寸 = 屏幕 90% (居中): 保证 Wine 桌面 1:1 显示, 开始菜单/
+        // 任务栏出生即在正确位置。系统默认浮窗可能极小 → 桌面被 letterbox 缩小,
+        // 开始按钮看不见。用户仍可拖动/调整/最大化。
+        try {
+          const d = display.getDefaultDisplaySync();
+          const w = Math.max(640, Math.round(d.width * 0.9));
+          const h = Math.max(480, Math.round(d.height * 0.9));
+          await target.resize(w, h);
+          await target.moveWindowTo(Math.round((d.width - w) / 2), Math.round((d.height - h) / 2));
+        } catch (err) {
+          hilog.warn(DOMAIN, TAG, '[DWA] pc-virtual resize skipped: %{public}s',
+            JSON.stringify(err));
+        }
       } catch (e) {
         hilog.warn(DOMAIN, TAG, '[DWA] pc-virtual floating setup partial: %{public}s',
           JSON.stringify(e));
       }
       this.lastAppliedWindowMode = 'pc-virtual';
-      hilog.info(DOMAIN, TAG, '[DWA] pc virtual desktop: floating window with title bar');
+      hilog.info(DOMAIN, TAG, '[DWA] pc virtual desktop: floating window sized to screen');
       return;
     }
     const mode = AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode

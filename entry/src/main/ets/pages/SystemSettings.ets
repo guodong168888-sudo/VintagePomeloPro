@@ -609,11 +609,24 @@ struct SystemSettingsPage {
 
   /**
    * PC 桌面模式切换 (融合=每程序独立窗口 / 虚拟桌面=独立窗口承载 Wine 桌面)。
-   * 持久化到 DesktopModeService (Preferences); 重启引擎后由 applyModePolicy 生效。
+   * 持久化到 DesktopService (Preferences); 模式需重启 Wine 才生效 —
+   * 直接重启应用最干净 (结束 Wine 进程并重新初始化), 弹窗给用户选择。
    */
   private updateDesktopMode(mode: string): void {
     DesktopModeService.getInstance().setMode(mode);
-    promptAction.showToast({ message: '桌面模式已切换；重启引擎后生效' });
+    AlertDialog.show({
+      title: '桌面模式已切换',
+      message: '需要重启应用（结束 Wine 进程并重新初始化桌面）才能生效。是否立即重启？',
+      primaryButton: {
+        value: '稍后',
+        action: (): void => {}
+      },
+      secondaryButton: {
+        value: '重启应用',
+        fontColor: '#D94848',
+        action: (): void => { this.restartAppAfterImport(); }
+      }
+    });
   }
 
   private togglePageBackground(enabled: boolean): void {
