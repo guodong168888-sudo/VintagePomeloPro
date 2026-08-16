@@ -48,6 +48,12 @@ public:
     // Wine 会话终结统一收口: 复位 firstFrame/move grab/输入状态, 使热重启
     // (连旧 wineserver) 与冷启动同基线。桌面根销毁与 StopClient 路径调用。
     void ResetSessionState();
+    // stopAll 强杀 Wine 后, client 断开事件不会在 wl_display_terminate 前
+    // dispatch → OnToplevelDestroyed 不执行 → ToplevelManager 残留旧 toplevel
+    // (重启后旧窗口画面共存、占 zOrder、不响应事件)。显式遍历逐个收口并补发
+    // destroyed 通知给 ArkTS。桌面 root 在内时 OnToplevelDestroyed 会触发
+    // ResetSessionState (幂等)。与上游 master 同构。
+    void DestroyAllToplevels();
 
     // EglRenderer 调用: 取最新一帧像素 (deprecated, 用 TakeToplevelFrame)
     bool TakeFrame(std::vector<uint8_t>& outPixels, int& w, int& h);

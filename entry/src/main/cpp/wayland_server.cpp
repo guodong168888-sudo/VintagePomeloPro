@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <vector>
 
 
 extern "C" void RegisterXdgShell(wl_display* display);
@@ -87,6 +88,11 @@ bool WaylandServer::Start(const std::string& socketPath) {
 void WaylandServer::Stop() {
     if (!running_) return;
     running_ = false;
+    // stopAll 强杀 Wine 后 client 断开事件不会 dispatch → 显式收口全部 toplevel
+    // (模拟 surface_destroy 清理 + 补发 destroyed 给 ArkTS), 避免同进程引擎
+    // 重启后旧窗口画面共存、占 zOrder、任务栏/桌面残留。桌面 root 在内时
+    // OnToplevelDestroyed 内部触发 ResetSessionState (幂等)。
+    DestroyAllToplevels();
     InputManager::GetInstance()->Shutdown();
     Seat::GetInstance()->Unregister();
     if (display_) wl_display_terminate(display_);
@@ -96,6 +102,27 @@ void WaylandServer::Stop() {
         display_ = nullptr;
     }
     firstFrame_ = false;
+}
+
+void WaylandServer::DestroyAllToplevels() {
+    // 收集 id (锁内), 逐个收口 (锁外): OnToplevelDestroyed 内部重新拿锁,
+    // FireToplevelEvent 发 ArkTS 事件不应持 compositor 锁。模拟正常 client
+    // 断开路径 (wl_core.cpp surface_destroy) 的清理 + destroyed 通知 —
+    // stopAll 强杀 Wine 后该路径不执行, 导致 toplevel 残留 + ArkTS 子窗口不关。
+    std::vector<uint32_t> ids;
+    {
+        auto lk = toplevelMgr_.Lock();
+        for (const auto& [id, state] : toplevelMgr_.toplevels()) {
+            (void)state;
+            ids.push_back(id);
+        }
+    }
+    OH_LOG_INFO(LOG_APP, "[MW] DestroyAllToplevels: %{public}zu toplevel(s) teardown",
+                ids.size());
+    for (uint32_t id : ids) {
+        OnToplevelDestroyed(id);
+        FireToplevelEvent(id, "destroyed");
+    }
 }
 
 void WaylandServer::ResetSessionState() {
