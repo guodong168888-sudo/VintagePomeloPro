@@ -130,6 +130,27 @@ export default class DesktopAbility extends UIAbility {
    * keeps the window inside the system inset so corners and bars stay visible.
    */
   private async applyDesktopWindowMode(target: window.Window): Promise<void> {
+    // PC 虚拟桌面 (VIRTUAL): 独立窗口承载 Wine 桌面 — 保留系统标题栏,
+    // 默认浮动 (可拖动/缩放/最小化/关闭), 与上游 VirtualDesktopAbility 同语义。
+    // 用户可自行最大化 → 沉浸全屏 (maximize 时系统隐藏标题栏, renderer letterbox
+    // 等比呈现, 无需 ArkTS 额外动作)。全屏布局/安全区仅 tablet 桌面生效。
+    if (DeviceCapabilityPolicy.usesManagedWineWindows() &&
+      WineWindowManager.getInstance().isDesktopMode) {
+      try {
+        await target.setWindowLayoutFullScreen(false);
+        await Promise.all([
+          target.setSpecificSystemBarEnabled('status', true),
+          target.setSpecificSystemBarEnabled('navigationIndicator', true)
+        ]);
+        await target.setWindowBackgroundColor('#000000');
+      } catch (e) {
+        hilog.warn(DOMAIN, TAG, '[DWA] pc-virtual floating setup partial: %{public}s',
+          JSON.stringify(e));
+      }
+      this.lastAppliedWindowMode = 'pc-virtual';
+      hilog.info(DOMAIN, TAG, '[DWA] pc virtual desktop: floating window with title bar');
+      return;
+    }
     const mode = AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode
       ?? DesktopWindowMode.FULLSCREEN;
     this.lastAppliedWindowMode = mode;

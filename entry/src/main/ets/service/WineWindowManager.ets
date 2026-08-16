@@ -1003,7 +1003,11 @@ export class WineWindowManager {
 
   // Desktop 模式: 打开 DesktopAbility
   private startDesktopAbility(rootId: number): void {
-    if (AppSettingsStore.getInstance().usesManagedWineWindows()) {
+    // PC/2in1 融合模式 (FUSION, isDesktopMode=false): 每程序独立窗口, 不启动
+    // 桌面合成器 → suppress desktop root Ability。
+    // PC/2in1 虚拟桌面模式 (VIRTUAL, isDesktopMode=true): 用 DesktopAbility
+    // 独立浮动窗口承载 Wine 桌面 (DesktopAbility 内按 PC 分支浮动 + 保留标题栏)。
+    if (AppSettingsStore.getInstance().usesManagedWineWindows() && !this.isDesktopMode) {
       hilog.warn(DOMAIN, TAG, '[MW] suppress DesktopAbility #%{public}d on managed-window host', rootId);
       return;
     }
