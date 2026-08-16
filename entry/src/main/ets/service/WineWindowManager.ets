@@ -226,7 +226,12 @@ export class WineWindowManager {
       // Explorer desktop also needs an xdg configure. Some phone rotations do
       // not deliver a reliable XComponent surface-change callback, leaving the
       // old portrait desktop as a narrow strip in a landscape Ability.
-      if (this.presentationMode === WinePresentationMode.DESKTOP && this.desktopRootId > 0) {
+      // PC 虚拟桌面浮窗: 桌面分辨率固定 (init setOutputSize = 屏幕/scale), 窗口
+      // 只是显示口 (letterbox 等比完整呈现) — 跳过 notifyToplevelResize, 否则
+      // 浮窗尺寸/标题栏偏差触发 Wine 桌面重排, 底部任务栏/开始菜单被裁。
+      // 对齐 master VirtualDesktop desktopLauncherVisible 门控语义。
+      if (this.presentationMode === WinePresentationMode.DESKTOP && this.desktopRootId > 0 &&
+        !(AppSettingsStore.getInstance().usesManagedWineWindows() && this.isDesktopMode)) {
         testNapi.notifyToplevelResize(this.desktopRootId, outW, outH);
       }
       hilog.info(DOMAIN, TAG,

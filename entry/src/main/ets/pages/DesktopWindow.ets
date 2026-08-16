@@ -40,6 +40,17 @@ class DesktopController extends XComponentController {
     if (rootId > 0) {
       try {
         testNapi.resizeRenderer(rootId, rect.surfaceWidth, rect.surfaceHeight);
+        // PC 虚拟桌面浮窗: 桌面分辨率固定 = init setOutputSize (屏幕/scale),
+        // 窗口只是显示口 — renderer letterbox (ComputeFitRect) 等比完整呈现
+        // Wine 桌面帧 (含任务栏/开始菜单)。跳过输出/root 尺寸同步: 浮窗非
+        // 最大化、含标题栏偏差, 若 notifyToplevelResize 给 Wine 发 configure
+        // 会把桌面分辨率改成窗口大小 → 桌面布局重排 → 底部任务栏超出可见
+        // 区/被裁。对齐 master VirtualDesktop desktopLauncherVisible 门控语义。
+        if (AppSettingsStore.getInstance().usesManagedWineWindows() &&
+          WineWindowManager.getInstance().isDesktopMode) {
+          hilog.info(DOMAIN, 'LIFE', '[XComp] pc-virtual desktop: skip output resize, letterbox full desktop');
+          return;
+        }
         const s = WineWindowManager.getInstance().getEffectiveScale();
         const outW = Math.round(rect.surfaceWidth / s);
         const outH = Math.round(rect.surfaceHeight / s);
