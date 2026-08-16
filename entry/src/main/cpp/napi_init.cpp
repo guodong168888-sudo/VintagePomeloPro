@@ -731,41 +731,66 @@ static napi_value WineTextInputSetArmed(napi_env env, napi_callback_info info) {
 // -- NAPI: setImeCallback (激活/失活回调, 对齐上游 54d188d) --
 // Wine 文本框聚焦 (enable + 非零光标矩形) → active=1 回调 ArkTS 弹系统软键盘;
 // 失焦/leave → active=0 收起。
+// 跨线程安全: 用 threadsafe function (与 gStateTsfn/gToplevelTsfn 同模式),
+// Wayland 线程触发回调经 TSFN 投递到 JS 线程执行 — 直接 napi_call_function
+// 跨线程会崩溃。
+struct ImeEvent {
+    int active;
+    int x, y, w, h;
+};
+static napi_threadsafe_function gImeTsfn = nullptr;
+
+static void CallJsIme(napi_env env, napi_value cb, void*, void* data) {
+    ImeEvent* ev = static_cast<ImeEvent*>(data);
+    if (env && cb && ev) {
+        napi_value undef, argv[5];
+        napi_get_undefined(env, &undef);
+        napi_create_int32(env, ev->active, &argv[0]);
+        napi_create_int32(env, ev->x, &argv[1]);
+        napi_create_int32(env, ev->y, &argv[2]);
+        napi_create_int32(env, ev->w, &argv[3]);
+        napi_create_int32(env, ev->h, &argv[4]);
+        napi_call_function(env, undef, cb, 5, argv, nullptr);
+    }
+    delete ev;
+}
+
 static napi_value SetImeCallback(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1] = { nullptr };
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    napi_ref cbRef = nullptr;
-    if (argc >= 1 && args[0] != nullptr) {
-        napi_valuetype t;
-        napi_typeof(env, args[0], &t);
-        if (t == napi_function) napi_create_reference(env, args[0], 1, &cbRef);
+
+    if (gImeTsfn) {
+        napi_release_threadsafe_function(gImeTsfn, napi_tsfn_release);
+        gImeTsfn = nullptr;
     }
+
+    napi_value name;
+    napi_create_string_utf8(env, "WL_Ime", NAPI_AUTO_LENGTH, &name);
+    napi_create_threadsafe_function(env, args[0], nullptr, name,
+                                    0, 1, nullptr, nullptr, nullptr, CallJsIme, &gImeTsfn);
+
     TextInputManager::GetInstance()->SetActivateCallback(
-        [env, cbRef](bool active, int x, int y, int w, int h) {
-            if (!cbRef) return;
-            napi_handle_scope scope;
-            napi_open_handle_scope(env, &scope);
-            napi_value fn;
-            napi_get_reference_value(env, cbRef, &fn);
-            napi_value argv[5];
-            napi_create_int32(env, active ? 1 : 0, &argv[0]);
-            napi_create_int32(env, x, &argv[1]);
-            napi_create_int32(env, y, &argv[2]);
-            napi_create_int32(env, w, &argv[3]);
-            napi_create_int32(env, h, &argv[4]);
-            napi_value global;
-            napi_get_global(env, &global);
-            napi_value result;
-            napi_call_function(env, global, fn, 5, argv, &result);
-            napi_close_handle_scope(env, scope);
+        [](bool active, int x, int y, int w, int h) {
+            if (gImeTsfn) {
+                auto* ev = new ImeEvent{active ? 1 : 0, x, y, w, h};
+                napi_call_threadsafe_function(gImeTsfn, ev, napi_tsfn_blocking);
+            } else {
+                OH_LOG_WARN(LOG_APP, "[WL_NAPI] ime cb dropped (tsfn not ready) active=%{public}d", active);
+            }
         });
     return nullptr;
 }
 
-// -- NAPI: imeBackspace (软键盘退格 → Wine delete_surrounding) --
+// -- NAPI: imeBackspace (软键盘退格 → Wine KEY_BACKSPACE 键盘注入;
+//    Wine 的 delete_surrounding_text 是空实现, 退格走现有 key 注入链路) --
 static napi_value ImeBackspace(napi_env env, napi_callback_info info) {
-    TextInputManager::GetInstance()->SendDeleteSurrounding(1, 0);
+    (void)env;
+    (void)info;
+    constexpr uint32_t KEY_BACKSPACE = 14;
+    auto* im = InputManager::GetInstance();
+    im->InjectKeyboardKey(KEY_BACKSPACE, WL_KEYBOARD_KEY_STATE_PRESSED);
+    im->InjectKeyboardKey(KEY_BACKSPACE, WL_KEYBOARD_KEY_STATE_RELEASED);
     return nullptr;
 }
 
