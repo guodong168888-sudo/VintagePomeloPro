@@ -1,6 +1,10 @@
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import router from '@ohos.router';
 import promptAction from '@ohos.promptAction';
+import { inputMethod } from '@kit.IMEKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { BusinessError } from '@kit.BasicServicesKit';
+import testNapi from 'libentry.so';
 import { AppSearchBar } from '../components/SearchBar';
 import { AppCard } from '../components/AppCard';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
@@ -48,6 +52,8 @@ import {
 } from '@kit.UIDesignKit';
 
 type CatalogFilter = 'builtin' | 'windows' | 'running' | 'favorite';
+
+const DOMAIN = 0x0000;
 
 const PHONE_NAV_BUILTIN: number = 0;
 const PHONE_NAV_WINDOWS: number = 1;
@@ -162,7 +168,80 @@ struct Index {
     return this.titleContentTopInsetVp;
   }
 
+  // -- IME: Wine 文本框聚焦拉起系统软键盘 (对齐上游 54d188d) --
+  private imeController: inputMethod.InputMethodController | null = null;
+
+  private setupIme(): void {
+    testNapi.setImeCallback((active: number, x: number, y: number, w: number, h: number) => {
+      hilog.info(DOMAIN, 'IME', '[cb] active=%{public}d rect=[%{public}d,%{public}d %{public}dx%{public}d]',
+        active, x, y, w, h);
+      if (active === 1) {
+        this.imeAttach();
+      } else {
+        this.imeDetach();
+      }
+    });
+  }
+
+  private imeAttach(): void {
+    try {
+      const controller = inputMethod.getController();
+      this.imeController = controller;
+      // 每次激活都 attach; 先清掉已注册回调, 否则 on() 累积导致重复注入
+      controller.off('insertText');
+      controller.off('deleteLeft');
+      controller.off('deleteRight');
+      controller.off('sendKeyboardStatus');
+      controller.off('setPreviewText');
+      const attr: inputMethod.InputAttribute = {
+        textInputType: inputMethod.TextInputType.TEXT,
+        enterKeyType: inputMethod.EnterKeyType.DONE
+      };
+      const cfg: inputMethod.TextConfig = { inputAttribute: attr };
+      controller.attach(true, cfg).then(() => {
+        controller.on('insertText', (text: string) => {
+          testNapi.wineTextInputCommit(text);   // 提交文本 → Wine commit_string
+        });
+        controller.on('deleteLeft', (len: number) => {
+          testNapi.imeBackspace();              // 退格 → Wine delete_surrounding
+        });
+        controller.on('deleteRight', (len: number) => {
+          testNapi.imeBackspace();
+        });
+        controller.on('sendKeyboardStatus', (status: inputMethod.KeyboardStatus) => {
+          hilog.info(DOMAIN, 'IME', '[keyboardStatus] %{public}d', status);
+        });
+        controller.on('setPreviewText', (text: string, range: inputMethod.Range) => {
+          testNapi.wineTextInputPreedit(text, 0, text.length);  // 预上屏 → Wine preedit
+        });
+      }).catch((err: BusinessError) => {
+        hilog.error(DOMAIN, 'IME', '[attach] FAILED code=%{public}d msg=%{public}s', err.code, err.message);
+      });
+    } catch (e) {
+      hilog.error(DOMAIN, 'IME', '[attach] EXCEPTION: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  private imeDetach(): void {
+    const c = this.imeController;
+    if (c) {
+      try {
+        c.off('insertText');
+        c.off('deleteLeft');
+        c.off('deleteRight');
+        c.off('sendKeyboardStatus');
+        c.off('setPreviewText');
+        c.hideTextInput();
+        c.detach();
+      } catch (e) {
+        hilog.error(DOMAIN, 'IME', '[detach] EXCEPTION: %{public}s', JSON.stringify(e));
+      }
+      this.imeController = null;
+    }
+  }
+
   aboutToAppear(): void {
+    this.setupIme();
     this.initialize();
     BreakpointSystem.initialize();
     this.breakpointCallback = (value: BreakpointType): void => {

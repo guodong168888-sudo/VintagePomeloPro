@@ -133,17 +133,56 @@ void TextInputManager::ti_set_surrounding_text(wl_client*, wl_resource*,
                                                const char*, int32_t, int32_t) {}
 void TextInputManager::ti_set_text_change_cause(wl_client*, wl_resource*, uint32_t) {}
 void TextInputManager::ti_set_content_type(wl_client*, wl_resource*, uint32_t, uint32_t) {}
-void TextInputManager::ti_set_cursor_rectangle(wl_client*, wl_resource*,
-                                               int32_t, int32_t, int32_t, int32_t) {}
+
+void TextInputManager::ti_set_cursor_rectangle(wl_client*, wl_resource* r,
+                                               int32_t x, int32_t y, int32_t w, int32_t h) {
+    auto* self = GetInstance();
+    bool activated = false;
+    {
+        std::lock_guard<std::mutex> lock(self->mutex_);
+        for (Entry& entry : self->entries_) {
+            if (entry.res != r) continue;
+            entry.cursorX = x;
+            entry.cursorY = y;
+            entry.cursorW = w;
+            entry.cursorH = h;
+            // 文本框聚焦后 Wine 调 SetIMECompositionRect → 非零矩形。
+            // enter 时 Wine 发 0,0,0,0 (占位); 非零即真文本框, 立即激活。
+            if (entry.enabled && w > 0 && h > 0 && !entry.activated) {
+                entry.activated = true;
+                activated = true;
+            }
+            break;
+        }
+    }
+    if (activated) {
+        OH_LOG_INFO(LOG_APP, "[TextInput] ACTIVATE rect=%{public}d,%{public}d %{public}dx%{public}d",
+                    x, y, w, h);
+        self->NotifyActivated(true);
+    }
+}
 
 void TextInputManager::ti_commit(wl_client*, wl_resource* r) {
     auto* self = GetInstance();
-    std::lock_guard<std::mutex> lock(self->mutex_);
-    for (Entry& entry : self->entries_) {
-        if (entry.res == r) {
-            entry.commitCount++;
-            break;
+    bool activated = false;
+    {
+        std::lock_guard<std::mutex> lock(self->mutex_);
+        for (Entry& entry : self->entries_) {
+            if (entry.res == r) {
+                entry.commitCount++;
+                // 激活判定 (对齐上游): enabled + 非零光标矩形。
+                if (entry.enabled && entry.cursorW > 0 && entry.cursorH > 0 &&
+                    !entry.activated) {
+                    entry.activated = true;
+                    activated = true;
+                }
+                break;
+            }
         }
+    }
+    if (activated) {
+        OH_LOG_INFO(LOG_APP, "[TextInput] ACTIVATE (commit)");
+        self->NotifyActivated(true);
     }
 }
 
@@ -203,17 +242,25 @@ void TextInputManager::OnKeyboardEnter(uint32_t toplevelId, wl_resource* surface
 
 void TextInputManager::OnKeyboardLeave() {
     std::vector<std::pair<wl_resource*, wl_resource*>> actions;
+    bool wasActivated = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         focusedToplevel_ = 0;
         focusedSurface_ = nullptr;
         LeaveAllEnteredLocked(actions);
+        for (Entry& entry : entries_) {
+            if (entry.activated) {
+                entry.activated = false;
+                wasActivated = true;
+            }
+        }
     }
     for (const auto& action : actions) {
         OH_LOG_INFO(LOG_APP, "[TextInput] send leave res=%{public}p surface=%{public}p",
                     action.first, action.second);
         zwp_text_input_v3_send_leave(action.first, action.second);
     }
+    if (wasActivated) NotifyActivated(false);
     if (!actions.empty()) {
         OH_LOG_INFO(LOG_APP, "[TextInput] focus leave actions=%{public}d", (int)actions.size());
     }
@@ -230,18 +277,53 @@ void TextInputManager::LeaveAllEnteredLocked(
 }
 
 void TextInputManager::OnSurfaceDestroyed(wl_resource* surface) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (focusedSurface_ == surface) {
-        OH_LOG_INFO(LOG_APP, "[TextInput] focus surface destroyed surface=%{public}p tl=%{public}u",
-                    surface, focusedToplevel_);
-        focusedSurface_ = nullptr;
-        focusedToplevel_ = 0;
-    }
-    for (Entry& entry : entries_) {
-        if (entry.enteredSurface == surface) {
-            entry.enteredSurface = nullptr;
-            entry.enabled = false;
+    bool wasActivated = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (focusedSurface_ == surface) {
+            OH_LOG_INFO(LOG_APP, "[TextInput] focus surface destroyed surface=%{public}p tl=%{public}u",
+                        surface, focusedToplevel_);
+            focusedSurface_ = nullptr;
+            focusedToplevel_ = 0;
         }
+        for (Entry& entry : entries_) {
+            if (entry.enteredSurface == surface) {
+                entry.enteredSurface = nullptr;
+                entry.enabled = false;
+                if (entry.activated) {
+                    entry.activated = false;
+                    wasActivated = true;
+                }
+            }
+        }
+    }
+    if (wasActivated) NotifyActivated(false);
+}
+
+void TextInputManager::SetActivateCallback(ActivateCb cb) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    activateCb_ = std::move(cb);
+}
+
+void TextInputManager::NotifyActivated(bool active) {
+    ActivateCb cb;
+    int x = 0, y = 0, w = 0, h = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        cb = activateCb_;
+        // 回调携带当前 focused entry 的光标矩形 (ArkTS 定位软键盘/输入框)。
+        for (Entry& entry : entries_) {
+            if (entry.enteredSurface && entry.enabled) {
+                x = entry.cursorX;
+                y = entry.cursorY;
+                w = entry.cursorW;
+                h = entry.cursorH;
+                break;
+            }
+        }
+    }
+    if (cb) {
+        cb(active, x, y, w, h);
     }
 }
 
@@ -318,6 +400,23 @@ bool TextInputManager::SendCommit(const char* utf8) {
     done.type = OpType::Done;
     done.res = res;
     EnqueueOp(std::move(done));
+    return true;
+}
+
+bool TextInputManager::SendDeleteSurrounding(uint32_t before, uint32_t after) {
+    wl_resource* res = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        Entry* entry = EnabledEntryLocked();
+        if (!entry) return false;
+        res = entry->res;
+    }
+    Op op;
+    op.type = OpType::DeleteSurrounding;
+    op.res = res;
+    op.begin = (int32_t)before;
+    op.end = (int32_t)after;
+    EnqueueOp(std::move(op));
     return true;
 }
 
@@ -427,6 +526,23 @@ void TextInputManager::FlushOps() {
                 }
             }
             if (alive) zwp_text_input_v3_send_done(op.res, serial);
+            break;
+        }
+        case OpType::DeleteSurrounding: {
+            bool ok = false;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                for (const Entry& entry : entries_) {
+                    if (entry.res == op.res) {
+                        ok = entry.enabled && entry.enteredSurface;
+                        break;
+                    }
+                }
+            }
+            if (ok) {
+                zwp_text_input_v3_send_delete_surrounding_text(op.res,
+                    (uint32_t)op.begin, (uint32_t)op.end);
+            }
             break;
         }
         }

@@ -728,6 +728,47 @@ static napi_value WineTextInputSetArmed(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
+// -- NAPI: setImeCallback (激活/失活回调, 对齐上游 54d188d) --
+// Wine 文本框聚焦 (enable + 非零光标矩形) → active=1 回调 ArkTS 弹系统软键盘;
+// 失焦/leave → active=0 收起。
+static napi_value SetImeCallback(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = { nullptr };
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    napi_ref cbRef = nullptr;
+    if (argc >= 1 && args[0] != nullptr) {
+        napi_valuetype t;
+        napi_typeof(env, args[0], &t);
+        if (t == napi_function) napi_create_reference(env, args[0], 1, &cbRef);
+    }
+    TextInputManager::GetInstance()->SetActivateCallback(
+        [env, cbRef](bool active, int x, int y, int w, int h) {
+            if (!cbRef) return;
+            napi_handle_scope scope;
+            napi_open_handle_scope(env, &scope);
+            napi_value fn;
+            napi_get_reference_value(env, cbRef, &fn);
+            napi_value argv[5];
+            napi_create_int32(env, active ? 1 : 0, &argv[0]);
+            napi_create_int32(env, x, &argv[1]);
+            napi_create_int32(env, y, &argv[2]);
+            napi_create_int32(env, w, &argv[3]);
+            napi_create_int32(env, h, &argv[4]);
+            napi_value global;
+            napi_get_global(env, &global);
+            napi_value result;
+            napi_call_function(env, global, fn, 5, argv, &result);
+            napi_close_handle_scope(env, scope);
+        });
+    return nullptr;
+}
+
+// -- NAPI: imeBackspace (软键盘退格 → Wine delete_surrounding) --
+static napi_value ImeBackspace(napi_env env, napi_callback_info info) {
+    TextInputManager::GetInstance()->SendDeleteSurrounding(1, 0);
+    return nullptr;
+}
+
 // -- NAPI: 应用日志文件 sink --
 static napi_value InitAppLog(napi_env env, napi_callback_info info) {
     size_t argc = 1;
@@ -1105,6 +1146,8 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"wineTextInputCommit",     nullptr, WineTextInputCommit,     nullptr, nullptr, nullptr, napi_default, nullptr},
         {"wineTextInputEnabled",    nullptr, WineTextInputEnabled,    nullptr, nullptr, nullptr, napi_default, nullptr},
         {"wineTextInputSetArmed",   nullptr, WineTextInputSetArmed,   nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setImeCallback",           nullptr, SetImeCallback,           nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"imeBackspace",             nullptr, ImeBackspace,             nullptr, nullptr, nullptr, napi_default, nullptr},
         {"initAppLog",       nullptr, InitAppLog,       nullptr, nullptr, nullptr, napi_default, nullptr},
         {"clearNativeLog",   nullptr, ClearNativeLog,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getDesktopRootId", nullptr, GetDesktopRootId, nullptr, nullptr, nullptr, napi_default, nullptr},

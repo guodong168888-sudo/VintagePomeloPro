@@ -25,6 +25,11 @@ class TextInputManager {
 public:
     static TextInputManager* GetInstance();
 
+    // 激活回调 (对齐上游 54d188d): active=1 且带光标矩形 → ArkTS 弹系统软键盘;
+    // active=0 (失焦/leave) → 收起。
+    using ActivateCb = std::function<void(bool active, int x, int y, int w, int h)>;
+    void SetActivateCallback(ActivateCb cb);
+
     void Register(wl_display* display);
 
     // Wayland 线程: 键盘焦点跟随
@@ -37,6 +42,7 @@ public:
     // -- NAPI 线程入口 (preedit/commit 入队, Wayland 线程统一发送) --
     bool SendPreedit(const char* utf8, int32_t cursorBegin, int32_t cursorEnd);
     bool SendCommit(const char* utf8);
+    bool SendDeleteSurrounding(uint32_t before, uint32_t after);
     void SetArmed(bool armed);
 
     // -- 协议请求 (client -> server, Wayland 线程) --
@@ -59,9 +65,12 @@ private:
         wl_resource* enteredSurface = nullptr;
         bool enabled = false;
         uint32_t commitCount = 0;
+        // 光标矩形 (ti_set_cursor_rectangle 存入): 激活判定 enabled+非零矩形。
+        int32_t cursorX = 0, cursorY = 0, cursorW = 0, cursorH = 0;
+        bool activated = false;
     };
 
-    enum class OpType { Preedit, Commit, Done, SetArmed };
+    enum class OpType { Preedit, Commit, DeleteSurrounding, Done, SetArmed };
 
     struct Op {
         OpType type = OpType::Preedit;
@@ -79,6 +88,9 @@ private:
     void FlushOps();
     Entry* EnabledEntryLocked();
     void LeaveAllEnteredLocked(std::vector<std::pair<wl_resource*, wl_resource*>>& actions);
+    // 激活判定/回调 (Wayland 线程): enabled + 非零光标矩形 → 回调 ArkTS。
+    void MaybeActivateLocked();
+    void NotifyActivated(bool active);
 
     wl_global* global_ = nullptr;
     wl_display* display_ = nullptr;
@@ -86,6 +98,7 @@ private:
     bool armed_ = false;
     uint32_t focusedToplevel_ = 0;
     wl_resource* focusedSurface_ = nullptr;
+    ActivateCb activateCb_ = nullptr;
     mutable std::mutex mutex_;
     std::vector<Entry> entries_;
 
