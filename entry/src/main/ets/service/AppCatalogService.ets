@@ -14,6 +14,7 @@ import {
   stableAppId
 } from '../model/AppModels';
 import { AppSettingsStore } from './AppSettingsStore';
+import { DesktopModeService, MODE_VIRTUAL } from './DesktopModeService';
 import {
   catalogFileName,
   chooseCoverFileName,
@@ -511,11 +512,11 @@ export class AppCatalogService {
     const result: AppDescriptor[] = [];
     catalog.apps.forEach((item: BuiltinCatalogItem) => {
       const kind = this.parseLaunchKind(item.launchKind);
-      // PC/2-in-1 hosts expose each Wine program as its own ArkUI window.
-      // Hiding the tablet-only shell card prevents an explicit desktop launch
-      // while keeping File Explorer and every other system tool available.
+      // PC/2-in-1 融合模式 (FUSION) 每个 Wine 程序独立窗口: 隐藏 Wine 桌面卡片。
+      // 虚拟桌面模式 (VIRTUAL) 与平板同逻辑 — 显示卡片, 点它直接进入桌面。
       if (kind === LaunchKind.WINE_DESKTOP &&
-        AppSettingsStore.getInstance().usesManagedWineWindows()) return;
+        AppSettingsStore.getInstance().usesManagedWineWindows() &&
+        DesktopModeService.getInstance().mode !== MODE_VIRTUAL) return;
       const id = item.id || stableAppId(AppSource.BUILTIN, item.launchParams.executable);
       const settings = AppSettingsStore.getInstance().getAppSettings(id);
       // Built-ins are part of the Wine runtime.  Their executable and working

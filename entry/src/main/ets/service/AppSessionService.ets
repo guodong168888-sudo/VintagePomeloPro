@@ -86,7 +86,8 @@ export class AppSessionService {
 
   resolvePresentationMode(app: AppDescriptor, settings: GlobalSettings): WinePresentationMode {
     return resolveWinePresentationMode(app.launchTarget.kind, this.resolveMode(app, settings),
-      AppSettingsStore.getInstance().usesManagedWineWindows());
+      AppSettingsStore.getInstance().usesManagedWineWindows(),
+      WineWindowManager.getInstance().isDesktopMode);
   }
 
   hasModeConflict(app: AppDescriptor, settings: GlobalSettings): boolean {
@@ -107,6 +108,15 @@ export class AppSessionService {
     }
     const requestedMode = this.resolveMode(app, settings);
     const requestedPresentation = this.resolvePresentationMode(app, settings);
+    // 期望模式 = 当前设备+用户设置应处的模式 (applyModePolicy 的判定):
+    // PC 虚拟桌面/平板 → DESKTOP; PC 融合 → MANAGED_WINDOWS。
+    // 若请求与期望一致, 引擎状态不对会自动 ensureReady 切换, 不打扰用户弹窗
+    // (修复: PC 虚拟桌面下每次点桌面卡片都弹"切换显示模式")。
+    const expected = WineWindowManager.getInstance().isDesktopMode
+      ? WinePresentationMode.DESKTOP : WinePresentationMode.MANAGED_WINDOWS;
+    if (requestedPresentation === expected) {
+      return LaunchConflictKind.NONE;
+    }
     if ((currentMode !== requestedMode || currentPresentation !== requestedPresentation) &&
       engine.getState() !== EngineState.STOPPED) {
       return LaunchConflictKind.DISPLAY_MODE;
@@ -116,11 +126,11 @@ export class AppSessionService {
 
   async launch(app: AppDescriptor, settings: GlobalSettings, homeDirectory: string): Promise<RuntimeSession | null> {
     if (!app.available) return null;
-    // PC/2-in-1 uses one Harmony window per Wine toplevel. The explicit
-    // explorer desktop target is tablet-only and must not create a blue shell
-    // window (or a hidden desktop process) on a managed-window host.
+    // PC/2-in-1 融合模式: 每个 Wine 程序独立窗口, 桌面 root 目标不适用。
+    // 虚拟桌面模式 (VIRTUAL, isDesktopMode=true) 与平板同逻辑 — 放行桌面。
     if (app.launchTarget.kind === LaunchKind.WINE_DESKTOP &&
-      AppSettingsStore.getInstance().usesManagedWineWindows()) return null;
+      AppSettingsStore.getInstance().usesManagedWineWindows() &&
+      !WineWindowManager.getInstance().isDesktopMode) return null;
     if ((app.launchTarget.kind === LaunchKind.WINE_EXE ||
       app.launchTarget.kind === LaunchKind.WINE_SYSTEM ||
       app.launchTarget.kind === LaunchKind.WINE_DESKTOP) &&

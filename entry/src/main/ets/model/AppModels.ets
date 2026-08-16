@@ -1230,9 +1230,12 @@ export function resolveLaunchDisplayMode(kind: LaunchKind, override: DisplayMode
 }
 
 export function resolveWinePresentationMode(kind: LaunchKind, displayMode: DisplayMode,
-  managedWindowsHost: boolean): WinePresentationMode {
+  managedWindowsHost: boolean, virtualDesktop: boolean = false): WinePresentationMode {
   if (kind === LaunchKind.WINE_DESKTOP) return WinePresentationMode.DESKTOP;
-  return managedWindowsHost ? WinePresentationMode.MANAGED_WINDOWS : WinePresentationMode.DESKTOP;
+  // PC 虚拟桌面模式 (VIRTUAL): 程序运行在桌面合成器内 (与平板同逻辑)。
+  // 仅 PC 融合模式 (FUSION) 每个程序独立窗口。
+  if (managedWindowsHost && !virtualDesktop) return WinePresentationMode.MANAGED_WINDOWS;
+  return WinePresentationMode.DESKTOP;
 }
 
 export function canTransitionEngineState(from: EngineState, to: EngineState): boolean {
