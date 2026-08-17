@@ -49,6 +49,9 @@ const FILL_PRESSED = '#FF2979FF';
 const TEXT_IDLE = '#FFE7F2FF';
 const TEXT_PRESSED = '#FFFFFFFF';
 
+/** Toggle 按钮长按锁定阈值（毫秒）：短按=点按，长按=锁定保持。 */
+const LONG_PRESS_LOCK_MS = 400;
+
 /**
  * Winlator 风格的元素化虚拟输入覆盖层。控件由 profile.elements 驱动，
  * 每个元素使用归一化坐标任意排布，支持 BUTTON / D_PAD / STICK /
@@ -99,6 +102,8 @@ export struct VirtualInputOverlay {
   private activeElementTouches: Map<string, number> = new Map<string, number>();
   /** Toggle buttons stay here after the finger lifts so profile/page changes can release them safely. */
   private lockedToggleElements: Map<string, ControlElement> = new Map<string, ControlElement>();
+  /** Toggle 按钮按下时刻（长按锁定判定）。 */
+  private toggleDownTimes: Map<string, number> = new Map<string, number>();
   private touchOrigins: Map<string, OverlayPoint> = new Map<string, OverlayPoint>();
   private stickLastDeltas: Map<string, OverlayPoint> = new Map<string, OverlayPoint>();
   private trackpadStates: Map<string, TrackpadState> = new Map<string, TrackpadState>();
@@ -128,7 +133,7 @@ export struct VirtualInputOverlay {
   private toolbarMouseMoved: boolean = false;
 
   // -- 触摸板模式 (虚拟光标, 对齐 upstream main-ui DesktopLayer.handleTouchpad) --
-  // 标准触控板语义: 单指滑动=移动光标, tap=左键, 长按=右键,
+  // 标准触控板语义: 单指滑动=移动光标, tap=左键, 双指轻点=右键,
   // 双击后按住拖动=拖拽窗口/元素, 双指拖动=滚动(作用于光标处)。
   // 与直接触控("指哪点哪")互斥 — 触控板"光标在哪点哪"。
   private static readonly DRAG_THRESHOLD: number = 10;      // 物理 px, 区分点击抖动
@@ -175,7 +180,7 @@ export struct VirtualInputOverlay {
   // ---- 通用几何与颜色 ----
 
   private elementBaseSize(element: ControlElement): number {
-    if (element.type === ControlElementType.D_PAD) return 132;
+    if (element.type === ControlElementType.D_PAD) return 156;
     if (element.type === ControlElementType.STICK) return 120;
     return 56;
   }
@@ -612,7 +617,15 @@ export struct VirtualInputOverlay {
       if (this.activeElementTouches.has(id)) return;
       this.activeElementTouches.set(id, touch.id);
       this.lastActionTouchAt = Date.now();
-      if (!element.toggleSwitch) {
+      if (element.toggleSwitch) {
+        // 长按锁定模式：Down 先按下；短按 Up 释放（普通点按），长按 Up 锁定保持。
+        this.toggleDownTimes.set(id, Date.now());
+        if (!this.isElementPressed(id)) {
+          this.applyButtonBindings(element, true, touch.id, vp2px(Number(touch.x)), vp2px(Number(touch.y)));
+          this.setElementPressed(id, true);
+        }
+        // 已锁定：保持按下，不重复注入。
+      } else {
         this.applyButtonBindings(element, true, touch.id, vp2px(Number(touch.x)), vp2px(Number(touch.y)));
         this.setElementPressed(id, true);
       }
@@ -622,13 +635,30 @@ export struct VirtualInputOverlay {
       this.activeElementTouches.get(id) === touch.id) {
       this.activeElementTouches.delete(id);
       if (element.toggleSwitch) {
-        // A cancelled gesture must not unexpectedly lock a modifier.
-        if (type === TouchType.Cancel) return;
-        const next = !this.isElementPressed(id);
-        this.applyButtonBindings(element, next, touch.id, vp2px(Number(touch.x)), vp2px(Number(touch.y)));
-        this.setElementPressed(id, next);
-        if (next) this.lockedToggleElements.set(id, element);
-        else this.lockedToggleElements.delete(id);
+        if (type === TouchType.Cancel) {
+          // 取消手势：释放并清除锁定。
+          this.toggleDownTimes.delete(id);
+          if (this.isElementPressed(id)) {
+            this.applyButtonBindings(element, false, touch.id, vp2px(Number(touch.x)), vp2px(Number(touch.y)));
+            this.setElementPressed(id, false);
+          }
+          this.lockedToggleElements.delete(id);
+          return;
+        }
+        const downTime = this.toggleDownTimes.get(id) ?? 0;
+        this.toggleDownTimes.delete(id);
+        const held = Date.now() - downTime;
+        if (held >= LONG_PRESS_LOCK_MS) {
+          // 长按：锁定按下（保持）。
+          this.lockedToggleElements.set(id, element);
+        } else {
+          // 短按：释放（普通点按）或解锁已锁定的按键。
+          if (this.isElementPressed(id)) {
+            this.applyButtonBindings(element, false, touch.id, vp2px(Number(touch.x)), vp2px(Number(touch.y)));
+            this.setElementPressed(id, false);
+          }
+          this.lockedToggleElements.delete(id);
+        }
         return;
       }
       if (this.isElementPressed(id)) {
@@ -663,7 +693,7 @@ export struct VirtualInputOverlay {
       if (element.outputMode === 'mouse') {
         // 鼠标视角：摇杆偏移增量 → 指针增量。偏移越大单次视角转动越快。
         const last = this.stickLastDeltas.get(id) ?? { x: 0, y: 0 };
-        const rate = 0.9;
+        const rate = 0.9 * Math.max(0.1, Math.min(5, this.profile.cursorSpeed));
         const deltaX = (dx - last.x) * rate;
         const deltaY = (dy - last.y) * rate;
         this.stickLastDeltas.set(id, { x: dx, y: dy });
@@ -1046,7 +1076,7 @@ export struct VirtualInputOverlay {
       }
       this.tpDragArmed = false;
       if (!this.tpMoved) {
-        // 轻点 = 左键 (无长按右键; 右键走双指轻点, 保持本地语义)
+        // 轻点 = 左键 (右键走双指轻点, 保持虚拟鼠标本地语义)
         this.clickAtCursor(mapMouseButton(1));
         this.flashCursorIndicator();
         this.tpLastTapTime = Date.now();
@@ -1067,8 +1097,29 @@ export struct VirtualInputOverlay {
       return;
     }
     // 触摸板模式: 虚拟光标全局状态机 (吞掉触摸, 不穿透到下层 Wine)。
+    // 触摸落在可点击按钮 (BUTTON/RANGE_BUTTON) 上时优先触发按钮,
+    // 其余区域 (含视角/摇杆/方向) 走全局触摸板手势。
     if (this.touchpadModeVisual) {
       event.stopPropagation();
+      const touch = event.changedTouches[0];
+      const x = Number(touch.x);
+      const y = Number(touch.y);
+      const activeId = this.activeElementIdForTouch(touch.id);
+      let claimed = false;
+      if (activeId.length > 0) {
+        const element = this.elementById(activeId);
+        if (element && (element.type === ControlElementType.BUTTON || element.type === ControlElementType.RANGE_BUTTON)) {
+          this.handleElementTouch(event, element);
+          claimed = true;
+        }
+      } else if (event.type === TouchType.Down) {
+        const target = this.elementAt(x, y);
+        if (target && (target.type === ControlElementType.BUTTON || target.type === ControlElementType.RANGE_BUTTON)) {
+          this.handleElementTouch(event, target);
+          claimed = true;
+        }
+      }
+      if (claimed) return;
       this.handleTouchpad(event);
       return;
     }
@@ -1269,47 +1320,41 @@ export struct VirtualInputOverlay {
   @Builder
   private DPadElement(element: ControlElement) {
     Stack() {
-      Stack({ alignContent: Alignment.Center }) {
-        Text('↑').fontSize(16 * (element.scale ?? 1)).fontWeight(FontWeight.Bold)
-          .fontColor(this.isDpadDirectionPressed(element.id, 'up') ? TEXT_PRESSED : TEXT_IDLE)
-      }
-      .width(44 * (element.scale ?? 1)).height(44 * (element.scale ?? 1))
-      .borderRadius(22 * (element.scale ?? 1))
-      .backgroundColor(this.isDpadDirectionPressed(element.id, 'up') ? FILL_PRESSED : FILL_IDLE)
-      .position({ x: this.elementWidth(element) / 2 - 22 * (element.scale ?? 1), y: 8 * (element.scale ?? 1) })
-      Stack({ alignContent: Alignment.Center }) {
-        Text('↓').fontSize(16 * (element.scale ?? 1)).fontWeight(FontWeight.Bold)
-          .fontColor(this.isDpadDirectionPressed(element.id, 'down') ? TEXT_PRESSED : TEXT_IDLE)
-      }
-      .width(44 * (element.scale ?? 1)).height(44 * (element.scale ?? 1))
-      .borderRadius(22 * (element.scale ?? 1))
-      .backgroundColor(this.isDpadDirectionPressed(element.id, 'down') ? FILL_PRESSED : FILL_IDLE)
-      .position({ x: this.elementWidth(element) / 2 - 22 * (element.scale ?? 1), y: this.elementHeight(element) - 52 * (element.scale ?? 1) })
-      Stack({ alignContent: Alignment.Center }) {
-        Text('←').fontSize(16 * (element.scale ?? 1)).fontWeight(FontWeight.Bold)
-          .fontColor(this.isDpadDirectionPressed(element.id, 'left') ? TEXT_PRESSED : TEXT_IDLE)
-      }
-      .width(44 * (element.scale ?? 1)).height(44 * (element.scale ?? 1))
-      .borderRadius(22 * (element.scale ?? 1))
-      .backgroundColor(this.isDpadDirectionPressed(element.id, 'left') ? FILL_PRESSED : FILL_IDLE)
-      .position({ x: 8 * (element.scale ?? 1), y: this.elementHeight(element) / 2 - 22 * (element.scale ?? 1) })
-      Stack({ alignContent: Alignment.Center }) {
-        Text('→').fontSize(16 * (element.scale ?? 1)).fontWeight(FontWeight.Bold)
-          .fontColor(this.isDpadDirectionPressed(element.id, 'right') ? TEXT_PRESSED : TEXT_IDLE)
-      }
-      .width(44 * (element.scale ?? 1)).height(44 * (element.scale ?? 1))
-      .borderRadius(22 * (element.scale ?? 1))
-      .backgroundColor(this.isDpadDirectionPressed(element.id, 'right') ? FILL_PRESSED : FILL_IDLE)
-      .position({ x: this.elementWidth(element) - 52 * (element.scale ?? 1), y: this.elementHeight(element) / 2 - 22 * (element.scale ?? 1) })
-      Stack({ alignContent: Alignment.Center }) {
-        Circle().width(20 * (element.scale ?? 1)).height(20 * (element.scale ?? 1)).fill('#66404040')
-      }
-      .position({ x: this.elementWidth(element) / 2 - 10 * (element.scale ?? 1), y: this.elementHeight(element) / 2 - 10 * (element.scale ?? 1) })
+      // 圆形底座
+      Circle()
+        .width(this.elementWidth(element)).height(this.elementHeight(element))
+        .fill('#33404040')
+        .stroke(this.isElementPressed(element.id) ? '#FF4CAF50' : STROKE_COLOR)
+        .strokeWidth(2)
+      // 小霸王风格十字键：细臂直角，无圆角无箭头文字，置于圆内。
+      // 上臂
+      Stack()
+        .width(this.elementWidth(element) * 0.30).height(this.elementWidth(element) * 0.42)
+        .backgroundColor(this.isDpadDirectionPressed(element.id, 'up') ? FILL_PRESSED : FILL_IDLE)
+        .position({ x: this.elementWidth(element) * 0.35, y: this.elementWidth(element) * 0.04 })
+      // 下臂
+      Stack()
+        .width(this.elementWidth(element) * 0.30).height(this.elementWidth(element) * 0.42)
+        .backgroundColor(this.isDpadDirectionPressed(element.id, 'down') ? FILL_PRESSED : FILL_IDLE)
+        .position({ x: this.elementWidth(element) * 0.35, y: this.elementWidth(element) * 0.54 })
+      // 左臂
+      Stack()
+        .width(this.elementWidth(element) * 0.42).height(this.elementWidth(element) * 0.30)
+        .backgroundColor(this.isDpadDirectionPressed(element.id, 'left') ? FILL_PRESSED : FILL_IDLE)
+        .position({ x: this.elementWidth(element) * 0.04, y: this.elementWidth(element) * 0.35 })
+      // 右臂
+      Stack()
+        .width(this.elementWidth(element) * 0.42).height(this.elementWidth(element) * 0.30)
+        .backgroundColor(this.isDpadDirectionPressed(element.id, 'right') ? FILL_PRESSED : FILL_IDLE)
+        .position({ x: this.elementWidth(element) * 0.54, y: this.elementWidth(element) * 0.35 })
+      // 中心方块
+      Stack()
+        .width(this.elementWidth(element) * 0.30).height(this.elementWidth(element) * 0.30)
+        .backgroundColor(this.isElementPressed(element.id) ? FILL_PRESSED : FILL_IDLE)
+        .position({ x: this.elementWidth(element) * 0.35, y: this.elementWidth(element) * 0.35 })
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))
     .borderRadius(this.elementRadius(element))
-    .backgroundColor(this.isElementPressed(element.id) ? '#664CAF50' : '#33404040')
-    .border({ width: 2, color: this.isElementPressed(element.id) ? '#FF4CAF50' : STROKE_COLOR })
     .opacity(this.elementOpacity(element))
     .hitTestBehavior(HitTestMode.None)
     .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
@@ -1327,6 +1372,11 @@ export struct VirtualInputOverlay {
           .stroke('#AAFFFFFF').strokeWidth(2)
       }
       .translate({ x: this.stickState(element.id).dx, y: this.stickState(element.id).dy })
+      if (element.text.length > 0) {
+        Text(element.text).fontSize(12 * (element.scale ?? 1)).fontWeight(FontWeight.Bold)
+          .fontColor(this.stickState(element.id).active ? TEXT_PRESSED : TEXT_IDLE)
+          .translate({ x: 0, y: this.elementHeight(element) / 2 + 8 * (element.scale ?? 1) })
+      }
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))
     .opacity(this.elementOpacity(element))
@@ -1338,13 +1388,8 @@ export struct VirtualInputOverlay {
   @Builder
   private TrackpadElement(element: ControlElement) {
     Stack({ alignContent: Alignment.Center }) {
-      Text('鼠标').fontSize(12 * (element.scale ?? 1))
+      Text(element.text.length > 0 ? element.text : '视角').fontSize(12 * (element.scale ?? 1))
         .fontColor(this.isElementPressed(element.id) ? '#FFB9F6CA' : '#88FFFFFF')
-      if (element.text.length > 0) {
-        Text(element.text).fontSize(11 * (element.scale ?? 1))
-          .fontColor(this.isElementPressed(element.id) ? '#FFB9F6CA' : TEXT_IDLE)
-          .margin({ top: 30 * (element.scale ?? 1) })
-      }
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))
     .borderRadius(this.elementRadius(element))

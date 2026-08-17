@@ -82,6 +82,7 @@ struct InputOverlayPage {
   private pendingHostCommit: string = '';
   private static readonly HOST_SENTINEL: string = '\uF8FF';
   private readonly TAP_TIMEOUT_MS: number = 450;
+  private readonly LONG_PRESS_MS: number = 600;   // 直接触摸长按=右键 判定时长
   private readonly TAP_SLOP_PX: number = 48;
   private cursorHideTimer: number = -1;
   private cursorFlashTimer: number = -1;
@@ -313,9 +314,7 @@ struct InputOverlayPage {
           }
           InputDispatcher.getInstance().releaseSource(source);
           if (this.directTouches.size === 0) {
-            if (event.type === TouchType.Up && this.twoFingerTapEligible) {
-              this.injectClick('direct-rdp-two-finger-right', this.lastMidX, this.lastMidY, 273);
-            }
+            // 直接触摸双指仅用于滚动, 右键改走单指长按 (双指轻点难触发)。
             InputDispatcher.getInstance().releaseSource('direct-scroll');
             this.twoFinger = false;
             this.twoFingerTapEligible = false;
@@ -325,6 +324,10 @@ struct InputOverlayPage {
           InputDispatcher.getInstance().pointerUp(source, x, y, 272);
         } else if (event.type === TouchType.Up && !previous.moved && elapsed < this.TAP_TIMEOUT_MS) {
           this.injectDirectLeftTap(x, y);
+        } else if (event.type === TouchType.Up && !previous.moved && elapsed >= this.LONG_PRESS_MS) {
+          // 直接触摸长按 = 右键
+          this.injectClick('direct-longpress-right', x, y, 273);
+          this.resetDirectTapSequence();
         } else {
           this.resetDirectTapSequence();
           InputDispatcher.getInstance().releaseSource(source);

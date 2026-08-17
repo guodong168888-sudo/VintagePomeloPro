@@ -703,15 +703,15 @@ function arrowBindings(): InputBinding[] {
 
 function defaultTemplateElements(): ControlElement[] {
   return [
-    createControlElement(ControlElementType.D_PAD, 0.13, 0.74, '', dpadWASD()),
-    createControlElement(ControlElementType.TRACKPAD, 0.68, 0.42, '鼠标', []),
-    createControlElement(ControlElementType.BUTTON, 0.80, 0.70, '左键', [mouseBinding(MOUSE_LEFT_BUTTON)]),
-    createControlElement(ControlElementType.BUTTON, 0.88, 0.60, '右键', [mouseBinding(MOUSE_RIGHT_BUTTON)]),
-    createControlElement(ControlElementType.BUTTON, 0.86, 0.82, '空格', [keyBinding(57)]),
-    createControlElement(ControlElementType.BUTTON, 0.93, 0.70, 'E', [keyBinding(18)]),
-    createControlElement(ControlElementType.BUTTON, 0.06, 0.26, 'Esc', [keyBinding(1)], ControlElementShape.ROUND_RECT, 0.72),
-    createControlElement(ControlElementType.BUTTON, 0.06, 0.44, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT, 0.72, true),
-    createControlElement(ControlElementType.BUTTON, 0.17, 0.44, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT, 0.72, true)
+    createControlElement(ControlElementType.D_PAD, 0.12, 0.78, '', dpadWASD()),
+    createControlElement(ControlElementType.TRACKPAD, 0.68, 0.76, '视角', []),
+    createControlElement(ControlElementType.BUTTON, 0.86, 0.70, '空格', [keyBinding(57)]),
+    createControlElement(ControlElementType.BUTTON, 0.94, 0.70, '左键', [mouseBinding(MOUSE_LEFT_BUTTON)]),
+    createControlElement(ControlElementType.BUTTON, 0.86, 0.82, 'E', [keyBinding(18)]),
+    createControlElement(ControlElementType.BUTTON, 0.94, 0.82, '右键', [mouseBinding(MOUSE_RIGHT_BUTTON)]),
+    createControlElement(ControlElementType.BUTTON, 0.06, 0.16, 'Esc', [keyBinding(1)], ControlElementShape.ROUND_RECT, 0.72),
+    createControlElement(ControlElementType.BUTTON, 0.14, 0.16, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT, 0.72, true),
+    createControlElement(ControlElementType.BUTTON, 0.22, 0.16, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT, 0.72, true)
   ];
 }
 
@@ -932,7 +932,7 @@ export function createDefaultGlobalSettings(): GlobalSettings {
     usePageBackground: false,
     pageBackgroundUri: '',
     virtualInputEnabled: true,
-    showVirtualControls: false,
+    showVirtualControls: true,
     autoHideVirtualControls: false,
     controlBarDirection: ControlBarDirection.AUTO,
     controlBarPositionX: 1,
