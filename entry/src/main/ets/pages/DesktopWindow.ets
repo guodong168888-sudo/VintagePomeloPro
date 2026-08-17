@@ -225,6 +225,16 @@ struct DesktopPage {
 
   /** 切边模式: XComponent 四周让出圆角避让边距 (黑色), 全屏模式无内缩。 */
   private applyCornerSafeMargin(): void {
+    // PC 虚拟桌面浮窗 (对齐 master VirtualDesktop/DesktopLayer — 其桌面窗口
+    // 全部无 padding): 禁用圆角避让 padding, XComponent 全客户区铺满。否则
+    // padding 内缩 XComponent 后, onMouse/onTouch 的组件相对坐标 (vp2px) 与
+    // renderer surface/CoordTransform letterbox 基准错位, 鼠标光标相对游戏
+    // 光标偏移。切边圆角避让仅平板全屏桌面需要。
+    if (AppSettingsStore.getInstance().usesManagedWineWindows() &&
+      WineWindowManager.getInstance().isDesktopMode) {
+      this.cornerSafeMargin = 0;
+      return;
+    }
     const mode = (this.desktopWindowMode ||
       AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode) as DesktopWindowMode;
     if (mode !== DesktopWindowMode.SAFE_AREA) {

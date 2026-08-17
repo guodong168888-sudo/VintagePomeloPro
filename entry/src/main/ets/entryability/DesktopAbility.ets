@@ -138,9 +138,14 @@ export default class DesktopAbility extends UIAbility {
       WineWindowManager.getInstance().isDesktopMode) {
       try {
         await target.setWindowLayoutFullScreen(false);
+        // 对齐上游 VirtualDesktopAbility: PC 虚拟桌面浮窗不强制显示系统
+        // 状态栏/导航条 — 强制 status=true 会让浮窗顶部多出系统状态栏,
+        // 内容区/输入坐标基准向下偏移一个状态栏高度 (≈一个文字高度),
+        // 鼠标光标相对游戏光标整体偏下。隐藏系统栏后 XComponent 从标题栏
+        // 下方铺满内容区, 与 master 无偏移语义一致。
         await Promise.all([
-          target.setSpecificSystemBarEnabled('status', true),
-          target.setSpecificSystemBarEnabled('navigationIndicator', true)
+          target.setSpecificSystemBarEnabled('status', false),
+          target.setSpecificSystemBarEnabled('navigationIndicator', false)
         ]);
         await target.setWindowBackgroundColor('#000000');
         // 浮窗初始尺寸 = 屏幕 90% (居中): 保证 Wine 桌面 1:1 显示, 开始菜单/

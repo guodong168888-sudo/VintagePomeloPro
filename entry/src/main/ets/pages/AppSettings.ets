@@ -3,6 +3,7 @@ import promptAction from '@ohos.promptAction';
 import fs from '@ohos.file.fs';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { fileUri, picker } from '@kit.CoreFileKit';
+import { hilog } from '../service/LogService';
 import {
   BOX64_APP_PRESET_IDS,
   BOX64_PRESET_DEFAULT,
@@ -41,6 +42,8 @@ const DEVICE_SDK_API_VERSION: number = (() => {
     return 0;
   }
 })();
+const DOMAIN = 0x0000;
+const TAG = 'AppSet';
 const SUPPORTS_HDS_FLOATING: boolean =
   canIUse('SystemCapability.UIDesign.HDSComponent.Core') && DEVICE_SDK_API_VERSION >= 23;
 const HDS_MATERIAL_TYPE_IMMERSIVE: number = 101;
@@ -369,35 +372,40 @@ struct AppSettingsPage {
       this.replace(this.value.customTitle, cover, this.value.executable,
         this.value.workingDirectory, this.value.displayModeOverride);
       await this.persistAndScan('封面已更新');
-    } catch (_) {
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'selectCover failed: %{public}s', JSON.stringify(e));
       promptAction.showToast({ message: '未选择封面' });
     }
   }
 
   /**
-   * 把选择器授权的封面图片复制到应用私有目录（filesDir/covers）后返回本地路径。
-   * picker 返回的 URI 授权只在当次会话有效，且媒体库/文档 URI 需要额外权限；
-   * 直接保存原始 URI 会导致卡片封面在重启或切换应用后无法显示。
-   * 复制到应用沙箱内则始终可读，Image 加载 file:// 本地路径即可稳定展示。
+   * 把选择器授权的封面图片复制到该游戏自己的目录（<gameDir>/cover.<ext>）后
+   * 返回本地路径。
+   * - 每个游戏存各自目录: 不同游戏互不干扰, 不会有共享目录的覆盖/串用问题;
+   *   固定名 cover.png/jpg/jpeg/webp — scan 的 findCover/chooseCoverFileName
+   *   自动发现, 游戏目录迁移/备份时封面跟随, 不依赖 Preferences 里的绝对路径。
+   * - 同一游戏换封面时目标已存在 (cover.<ext>), 先删旧再拷避免覆盖失败。
    */
   private async importCover(uri: string): Promise<string> {
     let srcFd: number = -1;
     try {
-      const coverBase = this.value.appId.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const dir = this.app?.directory ?? '';
+      if (!dir) return '';
       // 媒体库 URI 可能带缩略图 query（?timestampApp=...&path=...），
       // 取文件名前先剥离，避免 query 里的分隔符污染扩展名。
       const cleanUri = uri.split('?')[0];
       const coverName = new fileUri.FileUri(cleanUri).name;
       const dot = coverName.lastIndexOf('.');
       const ext = dot > 0 ? coverName.substring(dot).toLowerCase() : '.png';
-      const dir = this.context.filesDir + '/covers';
-      await fs.mkdir(dir, true);
-      const dest = dir + '/' + coverBase + ext;
+      const dest = dir + '/cover' + ext;
+      // 同游戏换封面: 先删旧封面再拷（目标已存在时防 copyFile 覆盖失败）
+      await this.removeCoverFiles(dir, dest);
       srcFd = fs.openSync(uri, fs.OpenMode.READ_ONLY).fd;
       await fs.copyFile(srcFd, dest);
-      await this.cleanupOldCovers(dir, coverBase, dest);
+      hilog.info(DOMAIN, TAG, 'cover imported: %{public}s', dest);
       return dest;
-    } catch (_) {
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'cover import failed: %{public}s', JSON.stringify(e));
       return '';
     } finally {
       if (srcFd >= 0) {
@@ -406,19 +414,38 @@ struct AppSettingsPage {
     }
   }
 
-  /** 清理同一应用旧扩展名的封面文件，避免私有目录无限增长。 */
-  private async cleanupOldCovers(dir: string, coverBase: string, keep: string): Promise<void> {
+  /**
+   * 删除游戏目录内的旧封面文件（cover.* / folder.* 旧格式），保留 keep
+   * （keep 传 '' 表示全部删除，用于"移除封面"）。
+   */
+  private async removeCoverFiles(dir: string, keep: string): Promise<void> {
     try {
+      const keepName = keep.length > 0 ? keep.substring(keep.lastIndexOf('/') + 1) : '';
       const names: string[] = await fs.listFile(dir);
-      const keepName = keep.substring(keep.lastIndexOf('/') + 1);
       for (let index = 0; index < names.length; index++) {
         const name = names[index];
-        if (name === keepName) continue;
-        if (name.startsWith(coverBase + '.')) {
+        if (keepName.length > 0 && name === keepName) continue;
+        if (/^cover\.(png|jpe?g|webp|bmp)$/i.test(name) ||
+          /^folder\.(png|jpe?g|webp|bmp)$/i.test(name)) {
           try { fs.unlinkSync(dir + '/' + name); } catch (_) {}
         }
       }
     } catch (_) {
+    }
+  }
+
+  /** 移除封面: 删该游戏目录的封面文件 + 清 customCover，卡片立即恢复默认封面。 */
+  private async removeCover(): Promise<void> {
+    try {
+      if (this.app?.directory) {
+        await this.removeCoverFiles(this.app.directory, '');
+      }
+      this.replace(this.value.customTitle, '', this.value.executable,
+        this.value.workingDirectory, this.value.displayModeOverride);
+      await this.persistAndScan('已移除封面');
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'removeCover failed: %{public}s', JSON.stringify(e));
+      promptAction.showToast({ message: '移除封面失败，请重试' });
     }
   }
 
@@ -565,8 +592,17 @@ struct AppSettingsPage {
               Text('内建系统应用由 Wine 运行时提供，不能更换 EXE。').fontSize(12).fontColor($r('app.color.text_secondary'))
                 .width('100%').padding(14).backgroundColor($r('app.color.search_background')).borderRadius(14)
             }
-            Button('选择封面图片').width('100%').height(48).backgroundColor($r('app.color.search_background'))
-              .fontColor($r('app.color.text_primary')).id('app-settings-select-cover').onClick(() => this.selectCover())
+            // 封面仅对下载游戏开放: 每个游戏的封面存各自的游戏目录 (cover.<ext>),
+            // 内建应用封面是内置的, 不提供自定义。
+            if (this.app?.source === AppSource.DOWNLOAD) {
+              Button('选择封面图片').width('100%').height(48).backgroundColor($r('app.color.search_background'))
+                .fontColor($r('app.color.text_primary')).id('app-settings-select-cover').onClick(() => this.selectCover())
+              if (this.value.customCover.length > 0) {
+                Button('移除封面').width('100%').height(44).margin({ top: 8 })
+                  .backgroundColor('#1AD94848').fontColor('#D94848').id('app-settings-remove-cover')
+                  .onClick(() => { void this.removeCover(); })
+              }
+            }
           }.width('100%').padding(this.cardPadding()).backgroundColor($r('app.color.card_background')).borderRadius(16)
 
           Column({ space: 12 }) {
