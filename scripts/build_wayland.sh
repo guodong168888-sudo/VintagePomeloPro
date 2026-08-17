@@ -13,7 +13,7 @@ SCANNER="$WAYLAND_SCANNER"
 build_scanner() {
     if [ -x "$SCANNER" ]; then return 0; fi
     log "--- 编译 wayland-scanner (native) ---"
-    if [ "$HOST_OS" = "Darwin" ]; then
+    if [ "$HOST_OS" = "Darwin" ] || [ "$HOST_OS" = "HarmonyOS" ]; then
         local host_build="$BUILD_DIR/wayland_native"
         local host_prefix="$BUILD_DIR/host-tools"
         mkdir -p "$host_build" "$host_prefix"
@@ -23,6 +23,11 @@ build_scanner() {
             -Ddocumentation=false -Dtests=false --buildtype=release
         ninja -C "$host_build"
         ninja -C "$host_build" install
+
+        # 安装时的 strip 操作破坏了 OHOS SDK clang 的自动签名，所以在 HarmonyOS 上需要重新签名才能运行
+        if [ "$HOST_OS" = "HarmonyOS" ]; then
+            "$SCRIPT_DIR/ohos-sign-elf.py" "$host_prefix"
+        fi
     else
         mkdir -p /tmp/wayland_native
         meson setup /tmp/wayland_native "$WL_SRC" \
@@ -45,8 +50,10 @@ fi
 
 build_scanner
 
-export PKG_CONFIG_PATH="$BUILD_DIR/host-tools/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-export PKG_CONFIG_PATH_FOR_BUILD="$BUILD_DIR/host-tools/lib/pkgconfig${PKG_CONFIG_PATH_FOR_BUILD:+:$PKG_CONFIG_PATH_FOR_BUILD}"
+if [ "$HOST_OS" = "Darwin" ] || [ "$HOST_OS" = "HarmonyOS" ]; then
+    export PKG_CONFIG_PATH="$BUILD_DIR/host-tools/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    export PKG_CONFIG_PATH_FOR_BUILD="$BUILD_DIR/host-tools/lib/pkgconfig${PKG_CONFIG_PATH_FOR_BUILD:+:$PKG_CONFIG_PATH_FOR_BUILD}"
+fi
 
 mkdir -p "$SYSROOT_EXT_INC" "$SYSROOT_EXT_LIB" "$SYSROOT_EXT_PC" "$SYSROOT_EXT_SHARE"
 mkdir -p "$WL_BUILD"
@@ -75,18 +82,8 @@ cp "$WL_SRC/egl/wayland-egl.h" "$SYSROOT_EXT_INC/" 2>/dev/null || true
 cp "$WL_SRC/egl/wayland-egl-core.h" "$SYSROOT_EXT_INC/" 2>/dev/null || true
 
 # 2. wayland-protocols
-# wayland-protocols declares wayland-scanner as a native (build-machine)
-# dependency; meson resolves native deps through the native file's
-# pkg_config_path, not the cross file or the ambient environment.
-NATIVE_FILE="$BUILD_DIR/host-tools-native.txt"
-cat > "$NATIVE_FILE" << EOF
-[binaries]
-pkg-config = '$PKG_CONFIG_BIN'
-[built-in options]
-pkg_config_path = ['$BUILD_DIR/host-tools/lib/pkgconfig']
-EOF
 meson_build "$WL_BUILD/protocols" "$WP_SRC" \
-    -Dtests=false --native-file "$NATIVE_FILE"
+    -Dtests=false
 ninja -C "$WL_BUILD/protocols"
 
 # 安装协议 XML 到 sysroot-ext
