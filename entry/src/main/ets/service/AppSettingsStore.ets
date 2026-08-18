@@ -277,6 +277,35 @@ export class AppSettingsStore {
     });
   }
 
+  /** 持久化虚拟按键开关: 桌面重开时按用户最后设定恢复, 不再每次自动弹出。 */
+  async setShowVirtualControls(value: boolean): Promise<void> {
+    const current = this.globalSettings;
+    await this.saveGlobalSettings({
+      defaultDisplayMode: current.defaultDisplayMode,
+      desktopOrientation: current.desktopOrientation,
+      desktopWindowMode: current.desktopWindowMode,
+      keepScreenOn: current.keepScreenOn,
+      box64Preset: current.box64Preset,
+      desktopInputProfileId: current.desktopInputProfileId,
+      viewMode: current.viewMode,
+      themeMode: current.themeMode,
+      useGlassEffect: current.useGlassEffect,
+      usePageBackground: current.usePageBackground,
+      pageBackgroundUri: current.pageBackgroundUri,
+      virtualInputEnabled: current.virtualInputEnabled,
+      showVirtualControls: value,
+      autoHideVirtualControls: current.autoHideVirtualControls,
+      controlBarDirection: current.controlBarDirection,
+      controlBarPositionX: current.controlBarPositionX,
+      controlBarPositionY: current.controlBarPositionY,
+      virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),
+      controlOpacity: current.controlOpacity,
+      gamepadDeadzone: current.gamepadDeadzone,
+      outputScale: current.outputScale,
+      d3dRendererPreference: current.d3dRendererPreference
+    });
+  }
+
   async setBox64Preset(value: string): Promise<void> {
     const current = this.globalSettings;
     await this.saveGlobalSettings({

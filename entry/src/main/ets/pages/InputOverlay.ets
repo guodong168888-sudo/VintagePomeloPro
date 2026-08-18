@@ -858,6 +858,10 @@ struct InputOverlayPage {
           onToggleHostKeyboard: (): void => { this.toggleHostKeyboard(); },
           onControlsVisibleChange: (visible: boolean): void => {
             InputOverlayWindowCoordinator.getInstance().setControlsVisible(visible);
+            // 持久化虚拟按键开关状态: 桌面重开时按用户最后设定恢复, 不再每次自动弹出。
+            AppSettingsStore.getInstance().setShowVirtualControls(visible).then((): void => {
+              this.settings = AppSettingsStore.getInstance().getGlobalSettings();
+            }).catch((): void => {});
           },
           onTouchpadModeChange: (enabled: boolean): void => this.setTouchpadMode(enabled),
           onControlBarPositionChange: (x: number, y: number): void => {
