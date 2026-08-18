@@ -237,7 +237,10 @@ export struct AppCard {
           this.onSettings(this.app);
         })
     }
-    .width('100%')
+    // COMPACT 卡片是 Row(Cover + TitleRow): TitleRow 必须占剩余空间,
+    // 否则 width('100%') 会占满整卡宽度并把右侧设定按钮挤出裁剪区。
+    .layoutWeight(this.viewMode === ViewMode.COMPACT ? 1 : 0)
+    .width(this.viewMode === ViewMode.COMPACT ? 0 : '100%')
     .padding({ left: 14, right: 8, top: 11, bottom: 12 })
   }
 
