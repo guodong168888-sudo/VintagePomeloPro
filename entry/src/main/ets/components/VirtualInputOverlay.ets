@@ -14,7 +14,7 @@ import { mapMouseButton } from '../common/MouseMap';
 import { display } from '@kit.ArkUI';
 import testNapi from 'libentry.so';
 
-type ToolbarAction = 'toolbar' | 'editor' | 'mapping' | 'controls' | 'mouse' | 'keyboard' | 'wake';
+type ToolbarAction = 'toolbar' | 'editor' | 'mapping' | 'controls' | 'mouse' | 'keyboard' | 'home' | 'wake';
 
 interface KeyboardShieldRect {
   left: number;
@@ -70,6 +70,8 @@ export struct VirtualInputOverlay {
   @Prop @Watch('onControlBarPositionChanged') controlBarPositionX: number = 1;
   @Prop @Watch('onControlBarPositionChanged') controlBarPositionY: number = 0;
   @Prop @Watch('onTouchpadModeChanged') touchpadMode: boolean = false;
+  /** 浮窗模式全屏态: 控制栏显示 home 按钮 (缩回 Index 悬浮窗)。 */
+  @StorageProp('desktopFloatingFullscreen') desktopFloatingFullscreen: boolean = false;
   /** 编辑器模式：不注入按键，元素可拖动/缩放并支持选中框。 */
   @Prop editMode: boolean = false;
   @Prop @Watch('onCrosshairStateChanged') selectedElementId: string = '';
@@ -1584,12 +1586,19 @@ export struct VirtualInputOverlay {
 
   private toolbarWidth(): number {
     if (!this.toolbarExpanded) return 44;
-    return this.resolveToolbarVertical() ? 52 : 220;
+    if (this.resolveToolbarVertical()) return 52;
+    // 展开宽度按实际按钮数动态计算 (toggle 28 + 各 36 按钮 + spacing + padding),
+    // 否则加 home 按钮后固定 220 会溢出屏幕边缘。
+    const expandedButtons = this.desktopFloatingFullscreen ? 5 : 4;
+    return 44 * (expandedButtons + 1);
   }
 
   private toolbarHeight(): number {
     if (!this.toolbarExpanded) return 44;
-    return this.resolveToolbarVertical() ? 232 : 52;
+    if (!this.resolveToolbarVertical()) return 52;
+    // 垂直展开高度按实际按钮数动态计算 (toggle 28 + 各 36 按钮 + spacing + padding)
+    const expandedButtons = this.desktopFloatingFullscreen ? 5 : 4;
+    return 52 * (expandedButtons + 1);
   }
 
   private toolbarOriginX(): number {
@@ -1644,17 +1653,19 @@ export struct VirtualInputOverlay {
     }
     if (this.resolveToolbarVertical()) {
       if (this.rectContains(x, y, originX, originY, 44, 40)) return 'toolbar';
-      if (this.rectContains(x, y, originX, originY + 40, 44, 44)) return 'editor';
-      if (this.rectContains(x, y, originX, originY + 84, 44, 44)) return 'controls';
-      if (this.rectContains(x, y, originX, originY + 128, 44, 44)) return 'mouse';
-      if (this.rectContains(x, y, originX, originY + 172, 44, 44)) return 'keyboard';
+      if (this.desktopFloatingFullscreen && this.rectContains(x, y, originX, originY + 40, 44, 44)) return 'home';
+      if (this.rectContains(x, y, originX, originY + (this.desktopFloatingFullscreen ? 84 : 40), 44, 44)) return 'editor';
+      if (this.rectContains(x, y, originX, originY + (this.desktopFloatingFullscreen ? 128 : 84), 44, 44)) return 'controls';
+      if (this.rectContains(x, y, originX, originY + (this.desktopFloatingFullscreen ? 172 : 128), 44, 44)) return 'mouse';
+      if (this.rectContains(x, y, originX, originY + (this.desktopFloatingFullscreen ? 216 : 172), 44, 44)) return 'keyboard';
       return null;
     }
     if (this.rectContains(x, y, originX, originY, 44, 52)) return 'toolbar';
-    if (this.rectContains(x, y, originX + 44, originY, 44, 52)) return 'editor';
-    if (this.rectContains(x, y, originX + 88, originY, 44, 52)) return 'controls';
-    if (this.rectContains(x, y, originX + 132, originY, 44, 52)) return 'mouse';
-    if (this.rectContains(x, y, originX + 176, originY, 44, 52)) return 'keyboard';
+    if (this.desktopFloatingFullscreen && this.rectContains(x, y, originX + 44, originY, 44, 52)) return 'home';
+    if (this.rectContains(x, y, originX + (this.desktopFloatingFullscreen ? 88 : 44), originY, 44, 52)) return 'editor';
+    if (this.rectContains(x, y, originX + (this.desktopFloatingFullscreen ? 132 : 88), originY, 44, 52)) return 'controls';
+    if (this.rectContains(x, y, originX + (this.desktopFloatingFullscreen ? 176 : 132), originY, 44, 52)) return 'mouse';
+    if (this.rectContains(x, y, originX + (this.desktopFloatingFullscreen ? 220 : 176), originY, 44, 52)) return 'keyboard';
     return null;
   }
 
@@ -1683,6 +1694,11 @@ export struct VirtualInputOverlay {
     }
     if (action === 'keyboard') {
       this.onToggleHostKeyboard();
+      return;
+    }
+    if (action === 'home') {
+      // 浮窗模式全屏态: 缩回 Index 悬浮窗
+      AppStorage.setOrCreate('desktopLauncherVisible', true);
       return;
     }
     if (action === 'wake') {
@@ -1906,6 +1922,13 @@ export struct VirtualInputOverlay {
 
   @Builder
   private ExpandedToolbarButtons() {
+    // 浮窗模式全屏态: 压缩按钮 (放最左边) — 缩回 Index 悬浮窗 (经 AppStorage 通知 Index)
+    if (this.desktopFloatingFullscreen) {
+      this.ControlBarButton($r('sys.symbol.arrow_down_right_and_arrow_up_left'), 'wine-input-home', false,
+        '#FFFFFFFF', '#44FFFFFF', false, (): void => {
+          AppStorage.setOrCreate('desktopLauncherVisible', true);
+        })
+    }
     this.ControlBarButton($r('sys.symbol.gearshape'), 'wine-input-layout-editor', false,
       '#FFFFFFFF', '#44FFFFFF', false, (): void => this.runToolbarAction('editor'))
     this.ControlsVisibilityButton()

@@ -44,6 +44,9 @@ export class WineWindowManager {
   // 公开: 由 applyModePolicy 统一判定 (PC 按 DesktopModeService 设置)
   presentationMode: WinePresentationMode = WinePresentationMode.DESKTOP;
   private desktopRootId: number = 0;
+  // 桌面启动器/悬浮窗可见性 (浮窗模式): Index 悬浮窗态=true → DesktopLayer
+  // 跳过 root resize (桌面分辨率保持全屏, 缩略显示靠 letterbox); 全屏态=false
+  desktopLauncherVisible: boolean = true;
   private desktopAbilityRunning: boolean = false;
   private desktopAbilityForeground: boolean = false;
   private desktopAbilityRootId: number = 0;
@@ -319,6 +322,11 @@ export class WineWindowManager {
     return this.windowStages.get(toplevelId) ?? null;
   }
 
+  /** 主窗口 windowStage (浮窗模式 Index 承载桌面时创建虚拟输入 overlay 用)。 */
+  getMainWindowStage(): window.WindowStage | null {
+    return this.mainWindowStage;
+  }
+
   // effectiveScale = displayScale × scaleBoost (Wine 逻辑坐标 → 物理像素)
   getEffectiveScale(): number {
     return this.displayScale * this.scaleBoost;
@@ -545,6 +553,8 @@ export class WineWindowManager {
           hilog.info(DOMAIN, TAG, '[MW] desktop_root #%{public}d -> start DesktopAbility', id);
           if (this.sessionAssociationCallback) this.sessionAssociationCallback(DESKTOP_SESSION_ID, 0, id);
           this.desktopRootId = id;
+          // 浮窗模式: Index 承载桌面 (desktopActive 驱动 @StorageProp)
+          AppStorage.setOrCreate('desktopActive', true);
           this.startDesktopAbility(id);
         } else {
           // A stale explorer root may arrive while changing from an older PC
@@ -961,6 +971,8 @@ export class WineWindowManager {
     if (this.isDesktopMode && id === this.desktopRootId) {
       hilog.info(DOMAIN, TAG, '[MW] desktop root #%{public}d destroyed, closing DesktopAbility', id);
       this.desktopRootId = 0;
+      // 浮窗模式: 桌面 root 销毁 → Index 桌面层隐藏 (desktopActive 驱动 @StorageProp)
+      AppStorage.setOrCreate('desktopActive', false);
       if (this.desktopAbilityCtx) {
         this.desktopAbilityCtx.terminateSelf().catch((err: Error) => {
           hilog.warn(DOMAIN, TAG, '[MW] ERR terminateSelf DesktopAbility: %{public}s', JSON.stringify(err));
@@ -1008,6 +1020,12 @@ export class WineWindowManager {
 
   // Desktop 模式: 打开 DesktopAbility
   private startDesktopAbility(rootId: number): void {
+    // 浮窗模式 (平板/手机): 桌面由 Index 页面承载 (DesktopLayer floating 切换),
+    // 不启动 DesktopAbility — 放大/缩小都在当前画面 (Index) 内完成, 不切窗口。
+    if (AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode === DesktopWindowMode.FLOATING) {
+      hilog.info(DOMAIN, TAG, '[MW] floating mode: desktop hosted by Index, skip DesktopAbility #%{public}d', rootId);
+      return;
+    }
     // PC/2in1 融合模式 (FUSION, isDesktopMode=false): 每程序独立窗口, 不启动
     // 桌面合成器 → suppress desktop root Ability。
     // PC/2in1 虚拟桌面模式 (VIRTUAL, isDesktopMode=true): 用 DesktopAbility
@@ -1025,6 +1043,8 @@ export class WineWindowManager {
     this.desktopAbilityRunning = true;
     this.desktopAbilityForeground = false;
     this.desktopAbilityRootId = rootId;
+    // 浮窗模式: 桌面窗口打开 → Index 小浮窗隐藏 (AppStorage 驱动 @StorageProp)
+    AppStorage.setOrCreate('desktopWindowActive', true);
     try {
       const want: Want = {
         bundleName: 'com.vintage.pomelopro',
@@ -1047,6 +1067,36 @@ export class WineWindowManager {
     } catch (e) {
       hilog.error(DOMAIN, TAG, '[MW] startDesktopAbility error: %{public}s', JSON.stringify(e));
       if (this.desktopAbilityRootId === rootId) this.desktopAbilityRunning = false;
+    }
+  }
+
+  /**
+   * 浮窗模式: 重新拉起桌面窗口 (Index 小浮窗点击放大)。平板/手机浮窗模式下
+   * 用户缩小/关窗后 root 保留 (DesktopAbility.onDestroy 不杀 root), 引擎会话
+   * 后台继续; 点击小浮窗经此重新 startAbility(DesktopAbility) 全屏呈现。
+   * 复用 startDesktopAbility 的防重 (desktopAbilityRunning) — 窗口已打开时跳过。
+   */
+  openDesktopWindow(): void {
+    const rootId = this.desktopRootId;
+    if (rootId <= 0) {
+      hilog.warn(DOMAIN, TAG, '[MW] openDesktopWindow: no desktop root, skip');
+      return;
+    }
+    this.startDesktopAbility(rootId);
+  }
+
+  /**
+   * 浮窗模式: 收回桌面窗口 (控制栏 home 按钮)。关闭 DesktopAbility 窗口但
+   * 不杀 root (DesktopAbility.onDestroy 保留引擎会话), Index 小浮窗重现。
+   */
+  closeDesktopWindow(): void {
+    if (this.desktopAbilityCtx) {
+      this.desktopAbilityCtx.terminateSelf().catch((err: Error) => {
+        hilog.warn(DOMAIN, TAG, '[MW] closeDesktopWindow terminateSelf failed: %{public}s',
+          JSON.stringify(err));
+      });
+    } else {
+      hilog.warn(DOMAIN, TAG, '[MW] closeDesktopWindow: no desktop ctx');
     }
   }
 
@@ -1076,10 +1126,19 @@ export class WineWindowManager {
     if (this.desktopAbilityRootId !== rootId) return;
     this.desktopAbilityRunning = false;
     this.desktopAbilityForeground = false;
+    // 浮窗模式: 桌面窗口关闭/缩小 → Index 小浮窗重现 (AppStorage 驱动 @StorageProp)
+    AppStorage.setOrCreate('desktopWindowActive', false);
     hilog.info(DOMAIN, TAG, '[MW] DesktopAbility stopped for root #%{public}d', rootId);
   }
 
   getDesktopRootId(): number { return this.desktopRootId; }
+
+  /** 浮窗模式: 同步桌面启动器/悬浮窗可见性 (DesktopLayer.onSurfaceChanged 门控)。 */
+  setDesktopLauncherVisible(visible: boolean): void {
+    this.desktopLauncherVisible = visible;
+    hilog.info(DOMAIN, TAG, '[MW] setDesktopLauncherVisible=%{public}s',
+      visible ? 'true' : 'false');
+  }
 
   registerDesktopAbility(ctx: common.UIAbilityContext): void {
     hilog.info(DOMAIN, TAG, '[MW] registerDesktopAbility');

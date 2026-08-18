@@ -20,6 +20,7 @@ const GLOBAL_KEY = 'global_settings_v1';
 const APP_SETTINGS_KEY = 'app_settings_v1';
 const LIBRARY_PATH_KEY = 'library_path_v1';
 const CATALOG_CACHE_KEY = 'catalog_cache_v1';
+const RECENT_LAUNCHES_KEY = 'recent_launches_v1';
 // v6 briefly selected single-app on tablets.  Keep the product's desktop
 // workflow as the default and migrate only those tablet installations back.
 const PLATFORM_DEFAULTS_KEY = 'platform_defaults_v7';
@@ -29,6 +30,8 @@ export class AppSettingsStore {
   private store: preferences.Preferences | null = null;
   private appSettings: Map<string, AppSettings> = new Map<string, AppSettings>();
   private globalSettings: GlobalSettings = createDefaultGlobalSettings();
+  // 最近启动的 appId 列表 (最新在前), 持久化, 供"最近"分类使用
+  private recentLaunches: string[] = [];
   private libraryPath: string = '';
   private managedWineWindowsHost: boolean = false;
 
@@ -45,6 +48,7 @@ export class AppSettingsStore {
     await this.applyPlatformDefaults();
     this.loadApps();
     this.libraryPath = this.store.getSync(LIBRARY_PATH_KEY, '') as string;
+    this.loadRecentLaunches();
   }
 
   /** Restore the v6 tablet default without overwriting other device preferences. */
@@ -388,5 +392,36 @@ export class AppSettingsStore {
     if (!this.store) return;
     await this.store.put(LIBRARY_PATH_KEY, path);
     await this.store.flush();
+  }
+
+  // ── 最近启动 (供"最近"分类, 最新在前, 持久化) ──
+
+  private loadRecentLaunches(): void {
+    if (!this.store) return;
+    const raw = this.store.getSync(RECENT_LAUNCHES_KEY, '[]') as string;
+    try {
+      const values = JSON.parse(raw) as string[];
+      this.recentLaunches = Array.isArray(values) ? values.filter((v) => typeof v === 'string') : [];
+    } catch (_) {
+      this.recentLaunches = [];
+    }
+  }
+
+  /** 记录一次程序启动: 插入最前 (最近), 去重, 上限 20 条, 持久化。 */
+  async recordRecentLaunch(appId: string): Promise<void> {
+    if (!appId) return;
+    this.recentLaunches = this.recentLaunches.filter((id: string) => id !== appId);
+    this.recentLaunches.unshift(appId);
+    if (this.recentLaunches.length > 20) {
+      this.recentLaunches = this.recentLaunches.slice(0, 20);
+    }
+    if (!this.store) return;
+    await this.store.put(RECENT_LAUNCHES_KEY, JSON.stringify(this.recentLaunches));
+    await this.store.flush();
+  }
+
+  /** 最近启动的 appId 列表 (最新在前)。 */
+  getRecentLaunches(): string[] {
+    return this.recentLaunches.slice();
   }
 }

@@ -4,6 +4,7 @@ import testNapi from 'libentry.so';
 import {
   BOX64_PRESET_DEFAULT,
   AppDescriptor,
+  DesktopWindowMode,
   DisplayMode,
   EngineState,
   GlobalSettings,
@@ -282,6 +283,8 @@ export class AppSessionService {
     }
     this.sessions.set(session.sessionId, session);
     this.resolvePendingToplevel(session);
+    // 记录最近启动 (供"最近"分类, 最新在前, 持久化)
+    AppSettingsStore.getInstance().recordRecentLaunch(app.id).catch(() => {});
     // created 事件可能早于会话入表到达；若关联仍缺失，直接从 native 会话补
     // toplevelId，保证二次点击 resume 能唤起窗口而不是静默 no-op。
     if (session.toplevelId <= 0) {
@@ -386,6 +389,15 @@ export class AppSessionService {
     }
     if (session.presentationMode === WinePresentationMode.DESKTOP) {
       if (session.toplevelId <= 0) return;
+      // 浮窗模式: 桌面由 Index 承载 (DesktopLayer floating 切换), 不启动 DesktopAbility。
+      // 激活/提升程序窗口到桌面 root 合成, 并通知 Index 进全屏显示 (auto-promote
+      // 依赖本方法, 否则窗口不出现且 schedulePromoteRetry 无限重试)。
+      if (AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode === DesktopWindowMode.FLOATING) {
+        try { testNapi.activateWineSession(session.sessionId); } catch (_) {}
+        try { testNapi.raiseToplevel(session.toplevelId); } catch (_) {}
+        AppStorage.setOrCreate('desktopEnterFullscreen', true);
+        return;
+      }
       const want: Want = {
         bundleName: 'com.vintage.pomelopro',
         abilityName: 'DesktopAbility',

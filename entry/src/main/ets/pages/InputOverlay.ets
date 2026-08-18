@@ -64,6 +64,8 @@ struct InputOverlayPage {
   @State private overlayW: number = 0;
   @State private overlayH: number = 0;
   @State private engineState: EngineState = WineEngineService.getInstance().getState();
+  // 浮窗模式全屏态: 显示缩小按钮 (Index 桌面层容器被本 overlay 覆盖, 按钮须在此)
+  @StorageProp('desktopFloatingFullscreen') desktopFloatingFullscreen: boolean = false;
   private listener: InputOverlayListener | null = null;
   private engineListener: EngineStateListener | null = null;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;

@@ -68,7 +68,9 @@ export enum DesktopWindowMode {
   /** Immersive edge-to-edge window with status/navigation bars hidden. */
   FULLSCREEN = 'fullscreen',
   /** Keep the window inside the system safe area (bars and rounded corners). */
-  SAFE_AREA = 'safe_area'
+  SAFE_AREA = 'safe_area',
+  /** 画中画式小浮窗: 桌面缩成可拖动小窗, 点击放大全屏, 桌面内可缩小回小窗。 */
+  FLOATING = 'floating'
 }
 
 /**

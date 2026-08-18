@@ -230,6 +230,8 @@ struct InputProfilePickerDialog {
 struct SystemSettingsPage {
   @StorageLink('libraryTitleButtonInsetVp') private titleButtonInsetVp: number = 0;
   @State private settings: GlobalSettings = createDefaultGlobalSettings();
+  // 浮窗模式独立开关: 关闭时恢复此前的全屏/切边选择
+  private nonFloatingDesktopMode: DesktopWindowMode = DesktopWindowMode.FULLSCREEN;
   @State private breakpoint: BreakpointType = 'lg';
   @State private section: SettingsSection = 'display';
   @State private logBusy: boolean = false;
@@ -339,6 +341,11 @@ struct SystemSettingsPage {
 
   onPageShow(): void {
     this.settings = ThemeSettingsService.getInstance().getSettings();
+    // 初始化非浮窗模式 (全屏/切边): 浮窗模式下 UI 高亮显示此前的选择,
+    // 关闭浮窗开关时恢复该模式。
+    if (this.settings.desktopWindowMode !== DesktopWindowMode.FLOATING) {
+      this.nonFloatingDesktopMode = this.settings.desktopWindowMode;
+    }
     this.loadInputProfiles();
     this.loadApplicationVersion();
     this.restoreSettingsWindowChrome();
@@ -939,6 +946,10 @@ struct SystemSettingsPage {
 
   private updateDesktopWindowMode(mode: DesktopWindowMode): void {
     if (mode === this.settings.desktopWindowMode) return;
+    // 记录非浮窗选择 (全屏/切边), 浮窗开关关闭时恢复
+    if (mode !== DesktopWindowMode.FLOATING) {
+      this.nonFloatingDesktopMode = mode;
+    }
     this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
       this.settings.useGlassEffect, this.settings.usePageBackground,
       this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
@@ -950,6 +961,23 @@ struct SystemSettingsPage {
       this.settings.controlBarPositionX, this.settings.controlBarPositionY,
       this.settings.d3dRendererPreference, mode);
     promptAction.showToast({ message: '桌面窗口显示已保存；重新打开桌面窗口后生效' });
+  }
+
+  /** 浮窗模式独立开关: 开启=桌面由 Index 承载 (悬浮窗↔全屏切换), 关闭=恢复全屏/切边。 */
+  private updateFloatingMode(enabled: boolean): void {
+    if (enabled) {
+      this.updateDesktopWindowMode(DesktopWindowMode.FLOATING);
+    } else {
+      this.updateDesktopWindowMode(this.nonFloatingDesktopMode);
+    }
+  }
+
+  /** 桌面窗口显示选中态: 浮窗模式下高亮显示当前非浮窗选择 (关闭浮窗后恢复的模式)。 */
+  private isDesktopWindowModeSelected(mode: DesktopWindowMode): boolean {
+    if (this.settings.desktopWindowMode === DesktopWindowMode.FLOATING) {
+      return this.nonFloatingDesktopMode === mode;
+    }
+    return this.settings.desktopWindowMode === mode;
   }
 
   private updateVirtualMouse(sensitivity: number = this.settings.virtualMouseConfig.mouseSensitivity,
@@ -1533,18 +1561,25 @@ struct SystemSettingsPage {
              Button('全屏（沉浸）').layoutWeight(1).height(48).borderRadius(14)
                .fontSize(this.isNarrowPhone() ? 11 : 13)
                .padding({ left: this.isNarrowPhone() ? 4 : 12, right: this.isNarrowPhone() ? 4 : 12 })
-               .backgroundColor(this.settings.desktopWindowMode === DesktopWindowMode.FULLSCREEN ? $r('app.color.accent') : $r('app.color.search_background'))
-               .fontColor(this.settings.desktopWindowMode === DesktopWindowMode.FULLSCREEN ? '#FFFFFFFF' : $r('app.color.text_primary'))
+               .backgroundColor(this.isDesktopWindowModeSelected(DesktopWindowMode.FULLSCREEN) ? $r('app.color.accent') : $r('app.color.search_background'))
+               .fontColor(this.isDesktopWindowModeSelected(DesktopWindowMode.FULLSCREEN) ? '#FFFFFFFF' : $r('app.color.text_primary'))
                .onClick(() => this.updateDesktopWindowMode(DesktopWindowMode.FULLSCREEN))
              Button('切边（安全区）').layoutWeight(1).height(48).borderRadius(14)
                .fontSize(this.isNarrowPhone() ? 11 : 13)
                .padding({ left: this.isNarrowPhone() ? 4 : 12, right: this.isNarrowPhone() ? 4 : 12 })
-               .backgroundColor(this.settings.desktopWindowMode === DesktopWindowMode.SAFE_AREA ? $r('app.color.accent') : $r('app.color.search_background'))
-               .fontColor(this.settings.desktopWindowMode === DesktopWindowMode.SAFE_AREA ? '#FFFFFFFF' : $r('app.color.text_primary'))
+               .backgroundColor(this.isDesktopWindowModeSelected(DesktopWindowMode.SAFE_AREA) ? $r('app.color.accent') : $r('app.color.search_background'))
+               .fontColor(this.isDesktopWindowModeSelected(DesktopWindowMode.SAFE_AREA) ? '#FFFFFFFF' : $r('app.color.text_primary'))
                .onClick(() => this.updateDesktopWindowMode(DesktopWindowMode.SAFE_AREA))
            }.width('100%')
            Text('圆角屏全屏可能遮挡开始菜单；切边模式保留状态栏与圆角安全区。').fontSize(12)
              .fontColor($r('app.color.text_secondary')).width('100%')
+          if (DeviceCapabilityPolicy.isTabletDevice() || DeviceCapabilityPolicy.isPhoneDevice()) {
+            this.SwitchRow('浮窗模式',
+              '桌面缩成可拖动小窗，点击放大；放大在当前画面完成，不切换窗口',
+              this.settings.desktopWindowMode === DesktopWindowMode.FLOATING,
+              (value: boolean): void => this.updateFloatingMode(value),
+              'floating-mode')
+          }
           if (!DeviceCapabilityPolicy.isTabletDevice() && !DeviceCapabilityPolicy.isPhoneDevice()) {
             Text('桌面模式').fontSize(14).fontWeight(FontWeight.Medium)
               .fontColor($r('app.color.text_primary')).width('100%')

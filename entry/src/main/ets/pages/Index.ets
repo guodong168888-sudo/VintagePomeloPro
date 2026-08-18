@@ -11,6 +11,8 @@ import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import {
   AppDescriptor,
   AppSource,
+  DesktopWindowMode,
+  DisplayMode,
   EngineState,
   GlobalSettings,
   LaunchKind,
@@ -21,6 +23,7 @@ import {
   resolveRunningAppIds
 } from '../model/AppModels';
 import { AppCatalogService } from '../service/AppCatalogService';
+import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
 import { AppSessionService, LaunchConflictKind } from '../service/AppSessionService';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { LauncherAdapterRegistry } from '../service/LauncherAdapterRegistry';
@@ -30,8 +33,9 @@ import { WineWindowManager } from '../service/WineWindowManager';
 import { GamepadManager } from '../service/GamepadManager';
 import { InputProfileService } from '../service/InputProfileService';
 import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
+import { DesktopLayer } from '../components/DesktopLayer';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
-import { LengthMetrics, window } from '@kit.ArkUI';
+import { LengthMetrics, display, window } from '@kit.ArkUI';
 import deviceInfo from '@ohos.deviceInfo';
 import {
   applyStatusOnlyImmersiveShell,
@@ -51,14 +55,15 @@ import {
   hdsMaterial
 } from '@kit.UIDesignKit';
 
-type CatalogFilter = 'builtin' | 'windows' | 'running' | 'favorite';
+type CatalogFilter = 'recent' | 'builtin' | 'windows' | 'running' | 'favorite';
 
 const DOMAIN = 0x0000;
 
-const PHONE_NAV_BUILTIN: number = 0;
-const PHONE_NAV_WINDOWS: number = 1;
-const PHONE_NAV_FAVORITE: number = 2;
-const PHONE_NAV_RUNNING: number = 3;
+const PHONE_NAV_RECENT: number = 0;
+const PHONE_NAV_BUILTIN: number = 1;
+const PHONE_NAV_WINDOWS: number = 2;
+const PHONE_NAV_FAVORITE: number = 3;
+const PHONE_NAV_RUNNING: number = 4;
 const DEVICE_SDK_API_VERSION: number = (() => {
   try {
     return deviceInfo.sdkApiVersion as number;
@@ -75,6 +80,9 @@ interface ScrollOffsetSnapshot {
   xOffset: number;
   yOffset: number;
 }
+
+// 浮窗模式: 桌面小浮窗宽度 (vp), 高度按屏幕比例折算 (main_ui 同构)
+const FLOATING_W: number = 320;
 
 @Entry
 @Component
@@ -105,6 +113,7 @@ struct Index {
   private windowsScroller: Scroller = new Scroller();
   private favoriteScroller: Scroller = new Scroller();
   private runningScroller: Scroller = new Scroller();
+  private recentScroller: Scroller = new Scroller();
   private scrollOffsets: Record<string, ScrollOffsetSnapshot> = {};
   private breakpointCallback: ((value: BreakpointType) => void) | null = null;
   private engineCallback: ((state: EngineState, message: string) => void) | null = null;
@@ -116,6 +125,21 @@ struct Index {
   // 依次放行，不再用“正在处理上一次启动”拒绝用户，也不会被一次未完成的
   // 启动永久锁死（每次启动都以真实事件终止）。
   private launchChain: Promise<void> = Promise.resolve();
+  // 浮窗模式: 桌面由 Index 承载 (main_ui 同构) — 悬浮窗态小窗缩略 / 全屏态铺满
+  @StorageProp('desktopActive') desktopActive: boolean = false;
+  @State @Watch('onLauncherVisibleChange') private launcherVisible: boolean = true;
+  // 浮窗模式: overlay 缩小按钮经此通知 Index 缩回悬浮窗
+  @StorageProp('desktopLauncherVisible') @Watch('onDesktopLauncherVisibleChange') desktopLauncherVisible: boolean = false;
+  // 浮窗模式: 启动程序时 (auto-promote/resume) 通知 Index 进全屏显示程序窗口
+  @StorageProp('desktopEnterFullscreen') @Watch('onDesktopEnterFullscreenChange') desktopEnterFullscreen: boolean = false;
+  @State private floatPosX: number = 0;
+  @State private floatPosY: number = 0;
+  private floatPanStartX: number = 0;
+  private floatPanStartY: number = 0;
+  private transitioning: boolean = false;
+  private screenW: number = 0;
+  private screenH: number = 0;
+  @State private floatH: number = 135;
 
   private isPhone(): boolean {
     return DeviceCapabilityPolicy.isPhoneDevice() || this.breakpoint === 'xs' || this.breakpoint === 'sm';
@@ -127,6 +151,90 @@ struct Index {
 
   private isPhoneLandscape(): boolean {
     return DeviceCapabilityPolicy.isPhoneDevice() && this.viewportWidth > this.viewportHeight && this.viewportHeight > 0;
+  }
+
+  // ── 浮窗模式: 桌面由 Index 承载 (main_ui 同构) ──
+  // 显示条件: 浮窗模式 + 平板/手机 + 桌面 root 存在 (desktopActive)。
+  // 悬浮窗态 (launcherVisible=true): 小窗缩略 + 提示文字, 点击放大/按住拖动;
+  // 全屏态 (launcherVisible=false): 铺满当前画面, 缩小按钮缩回小窗。
+  private showDesktopLayer(): boolean {
+    if (this.settings.desktopWindowMode !== DesktopWindowMode.FLOATING) return false;
+    if (!DeviceCapabilityPolicy.isTabletDevice() && !DeviceCapabilityPolicy.isPhoneDevice()) return false;
+    if (!this.desktopActive) return false;
+    return WineWindowManager.getInstance().getDesktopRootId() > 0;
+  }
+
+  // 缩放过渡动画: 显式动画包裹 launcherVisible 翻转, 宽/高/位置/圆角一次过渡
+  private setLauncherVisible(v: boolean): void {
+    this.transitioning = true;
+    this.getUIContext().animateTo({
+      duration: 300,
+      curve: Curve.LinearOutSlowIn,
+      onFinish: () => { this.transitioning = false; }
+    }, () => {
+      this.launcherVisible = v;
+    });
+  }
+
+  private onLauncherVisibleChange(): void {
+    // 悬浮窗态 → WineWindowManager 跳过 root resize (桌面分辨率保持全屏)
+    WineWindowManager.getInstance().setDesktopLauncherVisible(this.launcherVisible);
+    // 全屏态创建虚拟输入 overlay, 悬浮窗态隐藏
+    if (this.launcherVisible) {
+      InputOverlayWindowCoordinator.getInstance().detach('floating-shrink').catch(() => {});
+    } else {
+      this.attachFloatingOverlay();
+    }
+    // 同步全屏态标志给 overlay (home 按钮显示)
+    AppStorage.setOrCreate('desktopFloatingFullscreen', !this.launcherVisible);
+  }
+
+  private onDesktopLauncherVisibleChange(): void {
+    // home 按钮 (overlay) 点击 → 缩回悬浮窗
+    if (this.desktopLauncherVisible && !this.launcherVisible) {
+      this.setLauncherVisible(true);
+      // 重置标志: 下次 home 点击才能再次触发 Watch
+      // (AppStorage.setOrCreate 相同值不触发, 不重置则第二次点 home 失效)
+      AppStorage.setOrCreate('desktopLauncherVisible', false);
+    }
+  }
+
+  private onDesktopEnterFullscreenChange(): void {
+    // 启动程序 (auto-promote/resume) → 进全屏显示程序窗口
+    if (this.desktopEnterFullscreen && this.launcherVisible && this.showDesktopLayer()) {
+      this.setLauncherVisible(false);
+    }
+    // 重置标志: 下次启动程序才能再次触发 Watch
+    AppStorage.setOrCreate('desktopEnterFullscreen', false);
+  }
+
+  private attachFloatingOverlay(): void {
+    const stage = WineWindowManager.getInstance().getMainWindowStage();
+    if (!stage) return;
+    const rootId = WineWindowManager.getInstance().getDesktopRootId();
+    if (rootId <= 0) return;
+    window.getLastWindow(this.context).then((win: window.Window) => {
+      InputOverlayWindowCoordinator.getInstance().attach(
+        stage, win, 'desktop-' + rootId, DisplayMode.DESKTOP, rootId,
+        this.settings.desktopInputProfileId || 'default', this.settings.showVirtualControls,
+        this.settings.controlOpacity, this.settings.virtualInputEnabled, true).catch(() => {});
+    }).catch(() => {});
+  }
+
+  private initFloatPos(): void {
+    // 用屏幕尺寸 (aboutToAppear 时 viewport 可能为 0)
+    try {
+      const d = display.getDefaultDisplaySync();
+      this.screenW = px2vp(d.width);
+      this.screenH = px2vp(d.height);
+    } catch (_) {
+      this.screenW = 640;
+      this.screenH = 400;
+    }
+    // 悬浮窗高度随屏幕比例折算: 与桌面帧比例一致, 消除 letterbox 黑边
+    this.floatH = Math.round(FLOATING_W * this.screenH / this.screenW);
+    this.floatPosX = this.screenW - FLOATING_W - 12;
+    this.floatPosY = 80;
   }
 
   private usesDarkAppearance(): boolean {
@@ -255,6 +363,7 @@ struct Index {
     };
     WineEngineService.getInstance().subscribe(this.engineCallback);
     this.refreshTimer = setInterval(() => this.refreshRunningState(), 1500);
+    this.initFloatPos();
   }
 
   aboutToDisappear(): void {
@@ -429,15 +538,25 @@ struct Index {
   private filterApps(searchQuery: string, filter: CatalogFilter,
     running: Set<string> = this.runningAppIds): AppDescriptor[] {
     const query = searchQuery.trim().toLowerCase();
-    return this.apps.filter((app: AppDescriptor) => {
+    const recentIds = filter === 'recent' ? AppSettingsStore.getInstance().getRecentLaunches() : [];
+    const recentSet = new Set(recentIds);
+    const result = this.apps.filter((app: AppDescriptor) => {
       const normalized = normalizeLaunchPath(app.launchTarget.executable);
       if (filter === 'builtin' && app.source !== AppSource.BUILTIN) return false;
       if (filter === 'windows' && app.source !== AppSource.DOWNLOAD) return false;
       if (filter === 'running' && !running.has(app.id)) return false;
       if (filter === 'favorite' && !AppSettingsStore.getInstance().getAppSettings(app.id).favorite) return false;
+      if (filter === 'recent' && !recentSet.has(app.id)) return false;
       if (!query) return true;
       return app.title.toLowerCase().includes(query) || normalized.includes(query);
     });
+    if (filter === 'recent') {
+      // 最近启动顺序排序 (最新在前): recentIds 已是最新在前
+      const order = new Map(recentIds.map((id: string, index: number) => [id, index]));
+      result.sort((a: AppDescriptor, b: AppDescriptor) =>
+        (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999));
+    }
+    return result;
   }
 
   private updateSearch(value: string): void {
@@ -446,6 +565,7 @@ struct Index {
   }
 
   private phoneNavIndexForFilter(value: CatalogFilter): number {
+    if (value === 'recent') return PHONE_NAV_RECENT;
     if (value === 'windows') return PHONE_NAV_WINDOWS;
     if (value === 'favorite') return PHONE_NAV_FAVORITE;
     if (value === 'running') return PHONE_NAV_RUNNING;
@@ -453,6 +573,7 @@ struct Index {
   }
 
   private phoneFilterForIndex(index: number): CatalogFilter | null {
+    if (index === PHONE_NAV_RECENT) return 'recent';
     if (index === PHONE_NAV_BUILTIN) return 'builtin';
     if (index === PHONE_NAV_WINDOWS) return 'windows';
     if (index === PHONE_NAV_FAVORITE) return 'favorite';
@@ -480,6 +601,7 @@ struct Index {
   }
 
   private filterTitle(): string {
+    if (this.filter === 'recent') return '最近';
     if (this.filter === 'builtin') return '内建应用';
     if (this.filter === 'windows') return 'Windows 程序';
     if (this.filter === 'running') return '运行中的应用';
@@ -488,6 +610,7 @@ struct Index {
   }
 
   private filterDescription(): string {
+    if (this.filter === 'recent') return '最近启动过的程序，最新在前';
     if (this.filter === 'builtin') return '系统工具与内建测试程序';
     if (this.filter === 'windows') {
       const catalog = AppCatalogService.getInstance();
@@ -502,6 +625,7 @@ struct Index {
 
   private emptyTitle(): string {
     if (this.searchQuery.trim()) return '没有匹配的应用';
+    if (this.filter === 'recent') return '还没有启动过程序';
     if (this.filter === 'favorite') return '还没有收藏应用';
     if (this.filter === 'running') return '当前没有运行中的应用';
     if (this.filter === 'windows') return '尚未发现 Windows 程序';
@@ -510,6 +634,7 @@ struct Index {
 
   private emptyDescription(): string {
     if (this.searchQuery.trim()) return '请更换关键词，或清除搜索后查看当前分类的全部内容';
+    if (this.filter === 'recent') return '启动过的程序会出现在这里，方便快速再次打开';
     if (this.filter === 'favorite') return '在应用设置中开启收藏后，应用会显示在这里';
     if (this.filter === 'running') return '启动 Wine 桌面或程序后，可在这里恢复或关闭会话';
     if (this.filter === 'windows') {
@@ -523,6 +648,7 @@ struct Index {
   }
 
   private emptyIcon(): Resource {
+    if (this.filter === 'recent') return $r('sys.symbol.clock');
     if (this.filter === 'favorite') return $r('sys.symbol.star');
     if (this.filter === 'running') return $r('sys.symbol.play_fill');
     if (this.filter === 'windows') return $r('sys.symbol.folder');
@@ -578,6 +704,7 @@ struct Index {
   }
 
   private catalogScroller(filter: CatalogFilter): Scroller {
+    if (filter === 'recent') return this.recentScroller;
     if (filter === 'windows') return this.windowsScroller;
     if (filter === 'favorite') return this.favoriteScroller;
     if (filter === 'running') return this.runningScroller;
@@ -585,7 +712,7 @@ struct Index {
   }
 
   private phoneNavigationScrollers(): Scroller[] {
-    return [this.builtinScroller, this.windowsScroller, this.favoriteScroller, this.runningScroller];
+    return [this.recentScroller, this.builtinScroller, this.windowsScroller, this.favoriteScroller, this.runningScroller];
   }
 
   private compactGridColumns(): string {
@@ -867,6 +994,7 @@ struct Index {
       Scroll() {
         Column() {
           Column({ space: 4 }) {
+            this.NavItem('最近', 'recent', $r('sys.symbol.clock'))
             this.NavItem('收藏', 'favorite', $r('sys.symbol.star'))
             this.NavItem('内建应用', 'builtin', $r('sys.symbol.house_fill'))
             this.NavItem('Windows 程序', 'windows', $r('sys.symbol.folder'))
@@ -1115,6 +1243,8 @@ struct Index {
         this.CatalogScroll(this.visibleApps, 'builtin')
       } else if (this.filter === 'running') {
         this.CatalogScroll(this.visibleApps, 'running')
+      } else if (this.filter === 'recent') {
+        this.CatalogScroll(this.visibleApps, 'recent')
       } else {
         this.CatalogScroll(this.visibleApps, 'favorite')
       }
@@ -1152,6 +1282,8 @@ struct Index {
 
   @Builder
   private PhoneNavigationContents() {
+    TabContent() { Column() }
+      .tabBar(this.PhoneNavigationTab('最近', $r('sys.symbol.clock'), PHONE_NAV_RECENT))
     TabContent() { Column() }
       .tabBar(this.PhoneNavigationTab('内建', $r('sys.symbol.house_fill'), PHONE_NAV_BUILTIN))
     TabContent() { Column() }
@@ -1292,6 +1424,8 @@ struct Index {
           .objectFit(ImageFit.Cover)
           .opacity(0.72)
           .hitTestBehavior(HitTestMode.None)
+          // 浮窗模式全屏态: 桌面铺满, 隐藏启动器背景
+          .visibility(this.showDesktopLayer() && !this.launcherVisible ? Visibility.Hidden : Visibility.Visible)
           .id('library-page-background')
       }
       Row() {
@@ -1307,8 +1441,54 @@ struct Index {
       .width('100%')
       .height('100%')
       .padding({ top: this.isPhone() ? 0 : this.statusBarHeightVp + 16 })
+      // 浮窗模式全屏态: 隐藏启动器 (main_ui 语义), 桌面铺满当前画面不叠加
+      .visibility(this.showDesktopLayer() && !this.launcherVisible ? Visibility.Hidden : Visibility.Visible)
       if (this.isPhone()) {
         this.PhoneNavigation()
+      }
+      // 浮窗模式: 桌面由 Index 承载 — 悬浮窗态小窗缩略 / 全屏态铺满当前画面
+      if (this.showDesktopLayer()) {
+        Stack() {
+          DesktopLayer({ floating: this.launcherVisible })
+          if (this.launcherVisible) {
+            // 悬浮窗态交互层: 全尺寸透明 Block, 轻点放大 / 按住拖动
+            Stack() {
+              Row({ space: 4 }) {
+                Text('点击放大 · 按住拖动').fontSize(11).fontColor(Color.White)
+              }
+              .width('100%').justifyContent(FlexAlign.Center)
+              .padding({ top: 3, bottom: 3 })
+              .backgroundColor('#66000000')
+              .position({ x: 0, y: this.floatH - 26 })
+              .hitTestBehavior(HitTestMode.None)
+            }
+            .width('100%').height('100%')
+            .onClick(() => { this.setLauncherVisible(false); })
+            .gesture(
+              PanGesture()
+                .onActionStart(() => {
+                  this.floatPanStartX = this.floatPosX;
+                  this.floatPanStartY = this.floatPosY;
+                })
+                .onActionUpdate((ev: GestureEvent) => {
+                  if (this.transitioning) return;
+                  const maxX = Math.max(this.screenW - FLOATING_W, 0);
+                  const maxY = Math.max(this.screenH - this.floatH, 0);
+                  this.floatPosX = Math.min(Math.max(this.floatPanStartX + ev.offsetX, 0), maxX);
+                  this.floatPosY = Math.min(Math.max(this.floatPanStartY + ev.offsetY, 0), maxY);
+                })
+            )
+            .hitTestBehavior(HitTestMode.Block)
+          }
+        }
+        .width(this.launcherVisible ? FLOATING_W : '100%')
+        .height(this.launcherVisible ? this.floatH : '100%')
+        .position(this.launcherVisible ? { x: this.floatPosX, y: this.floatPosY } : { x: 0, y: 0 })
+        .borderRadius(this.launcherVisible ? 12 : 0)
+        .clip(true)
+        .border({ width: this.launcherVisible ? 1 : 0, color: '#66FFFFFF' })
+        .shadow({ radius: this.launcherVisible ? 12 : 0, color: '#66000000', offsetX: 0, offsetY: this.launcherVisible ? 4 : 0 })
+        .id('desktop-layer-container')
       }
       WineEngineBlockingOverlay()
     }
