@@ -104,22 +104,27 @@ fi
 # 版本必须与 appwiz.cpl addons.c GECKO_VERSION 一致 (当前 2.47.4)。
 if [ "${BUILD_WINE_GECKO:-1}" = "1" ]; then
     WINE_GECKO_VER="2.47.4"
-    WINE_GECKO_MSI="wine-gecko-${WINE_GECKO_VER}-x86_64.msi"
-    WINE_GECKO_URL="https://dl.winehq.org/wine/wine-gecko/${WINE_GECKO_VER}/${WINE_GECKO_MSI}"
     WINE_GECKO_DIR="$BUILD_DIR/wine-ohos/share/wine/gecko"
-    WINE_GECKO_PATH="$WINE_GECKO_DIR/$WINE_GECKO_MSI"
-    if [ ! -f "$WINE_GECKO_PATH" ]; then
-        log "=== 下载 Wine Gecko ${WINE_GECKO_VER} ==="
-        mkdir -p "$WINE_GECKO_DIR"
-        if command -v curl >/dev/null 2>&1; then
-            curl -L -o "$WINE_GECKO_PATH" "$WINE_GECKO_URL" || warn "Wine Gecko 下载失败, IE HTML 渲染将不可用"
-        elif command -v wget >/dev/null 2>&1; then
-            wget -O "$WINE_GECKO_PATH" "$WINE_GECKO_URL" || warn "Wine Gecko 下载失败"
-        else
-            warn "无 curl/wget, 跳过 Wine Gecko"
+    mkdir -p "$WINE_GECKO_DIR"
+    # 双架构: x86_64 (64位) + x86 (32位安装程序如 Firefox 触发 32 位
+    # appwiz.cpl, GECKO_ARCH=x86 → 缺 x86 版仍会在线下载)。assemble.sh
+    # 会复制该目录全部 *.msi 进 wine-data.zip。
+    for arch in x86_64 x86; do
+        WINE_GECKO_MSI="wine-gecko-${WINE_GECKO_VER}-${arch}.msi"
+        WINE_GECKO_URL="https://dl.winehq.org/wine/wine-gecko/${WINE_GECKO_VER}/${WINE_GECKO_MSI}"
+        WINE_GECKO_PATH="$WINE_GECKO_DIR/$WINE_GECKO_MSI"
+        if [ ! -f "$WINE_GECKO_PATH" ]; then
+            log "=== 下载 Wine Gecko ${arch} ${WINE_GECKO_VER} ==="
+            if command -v curl >/dev/null 2>&1; then
+                curl -L -o "$WINE_GECKO_PATH" "$WINE_GECKO_URL" || warn "Wine Gecko(${arch}) 下载失败, IE HTML 渲染将不可用"
+            elif command -v wget >/dev/null 2>&1; then
+                wget -O "$WINE_GECKO_PATH" "$WINE_GECKO_URL" || warn "Wine Gecko(${arch}) 下载失败"
+            else
+                warn "无 curl/wget, 跳过 Wine Gecko(${arch})"
+            fi
+            [ -f "$WINE_GECKO_PATH" ] && log "Wine Gecko(${arch}) → $WINE_GECKO_PATH"
         fi
-        [ -f "$WINE_GECKO_PATH" ] && log "Wine Gecko → $WINE_GECKO_PATH"
-    fi
+    done
 else
     log "Wine Gecko: SKIP (设置 BUILD_WINE_GECKO=1 启用 IE HTML 渲染)"
 fi
