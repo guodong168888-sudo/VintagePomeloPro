@@ -30,8 +30,6 @@ import { LauncherAdapterRegistry } from '../service/LauncherAdapterRegistry';
 import { ThemeSettingsListener, ThemeSettingsService } from '../service/ThemeSettingsService';
 import { WineEngineService } from '../service/WineEngineService';
 import { WineWindowManager } from '../service/WineWindowManager';
-import { InputRouter } from '../service/InputRouter';
-import { EVDEV_KEY_ENTER } from '../common/KeyMap';
 import { GamepadManager } from '../service/GamepadManager';
 import { InputProfileService } from '../service/InputProfileService';
 import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
@@ -303,14 +301,9 @@ struct Index {
       controller.off('deleteRight');
       controller.off('sendKeyboardStatus');
       controller.off('setPreviewText');
-      controller.off('sendFunctionKey');
       const attr: inputMethod.InputAttribute = {
         textInputType: inputMethod.TextInputType.TEXT,
-        // NEWLINE (API 12+): 软键盘回车显示"换行"键 (DONE 显示"完成")。
-        // 实测回车不发 insertText('\n') — 输入法始终走 sendFunctionKey 功能键
-        // (enterKeyType=8), 且系统吞 KeyDown 只派发 KeyUp; 换行由
-        // WineWindow.ets onKeyEvent 补发 down+up 兜底 (见该处注释)
-        enterKeyType: inputMethod.EnterKeyType.NEWLINE
+        enterKeyType: inputMethod.EnterKeyType.DONE
       };
       const cfg: inputMethod.TextConfig = { inputAttribute: attr };
       controller.attach(true, cfg).then(() => {
@@ -329,21 +322,6 @@ struct Index {
         controller.on('setPreviewText', (text: string, range: inputMethod.Range) => {
           testNapi.wineTextInputPreedit(text, 0, text.length);  // 预上屏 → Wine preedit
         });
-        // 回车注入 (本设备实测): 系统吞掉整个回车事件, onKeyEvent 收不到
-        // KeyDown/KeyUp, WineWindow/DesktopLayer 补发方案失效。sendFunctionKey
-        // 是唯一能收到软键盘"换行"键的回调 → 在此直接向激活窗口补发回车
-        // down+up (经 InputRouter, 自动维护 pressedKeys / activeToplevel)。
-        controller.on('sendFunctionKey', (fk: inputMethod.FunctionKey) => {
-          hilog.info(DOMAIN, 'IME-TEST', '[sendFunctionKey] enterKeyType=%{public}d (0 UNSPEC 6 DONE 8 NEWLINE)',
-            fk.enterKeyType);
-          if (fk.enterKeyType === inputMethod.EnterKeyType.NEWLINE) {
-            const router = InputRouter.getInstance();
-            if (router.getActiveToplevel() > 0) {
-              router.sendKey(EVDEV_KEY_ENTER, true);
-              router.sendKey(EVDEV_KEY_ENTER, false);
-            }
-          }
-        });
       }).catch((err: BusinessError) => {
         hilog.error(DOMAIN, 'IME', '[attach] FAILED code=%{public}d msg=%{public}s', err.code, err.message);
       });
@@ -361,7 +339,6 @@ struct Index {
         c.off('deleteRight');
         c.off('sendKeyboardStatus');
         c.off('setPreviewText');
-        c.off('sendFunctionKey');
         c.hideTextInput();
         c.detach();
       } catch (e) {

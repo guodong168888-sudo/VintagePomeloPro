@@ -3,7 +3,7 @@ import { common } from '@kit.AbilityKit';
 import { display, window } from '@kit.ArkUI';
 import testNapi from 'libentry.so';
 import { WineWindowManager } from '../service/WineWindowManager';
-import { EVDEV_KEY_ENTER, OH2EVDEV } from '../common/KeyMap';
+import { OH2EVDEV } from '../common/KeyMap';
 import { mapMouseButton } from '../common/MouseMap';
 import {
   DesktopWindowMode,
@@ -141,10 +141,6 @@ export struct DesktopLayer {
   private pendingPy: number = 0;
   private motionLogCounter: number = 0;
   private static readonly LONG_PRESS_MS: number = 500;
-  // 回车 down 时间戳 + 补发窗口: 与 WineWindow.ets 同款兜底 (软键盘/IME
-  // 系统吞 KeyDown 只派 KeyUp → 无配对 up 时补发 down+up)
-  private lastEnterDownTs: number = 0;
-  private static readonly ENTER_SYNTH_WINDOW_MS: number = 1000;
   private static readonly DRAG_THRESHOLD: number = 10; // 物理像素, 区分点击抖动和拖拽
   // 双击检测
   private lastTapTime: number = 0;
@@ -282,21 +278,10 @@ export struct DesktopLayer {
     if (GamepadManager.getInstance().handleKey(ev.keyCode, ev.type === KeyType.Down)) return;
     const code = OH2EVDEV[ev.keyCode] ?? 0;
     if (code <= 0) return;
-    const pressed = ev.type === KeyType.Down;
     if (InputRouter.getInstance().getActiveToplevel() <= 0) {
       InputRouter.getInstance().setActiveToplevel(rootId);
     }
-    // 回车补发 (对齐上游 bb631ff): 软键盘/IME 场景系统吞 KeyDown 只派 KeyUp,
-    // 收到无配对 up 时补发完整 down+up, 保证 Wine 收到完整按键
-    if (code === EVDEV_KEY_ENTER) {
-      if (pressed) {
-        this.lastEnterDownTs = Date.now();
-      } else if (Date.now() - this.lastEnterDownTs > DesktopLayer.ENTER_SYNTH_WINDOW_MS) {
-        hilog.info(DOMAIN, 'KBD-PIPE', '[ArkTS] ENTER SYNTH down (missing down)');
-        InputRouter.getInstance().sendKey(EVDEV_KEY_ENTER, true);
-      }
-    }
-    InputRouter.getInstance().sendKey(code, pressed);
+    InputRouter.getInstance().sendKey(code, ev.type === KeyType.Down);
   }
 
   build() {
