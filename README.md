@@ -120,4 +120,10 @@ hdc -t <device_ip> hilog | grep -E 'WL_NAPI|WL_EGL|WL_Server|WL_Input|GraphicsBr
 
 ## 交流
 
-<img src="docs/images/wechat_qrcode.jpg" width="320">
+QQ 群：**966307250**（Vintage Pomelo Team）
+
+<img src="docs/images/qq_group_qrcode.jpg" width="320">
+
+## 上游项目
+
+本工程基于 [winehua/WineHua](https://github.com/winehua/WineHua/)（Run Windows exe on HarmonyOS based on box64 and Wine）开发。
