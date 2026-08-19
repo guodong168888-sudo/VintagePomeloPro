@@ -1,6 +1,6 @@
 import { hilog } from '../service/LogService';
 import testNapi from 'libentry.so';
-import { OH2EVDEV } from '../common/KeyMap';
+import { EVDEV_KEY_ENTER, OH2EVDEV } from '../common/KeyMap';
 import { mapMouseButton } from '../common/MouseMap';
 import { WineWindowManager } from '../service/WineWindowManager';
 
@@ -83,6 +83,10 @@ struct WineWindow {
   private twoFingerLastMidX: number = 0;
   private twoFingerLastMidY: number = 0;
   private twoFingerAccumY: number = 0;
+  // 回车 down 时间戳 + 补发窗口: 软键盘/IME 系统吞 KeyDown 只派 KeyUp 时,
+  // 无配对 up 补发 down+up, 保证 Wine 收到完整按键 (外部键盘兜底)
+  private lastEnterDownTs: number = 0;
+  private static readonly ENTER_SYNTH_WINDOW_MS: number = 1000;
   private twoFingerAccumX: number = 0;
   private static readonly SCROLL_STEP_PX: number = 40; // 物理像素/滚动步, winewayland.drv 只处理 discrete
   private scrollLogCounter: number = 0;
@@ -380,6 +384,15 @@ struct WineWindow {
       const pressed = (event.type === KeyType.Down);
       hilog.info(DOMAIN, 'KBD-PIPE', '[ArkTS] KEY ohos=%{public}d->evdev=%{public}d %{public}s',
         this.toplevelId, event.keyCode, evdevCode, pressed ? 'DOWN' : 'UP');
+      // 回车补发: 软键盘/IME 场景系统吞 KeyDown 只派 KeyUp → Wine 收不到按下
+      if (evdevCode === EVDEV_KEY_ENTER) {
+        if (pressed) {
+          this.lastEnterDownTs = Date.now();
+        } else if (Date.now() - this.lastEnterDownTs > WineWindow.ENTER_SYNTH_WINDOW_MS) {
+          hilog.info(DOMAIN, 'KBD-PIPE', '[ArkTS] ENTER SYNTH down (missing down)');
+          testNapi.sendKeyEvent(this.toplevelId, EVDEV_KEY_ENTER, true);
+        }
+      }
       testNapi.sendKeyEvent(this.toplevelId, evdevCode, pressed);
     })
 

@@ -30,6 +30,8 @@ import { LauncherAdapterRegistry } from '../service/LauncherAdapterRegistry';
 import { ThemeSettingsListener, ThemeSettingsService } from '../service/ThemeSettingsService';
 import { WineEngineService } from '../service/WineEngineService';
 import { WineWindowManager } from '../service/WineWindowManager';
+import { InputRouter } from '../service/InputRouter';
+import { EVDEV_KEY_ENTER } from '../common/KeyMap';
 import { GamepadManager } from '../service/GamepadManager';
 import { InputProfileService } from '../service/InputProfileService';
 import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
@@ -301,9 +303,12 @@ struct Index {
       controller.off('deleteRight');
       controller.off('sendKeyboardStatus');
       controller.off('setPreviewText');
+      controller.off('sendFunctionKey');
       const attr: inputMethod.InputAttribute = {
         textInputType: inputMethod.TextInputType.TEXT,
-        enterKeyType: inputMethod.EnterKeyType.DONE
+        // NEWLINE: 软键盘显示"换行"键。软键盘回车在本设备走 sendFunctionKey
+        // (onKeyEvent 收不到), 由 sendFunctionKey 回调注入回车 down+up 实现换行。
+        enterKeyType: inputMethod.EnterKeyType.NEWLINE
       };
       const cfg: inputMethod.TextConfig = { inputAttribute: attr };
       controller.attach(true, cfg).then(() => {
@@ -322,6 +327,20 @@ struct Index {
         controller.on('setPreviewText', (text: string, range: inputMethod.Range) => {
           testNapi.wineTextInputPreedit(text, 0, text.length);  // 预上屏 → Wine preedit
         });
+        // 软键盘回车 (DONE/NEWLINE 功能键): 本设备 onKeyEvent 收不到软键盘回车,
+        // 在 sendFunctionKey 回调直接向激活窗口注入回车 down+up 实现换行
+        controller.on('sendFunctionKey', (fk: inputMethod.FunctionKey) => {
+          hilog.info(DOMAIN, 'IME-TEST', '[sendFunctionKey] enterKeyType=%{public}d (0 UNSPEC 6 DONE 8 NEWLINE)',
+            fk.enterKeyType);
+          if (fk.enterKeyType === inputMethod.EnterKeyType.DONE ||
+              fk.enterKeyType === inputMethod.EnterKeyType.NEWLINE) {
+            const router = InputRouter.getInstance();
+            if (router.getActiveToplevel() > 0) {
+              router.sendKey(EVDEV_KEY_ENTER, true);
+              router.sendKey(EVDEV_KEY_ENTER, false);
+            }
+          }
+        });
       }).catch((err: BusinessError) => {
         hilog.error(DOMAIN, 'IME', '[attach] FAILED code=%{public}d msg=%{public}s', err.code, err.message);
       });
@@ -339,6 +358,7 @@ struct Index {
         c.off('deleteRight');
         c.off('sendKeyboardStatus');
         c.off('setPreviewText');
+        c.off('sendFunctionKey');
         c.hideTextInput();
         c.detach();
       } catch (e) {
