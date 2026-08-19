@@ -1,5 +1,5 @@
 # .github/workflows/build.yml
-name: Build HAP (arm64-v8a, unsigned)
+name: Build VintagePomeloPro HAP (arm64-v8a, unsigned)
 
 on:
   push:
@@ -221,7 +221,7 @@ jobs:
       - name: Upload HAP
         uses: actions/upload-artifact@v4
         with:
-          name: WineHua-arm64-v8a-unsigned-${{ github.sha }}
+          name: VintagePomeloPro-arm64-v8a-unsigned-${{ github.sha }}
           path: ${{ steps.art.outputs.hap }}
           if-no-files-found: error
           retention-days: 14
@@ -276,7 +276,7 @@ jobs:
       - name: Download HAP artifact
         uses: actions/download-artifact@v4
         with:
-          name: WineHua-arm64-v8a-unsigned-${{ github.sha }}
+          name: VintagePomeloPro-arm64-v8a-unsigned-${{ github.sha }}
           path: ./release-assets
 
       - name: Rename artifact with version
@@ -284,7 +284,7 @@ jobs:
           set -eux
           cd release-assets
           for f in *.hap; do
-            mv "$f" "WineHua-${{ steps.tag.outputs.tag }}-arm64-v8a-unsigned.hap"
+            mv "$f" "VintagePomeloPro-${{ steps.tag.outputs.tag }}-arm64-v8a-unsigned.hap"
           done
           ls -lh
 
@@ -317,7 +317,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: WineHua ${{ steps.tag.outputs.tag }}
+          name: VintagePomeloPro ${{ steps.tag.outputs.tag }}
           body_path: changelog.md
           files: release-assets/*.hap
           draft: false
