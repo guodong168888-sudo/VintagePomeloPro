@@ -1,4 +1,4 @@
-# WineHua — Wine on HarmonyOS
+# VintagePomelo — Wine on HarmonyOS
 
 在 HarmonyOS (OpenHarmony) 设备上运行 Windows x86_64 程序，通过 Box64 指令翻译，嵌入 Wayland compositor 渲染窗口。
 
