@@ -555,6 +555,12 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
             }
             OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot started, pid=%{public}d (attempt %{public}d)",
                         childPid, attempt);
+            // 登记 wineboot 到进程注册表: NCP 模式下存活判定依赖注册表
+            // (IsProcessRegisteredRunning)。未登记会使下方 wineboot 等待循环
+            // 0ms 立即结束 (done 0 ms) → ready 提前发出 → PC 首启时 Wine 服务
+            // 栈尚未就绪, 应用作为首个 GUI 进程 attach VirGL surface 失败 → 白屏。
+            // wineboot 退出时 NCP 退出回调 RemoveProcess 置 running=false, 等待自然结束。
+            AddProcess(childPid, "@engine/wineboot", -1, "@engine/wineboot");
         /* 首次初始化 (wine.inf 的 PreInstall/DefaultInstall/Wow64Install + 可选 Mono)
          * 耗时与设备性能强相关, 模拟器上可超过 30s — 固定死线会把仍在正常初始化的
          * wineboot 误判为失败。改为"进展驱动"看门狗: prefix 关键路径的 mtime 持续
@@ -633,6 +639,14 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
         }
         OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot completed (%{public}d s)", winebootWaitMs / 1000);
         unlink(initMarker.c_str());
+        // wineboot 退出仅代表 prefix 初始化结束; wineserver socket 才是 Wine
+        // 服务栈对外的就绪信号。未就绪时若直接放行, 首个 GUI 进程可能抢跑
+        // 建立渲染 surface 失败 (PC 首启白屏的竞态来源之一)。非致命: socket
+        // 就绪后由 explorer/应用自身的 server_connect 重试收敛。
+        if (!WaitFor("wineserver socket after wineboot",
+                     [p]() { return IsWineserverSocketReady(p->prefixDir); }, 5000, 100)) {
+            OH_LOG_WARN(LOG_APP, "[Launch-Async] wineserver socket not ready after wineboot");
+        }
         ws->SetDesktopRootRecognitionEnabled(true);
         ws->PromotePendingDesktopRoot();
     } else {
@@ -663,6 +677,9 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
                          (int)ret);
         } else {
             OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot --init pid=%{public}d", childPid);
+            // 登记 wineboot: NCP 模式存活判定依赖注册表, 未登记会 0ms 放行
+            // (done 0 ms) → ready 提前 → PC 首启白屏 (与首启登记同理)。
+            AddProcess(childPid, "@engine/wineboot", -1, "@engine/wineboot");
             /* 与首启相同的等待纪律: wineboot 活着就继续等, 大超时仅作挂死
              * 安全网。wineboot 退出即 SetEvent, explorer 即可放行。 */
             char procPath[64];
@@ -675,6 +692,10 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
             }
             OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot --init done (%{public}d ms)",
                         aliveMs);
+            if (!WaitFor("wineserver socket after wineboot seed",
+                         [p]() { return IsWineserverSocketReady(p->prefixDir); }, 5000, 100)) {
+                OH_LOG_WARN(LOG_APP, "[Launch-Async] wineserver socket not ready after wineboot seed");
+            }
         }
     }
 
