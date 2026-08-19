@@ -96,6 +96,34 @@ else
     log "Wine Mono: SKIP (设置 BUILD_WINE_MONO=1 启用 .NET 运行时)"
 fi
 
+# Wine Gecko (IE HTML 渲染引擎) — 预编译 MSI, 默认启用 (增加 ~53MB)
+# 设置 BUILD_WINE_GECKO=0 跳过. 缺它 IE 打开网页报 "Could not find Wine
+# Gecko. HTML rendering will be disabled.", 且首次需要时 Wine 尝试从
+# source.winehq.org 在线下载 (网络差时卡顿/失败)。打进包后首次 wineboot
+# 自动从 share/wine/gecko 安装, 完全离线。
+# 版本必须与 appwiz.cpl addons.c GECKO_VERSION 一致 (当前 2.47.4)。
+if [ "${BUILD_WINE_GECKO:-1}" = "1" ]; then
+    WINE_GECKO_VER="2.47.4"
+    WINE_GECKO_MSI="wine-gecko-${WINE_GECKO_VER}-x86_64.msi"
+    WINE_GECKO_URL="https://dl.winehq.org/wine/wine-gecko/${WINE_GECKO_VER}/${WINE_GECKO_MSI}"
+    WINE_GECKO_DIR="$BUILD_DIR/wine-ohos/share/wine/gecko"
+    WINE_GECKO_PATH="$WINE_GECKO_DIR/$WINE_GECKO_MSI"
+    if [ ! -f "$WINE_GECKO_PATH" ]; then
+        log "=== 下载 Wine Gecko ${WINE_GECKO_VER} ==="
+        mkdir -p "$WINE_GECKO_DIR"
+        if command -v curl >/dev/null 2>&1; then
+            curl -L -o "$WINE_GECKO_PATH" "$WINE_GECKO_URL" || warn "Wine Gecko 下载失败, IE HTML 渲染将不可用"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -O "$WINE_GECKO_PATH" "$WINE_GECKO_URL" || warn "Wine Gecko 下载失败"
+        else
+            warn "无 curl/wget, 跳过 Wine Gecko"
+        fi
+        [ -f "$WINE_GECKO_PATH" ] && log "Wine Gecko → $WINE_GECKO_PATH"
+    fi
+else
+    log "Wine Gecko: SKIP (设置 BUILD_WINE_GECKO=1 启用 IE HTML 渲染)"
+fi
+
 log "模拟层依赖就绪: $SYSROOT_EXT"
 echo ""
 find "$SYSROOT_EXT" -type f | sort
