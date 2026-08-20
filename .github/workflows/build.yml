@@ -136,7 +136,9 @@ jobs:
 
       # ---- 兜底: 确保预构建 buildenv 含当前源码所需工具 ----
       # libltdl-dev 是 Wine 依赖; glslangValidator 是 DXVK 配置阶段生成
-      # 内置 SPIR-V 的硬依赖. Dockerfile 已同步声明, 镜像更新后这里 no-op.
+      # 内置 SPIR-V 的硬依赖; x86_64-w64-mingw32-widl (mingw-w64-tools)
+      # 是 VKD3D-Proton meson 的硬依赖. Dockerfile 已同步声明, 镜像更新后
+      # 这里 no-op.
       - name: Ensure CI build dependencies present
         run: |
           packages=()
@@ -145,6 +147,13 @@ jobs:
           fi
           if ! command -v glslangValidator >/dev/null 2>&1; then
             packages+=(glslang-tools)
+          fi
+          if ! command -v x86_64-w64-mingw32-widl >/dev/null 2>&1; then
+            packages+=(mingw-w64-tools)
+          fi
+          # vkd3d-proton 补丁系列用 patch 打到隔离副本; 精简镜像可能没带
+          if ! command -v patch >/dev/null 2>&1; then
+            packages+=(patch)
           fi
           if ! command -v curl >/dev/null 2>&1; then
             packages+=(curl)
