@@ -251,6 +251,8 @@ struct SystemSettingsPage {
   // host GPU 名称 + DXVK2.6 支持判定 (马良 920 以下不支持, 经 testNapi.getHostGpuName)
   @State private gpuName: string = '';
   @State private gpuSupportDxvk26: boolean = true;
+  // 渲染模式 (auto/dxvk_2_6/dxvk_1_10/virgl): @State 保证按钮选中态即时刷新
+  @State private renderMode: string = 'auto';
   @State private fontImporting: boolean = false;
   @State private fontImportStage: string = '';
   @State private fontImportProgress: number = 0;
@@ -342,6 +344,7 @@ struct SystemSettingsPage {
     this.loadInputProfiles();
     this.loadApplicationVersion();
     this.loadGpuInfo();
+    this.renderMode = AppStorage.get<string>('winehua.render.mode') ?? 'auto';
   }
 
   onPageShow(): void {
@@ -932,6 +935,7 @@ struct SystemSettingsPage {
     const current = AppStorage.get<string>('winehua.render.mode') ?? 'auto';
     if (current === selected) return;
     AppStorage.setOrCreate<string>('winehua.render.mode', selected);
+    this.renderMode = selected;   // 立即刷新按钮选中态
     promptAction.showToast({ message: '渲染模式已切换，正在重启引擎…' });
     this.restartEngine();
   }
@@ -1360,7 +1364,7 @@ struct SystemSettingsPage {
   }
 
   private renderModeActive(mode: string): boolean {
-    return (AppStorage.get<string>('winehua.render.mode') ?? 'auto') === mode;
+    return this.renderMode === mode;
   }
 
   @Builder

@@ -22,6 +22,7 @@
 #include <thread>
 #include <utility>
 #include <unistd.h>
+#include <dlfcn.h>
 #include <vector>
 
 #include "../../../../smoke/vkd3d_capability_audit.h"
@@ -938,16 +939,33 @@ void StopHostVulkanProbe()
     gCancel.store(true);
 }
 
-// 轻量 GPU 名称查询: 创建无 surface 扩展的 instance, 枚举首个物理设备返回
-// deviceName (如 "Mali-G920")。不启动渲染/probe 线程, 仅供 ArkTS 能力判定。
+// 轻量 GPU 名称查询: 创建 instance, 枚举首个物理设备返回 deviceName
+// (如 "Mali-G920")。不启动渲染/probe 线程, 仅供 ArkTS 能力判定。
+// 显式 dlopen libvulkan: app 进程可能未链接加载 Vulkan loader, 全局符号
+// vkGetInstanceProcAddr 不可用; 用 surface 扩展对齐 VulkanProbe 初始化。
 std::string ProbeGpuDeviceName()
 {
-    PFN_vkCreateInstance vkCreateInstanceFn = reinterpret_cast<PFN_vkCreateInstance>(
-        vkGetInstanceProcAddr(VK_NULL_HANDLE, "vkCreateInstance"));
-    if (!vkCreateInstanceFn) return "";
-    PFN_vkEnumeratePhysicalDevices vkEnumerateFn = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
-        vkGetInstanceProcAddr(VK_NULL_HANDLE, "vkEnumeratePhysicalDevices"));
-    if (!vkEnumerateFn) return "";
+    auto closeLib = [](void* h) { if (h) dlclose(h); };
+    void* vkLib = dlopen("libvulkan.so", RTLD_NOW);
+    if (!vkLib) vkLib = dlopen("libvulkan.so.1", RTLD_NOW);
+    if (!vkLib) {
+        OH_LOG_WARN(LOG_APP, "[HostVulkan] gpu probe: dlopen libvulkan failed");
+        return "";
+    }
+    auto vkGetInstanceProcAddrFn = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+        dlsym(vkLib, "vkGetInstanceProcAddr"));
+    if (!vkGetInstanceProcAddrFn) {
+        OH_LOG_WARN(LOG_APP, "[HostVulkan] gpu probe: vkGetInstanceProcAddr missing");
+        closeLib(vkLib);
+        return "";
+    }
+    auto vkCreateInstanceFn = reinterpret_cast<PFN_vkCreateInstance>(
+        vkGetInstanceProcAddrFn(VK_NULL_HANDLE, "vkCreateInstance"));
+    if (!vkCreateInstanceFn) {
+        OH_LOG_WARN(LOG_APP, "[HostVulkan] gpu probe: vkCreateInstance missing");
+        closeLib(vkLib);
+        return "";
+    }
 
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -957,31 +975,42 @@ std::string ProbeGpuDeviceName()
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.apiVersion = VK_API_VERSION_1_0;
 
+    const char* enabledExtensions[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_OHOS_SURFACE_EXTENSION_NAME };
     VkInstanceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
+    createInfo.enabledExtensionCount = 2;
+    createInfo.ppEnabledExtensionNames = enabledExtensions;
 
     VkInstance instance = VK_NULL_HANDLE;
-    if (vkCreateInstanceFn(&createInfo, nullptr, &instance) != VK_SUCCESS) return "";
+    if (vkCreateInstanceFn(&createInfo, nullptr, &instance) != VK_SUCCESS) {
+        OH_LOG_WARN(LOG_APP, "[HostVulkan] gpu probe: vkCreateInstance failed");
+        closeLib(vkLib);
+        return "";
+    }
+    auto vkEnumerateFn = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
+        vkGetInstanceProcAddrFn(instance, "vkEnumeratePhysicalDevices"));
+    auto vkGetPropsFn = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
+        vkGetInstanceProcAddrFn(instance, "vkGetPhysicalDeviceProperties"));
+    auto vkDestroyFn = reinterpret_cast<PFN_vkDestroyInstance>(
+        vkGetInstanceProcAddrFn(instance, "vkDestroyInstance"));
 
-    uint32_t count = 0;
-    vkEnumerateFn(instance, &count, nullptr);
     std::string name;
-    if (count > 0) {
-        std::vector<VkPhysicalDevice> devices(static_cast<size_t>(count));
-        if (vkEnumerateFn(instance, &count, devices.data()) == VK_SUCCESS) {
-            PFN_vkGetPhysicalDeviceProperties vkGetPropsFn = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
-                vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties"));
-            if (vkGetPropsFn) {
+    if (vkEnumerateFn && vkGetPropsFn) {
+        uint32_t count = 0;
+        vkEnumerateFn(instance, &count, nullptr);
+        if (count > 0) {
+            std::vector<VkPhysicalDevice> devices(static_cast<size_t>(count));
+            if (vkEnumerateFn(instance, &count, devices.data()) == VK_SUCCESS) {
                 VkPhysicalDeviceProperties props{};
                 vkGetPropsFn(devices[0], &props);
                 name = props.deviceName ? props.deviceName : "";
+                OH_LOG_INFO(LOG_APP, "[HostVulkan] gpu probe deviceName=%{public}s count=%{public}u",
+                            name.c_str(), count);
             }
         }
     }
-
-    PFN_vkDestroyInstance vkDestroyFn = reinterpret_cast<PFN_vkDestroyInstance>(
-        vkGetInstanceProcAddr(instance, "vkDestroyInstance"));
     if (vkDestroyFn) vkDestroyFn(instance, nullptr);
+    closeLib(vkLib);
     return name;
 }
