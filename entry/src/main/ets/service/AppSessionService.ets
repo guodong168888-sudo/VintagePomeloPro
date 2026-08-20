@@ -44,6 +44,14 @@ interface PendingToplevelAssociation {
 const DESKTOP_SESSION_ID = 'desktop';
 const DESKTOP_APP_ID = 'builtin-desktop';
 const DESKTOP_EXECUTABLE = 'explorer.exe';
+/* Guest Venus/virglrenderer 共用一条命令环 (no_multi_ring)。D3D11 cube 与
+ * D3D12 gears/triangle 同时跑会把 Host queue 卡住（cube 掉到 0.4 FPS）。
+ * 这些内建图形烟测互斥：启动其中一个时先停掉其余。 */
+const VENUS_EXCLUSIVE_APP_IDS: string[] = [
+  'builtin-dxvk-cube',
+  'builtin-vkd3d-gears',
+  'builtin-vkd3d-triangle'
+];
 
 interface PendingLaunchRequest {
   app: AppDescriptor;
@@ -195,6 +203,7 @@ export class AppSessionService {
     //   避免 ensureReady 返回后继续执行造成的竞态（桌面会话未入表、
     //   DesktopAbility startAbility 阻塞等）。
     const engine = WineEngineService.getInstance();
+    engine.selectHostShadowForExecutable(app.launchTarget.executable);
     if (engine.isReady() && engine.getPresentationMode() === presentationMode) {
       return this.launchReady(app, settings, mode, presentationMode, homeDirectory);
     }
@@ -209,6 +218,24 @@ export class AppSessionService {
       engine.getPresentationMode() !== presentationMode) {
       // 状态在检查后变化：重新走事件队列。
       return this.deferLaunchUntilReady(app, settings, mode, presentationMode, homeDirectory);
+    }
+
+    engine.selectHostShadowForExecutable(app.launchTarget.executable);
+    if (engine.needsHostShadowRestart()) {
+      hilog.info(DOMAIN, '[SESS]', 'launch: host shadow restart app=%{public}s profile=%{public}s',
+        app.id, engine.selectHostShadowForExecutable(app.launchTarget.executable));
+      this.sessions.clear();
+      this.pendingToplevels = [];
+      try {
+        await InputOverlayWindowCoordinator.getInstance().setVisible(false);
+      } catch (_) {
+      }
+      const hostReady = await engine.ensureReady(mode, presentationMode, homeDirectory);
+      if (!hostReady) {
+        hilog.error(DOMAIN, '[SESS]', 'launch: host shadow restart failed app=%{public}s',
+          app.id);
+        return null;
+      }
     }
 
     if (presentationMode === WinePresentationMode.DESKTOP) {
@@ -236,6 +263,13 @@ export class AppSessionService {
         try { testNapi.activateWineSession(desktopSession.sessionId); } catch (_) {}
         try { testNapi.raiseToplevel(desktopSession.toplevelId); } catch (_) {}
       }
+    }
+
+    this.stopVenusExclusivePeers(app);
+    if (this.isVenusExclusiveSmoke(app.id)) {
+      await new Promise<void>((resolve: () => void): void => {
+        setTimeout((): void => { resolve(); }, 500);
+      });
     }
 
     // 每游戏兼容性预设优先于全局预设；'default' 表示跟随全局。
@@ -606,6 +640,45 @@ export class AppSessionService {
       }
     }
     if (matchIndex >= 0) this.pendingToplevels.splice(matchIndex, 1);
+  }
+
+  private isVenusExclusiveSmoke(appId: string): boolean {
+    return VENUS_EXCLUSIVE_APP_IDS.indexOf(appId) >= 0;
+  }
+
+  private isVenusExclusiveExecutable(path: string): boolean {
+    const normalized = normalizeLaunchPath(path).toLowerCase();
+    return normalized.indexOf('smoke') >= 0 &&
+      (normalized.indexOf('winehua_d3d_switch_cube.exe') >= 0 ||
+        normalized.indexOf('gears.exe') >= 0 ||
+        normalized.indexOf('triangle.exe') >= 0);
+  }
+
+  private stopVenusExclusivePeers(app: AppDescriptor): void {
+    if (!this.isVenusExclusiveSmoke(app.id)) return;
+    const selfPath = normalizeLaunchPath(app.launchTarget.executable);
+    const snapshot: RuntimeSession[] = [];
+    this.sessions.forEach((session: RuntimeSession) => snapshot.push(session));
+    snapshot.forEach((session: RuntimeSession) => {
+      if (session.appId === app.id || session.state === SessionState.STOPPED) return;
+      if (!this.isVenusExclusiveSmoke(session.appId)) return;
+      hilog.info(DOMAIN, '[SESS]',
+        'launch: stop Venus peer app=%{public}s before app=%{public}s',
+        session.appId, app.id);
+      this.stop(session);
+    });
+    this.getNativeProcesses().forEach((process: NativeProcessInfo): void => {
+      if (process.state !== 'running') return;
+      if (normalizeLaunchPath(process.path) === selfPath) return;
+      if (!this.isVenusExclusiveExecutable(process.path)) return;
+      try {
+        if (process.sessionId && process.sessionId.length > 0) {
+          testNapi.stopWineSession(process.sessionId);
+        } else {
+          testNapi.killProcess(process.pid);
+        }
+      } catch (_) {}
+    });
   }
 
   private getNativeProcesses(): NativeProcessInfo[] {

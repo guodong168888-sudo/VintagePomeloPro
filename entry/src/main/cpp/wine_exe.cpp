@@ -307,6 +307,8 @@ static int SpawnWineProgramImpl(const ProgramOptions& options)
     for (const std::string& line : options.environment) UpsertEnv(&envStrs, line);
     UpsertEnv(&envStrs, "WINEHUA_D3D_BACKEND=" + options.d3dBackend);
     UpsertEnv(&envStrs, "WINEHUA_PRESENT_BACKEND=" + options.presentBackend);
+    if (IsVkd3dSmokeDemo(options.windowsExePath))
+        AppendVkd3dDemoPresentEnv(envStrs, options.d3dBackend, binDir);
     UpsertEnv(&envStrs, std::string("WINEHUA_AUTOMATION=") + (options.automationMode ? "1" : "0"));
     /* DXVK is a managed WineHua runtime overlay, never a game-provided DLL. */
     if (options.d3dBackend.rfind("dxvk_", 0) == 0)
@@ -771,6 +773,8 @@ napi_value RunWineExe(napi_env env, napi_callback_info info)
         }
         UpsertEnv(&wineEnv, overrideLine);
     }
+    if (IsVkd3dSmokeDemo(exePath) || IsVkd3dSmokeDemo(wineExe))
+        AppendVkd3dDemoPresentEnv(wineEnv, d3dBackend, binDir);
     OH_LOG_INFO(LOG_APP,
                 "[Wine] product D3D backend=%{public}s cwd=%{public}s",
                 d3dBackend,

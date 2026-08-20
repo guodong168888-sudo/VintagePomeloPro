@@ -144,6 +144,14 @@ void AppendD3dBackendEnv(std::vector<std::string>& env,
                          const std::string& d3dBackend,
                          const std::string& binDir);
 
+// C:\smoke gears/triangle only. Cube keeps the DXVK DIR0 overlay; these
+// demos need vkd3d-first WINEDLLDIR plus the qualified D3D12 present path
+// or Venus presents an empty (black) window.
+bool IsVkd3dSmokeDemo(const std::string& exePath);
+void AppendVkd3dDemoPresentEnv(std::vector<std::string>& env,
+                               const std::string& d3dBackend,
+                               const std::string& binDir);
+
 // Add the stable production DXVK policy shared by Explorer descendants and
 // applications launched directly from an Old Pomelo app card. Diagnostics
 // may provide a specific performance profile; an empty profile selects the

@@ -70,6 +70,8 @@ export struct AppCard {
     if (this.app.id === 'builtin-notepad') return $r('app.media.builtin_notepad');
     if (this.app.id === 'builtin-graphics-smoke') return $r('app.media.builtin_graphics');
     if (this.app.id === 'builtin-dxvk-cube') return $r('app.media.builtin_graphics');
+    if (this.app.id === 'builtin-vkd3d-triangle') return $r('app.media.builtin_vkd3d_triangle');
+    if (this.app.id === 'builtin-vkd3d-gears') return $r('app.media.builtin_vkd3d_gears');
     if (this.app.id === 'builtin-audio-smoke') return $r('app.media.builtin_audio');
     return $r('app.media.builtin_desktop');
   }

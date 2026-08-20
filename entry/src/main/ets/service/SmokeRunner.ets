@@ -231,6 +231,12 @@ export function syncManagedSmoke(prefixMode: string): boolean {
     'assets/venus_image_fetch.spv', 'assets/venus_combined_sample.spv',
     'assets/venus_separated_sample.spv',
   ];
+  /* VKD3D D3D12 demos are packaged with wine-data when vkd3d-proton built.
+   * Keep them optional so an older payload without these files still syncs. */
+  const optional = [
+    'x64/triangle.exe',
+    'x64/gears.exe',
+  ];
   /* DXVK is a WineHua runtime overlay, not part of C:\\smoke. Remove files
    * leaked there by older payloads, but only inside this managed directory. */
   for (const file of ['x64/d3d11.dll', 'x64/dxgi.dll', 'x86/d3d11.dll', 'x86/dxgi.dll']) {
@@ -253,6 +259,14 @@ export function syncManagedSmoke(prefixMode: string): boolean {
       break;
     }
   }
+  if (complete) {
+    for (const file of optional) {
+      if (pathExists(`${source}/${file}`) && !pathExists(`${target}/${file}`)) {
+        complete = false;
+        break;
+      }
+    }
+  }
   if (complete) return true;
 
   try {
@@ -261,6 +275,9 @@ export function syncManagedSmoke(prefixMode: string): boolean {
     /* Keep the runtime-owned dxvk/ directory out of the prefix. */
     copyRecursive(`${source}/manifest.json`, `${target}/manifest.json`);
     for (const file of required) copyRecursive(`${source}/${file}`, `${target}/${file}`);
+    for (const file of optional) {
+      if (pathExists(`${source}/${file}`)) copyRecursive(`${source}/${file}`, `${target}/${file}`);
+    }
     if (pathExists(`${source}/assets`)) copyRecursive(`${source}/assets`, `${target}/assets`);
     ensureDirectory(`${target}/results`);
     hilog.info(DOMAIN, 'SmokeRunner', 'managed smoke synchronized prefix=%{public}s', prefixMode);

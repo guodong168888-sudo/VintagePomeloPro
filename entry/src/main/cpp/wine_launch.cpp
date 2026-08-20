@@ -300,6 +300,10 @@ static void AppendStableDesktopDxvkEnv(std::vector<std::string>& env,
      * the desktop descendants on that explicit profile instead of replacing
      * it with the product default below. */
     const char* shadowTrace = getenv("VKR_WINEHUA_SHADOW_TRACE");
+    const char* hostShadowMode = getenv("WINEHUA_VIRGL_HOST_SHADOW_MODE");
+    if (!hostShadowMode || !hostShadowMode[0])
+        hostShadowMode = getenv("VKR_WINEHUA_SHADOW_FROM_HOST");
+    const bool hostPrecise = hostShadowMode && !strcmp(hostShadowMode, "precise");
     const bool guestPerf = shadowTrace && !strcmp(shadowTrace, "perf");
     std::string selectedProfile =
         FindLaunchEnvironmentValue(params, "WINEHUA_PERF_PROFILE");
@@ -326,6 +330,8 @@ static void AppendStableDesktopDxvkEnv(std::vector<std::string>& env,
             selectedProfile = "shadow-precise-dirty-ring-no-upload-fast";
         else if (shadowTrace && !strcmp(shadowTrace, "no-gpu-upload"))
             selectedProfile = "shadow-precise-dirty-ring-no-upload";
+        else if (hostPrecise)
+            selectedProfile = "shadow-precise";
         else
             selectedProfile = guestPerf ? "shadow-precise-strong-ring-perf"
                                         : "shadow-precise-dirty-ring-inline-upload-coverage-sort";

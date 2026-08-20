@@ -35,6 +35,14 @@ const PREFIX_SYSTEM_REG = FILES_BASE + '/.wine/system.reg';
 // ArkTS 不再用固定阶段死线: native 协调者会发 phase:/fail:/wine-ready 事件,
 // 等待只由事件结束。下面的安全网仅在"长时间完全无事件"时兜底, 正常不会触发。
 const ENGINE_NO_EVENT_SAFETY_MS = 30 * 60 * 1000;
+const HOST_SHADOW_DXVK = 'shadow-precise-dirty-ring-inline-upload-coverage-sort';
+const HOST_SHADOW_VKD3D = 'shadow-precise';
+
+function executableWantsVkd3dHostShadow(executable: string): boolean {
+  const normalized = executable.toLowerCase();
+  return normalized.indexOf('smoke') >= 0 &&
+    (normalized.indexOf('gears.exe') >= 0 || normalized.indexOf('triangle.exe') >= 0);
+}
 
 interface RuntimePathRequirement {
   path: string;
@@ -140,6 +148,8 @@ export class WineEngineService {
   private prefixRefreshRequired: boolean = false;
   private pendingPrefixVersion: Uint8Array = new Uint8Array(0);
   private d3dBackend: string = 'dxvk_legacy';
+  private hostShadowProfile: string = HOST_SHADOW_DXVK;
+  private appliedHostShadowProfile: string = HOST_SHADOW_DXVK;
   private enginePhase: string = '';
   private phaseStartedAt: number = 0;
   private readySafetyTimer: number = -1;
@@ -230,13 +240,15 @@ export class WineEngineService {
     if (!this.context) return false;
     const requestedD3DBackend = this.selectedD3DBackend();
     if (this.state === EngineState.READY && this.mode === mode &&
-      this.presentationMode === presentationMode && this.d3dBackend === requestedD3DBackend) {
+      this.presentationMode === presentationMode && this.d3dBackend === requestedD3DBackend &&
+      this.appliedHostShadowProfile === this.hostShadowProfile) {
       this.syncManagedSmokePayload('ready-reuse');
       return true;
     }
     if (this.state === EngineState.PREPARING && this.mode === mode &&
       this.presentationMode === presentationMode &&
-      this.d3dBackend === requestedD3DBackend) return this.waitForReady();
+      this.d3dBackend === requestedD3DBackend &&
+      this.appliedHostShadowProfile === this.hostShadowProfile) return this.waitForReady();
 
     if (this.state === EngineState.ERROR) {
       // native 进程仍存活说明协调者可能还在推进 (例如之前 ArkTS 侧瞬态失败):
@@ -251,9 +263,14 @@ export class WineEngineService {
 
     if (this.state !== EngineState.STOPPED &&
       (this.mode !== mode || this.presentationMode !== presentationMode ||
-       this.d3dBackend !== requestedD3DBackend)) {
+       this.d3dBackend !== requestedD3DBackend ||
+       this.appliedHostShadowProfile !== this.hostShadowProfile)) {
+      const switchingHost = this.appliedHostShadowProfile !== this.hostShadowProfile &&
+        this.mode === mode && this.presentationMode === presentationMode &&
+        this.d3dBackend === requestedD3DBackend;
       this.setState(EngineState.SWITCHING,
-        this.d3dBackend !== requestedD3DBackend ? '正在切换 Direct3D 渲染策略' : '正在切换显示模式');
+        switchingHost ? '正在切换图形主机配置' :
+        (this.d3dBackend !== requestedD3DBackend ? '正在切换 Direct3D 渲染策略' : '正在切换显示模式'));
       await this.stopAll();
     }
 
@@ -285,8 +302,10 @@ export class WineEngineService {
       // Wine children already receive the matching WINEHUA_PERF_PROFILE env;
       // without this the host runs the full-shadow baseline (~4 FPS cube).
       try {
-        testNapi.setHostShadowProfile('shadow-precise-dirty-ring-inline-upload-coverage-sort');
+        testNapi.setHostShadowProfile(this.hostShadowProfile);
+        this.appliedHostShadowProfile = this.hostShadowProfile;
       } catch (_) {
+        this.appliedHostShadowProfile = this.hostShadowProfile;
       }
       const serverReady = testNapi.startServer(SOCK) as boolean;
       if (!serverReady) {
@@ -340,11 +359,24 @@ export class WineEngineService {
 
   private selectedD3DBackend(): string {
     const mode = AppStorage.get<string>('winehua.render.mode') ?? 'auto';
-    if (mode === 'virgl') return 'wined3d';
-    if (mode === 'dxvk_1_10') return 'dxvk_legacy';
-    // dxvk_2_6 / auto: DXVK 2.6 (GPU 不适配回退 1.10)
-    if (this.gpuSupportsDxvk26()) return 'dxvk_modern_2_6';
-    return 'dxvk_legacy';
+    let backend = 'dxvk_legacy';
+    if (mode === 'virgl') {
+      backend = 'wined3d';
+    } else if (mode === 'dxvk_1_10') {
+      backend = 'dxvk_legacy';
+    } else if (this.gpuSupportsDxvk26()) {
+      // auto / dxvk_2_6: Maleoon/Mali-G 920+ → DXVK 2.6 + VKD3D
+      backend = 'dxvk_modern_2_6';
+    }
+    AppStorage.setOrCreate<string>('winehua.render.resolved', backend);
+    try {
+      const gpu = (testNapi.getHostGpuName() as string) ?? '';
+      hilog.info(DOMAIN, TAG, 'render adapt mode=%{public}s gpu=%{public}s backend=%{public}s',
+        mode, gpu, backend);
+    } catch (_) {
+      hilog.info(DOMAIN, TAG, 'render adapt mode=%{public}s backend=%{public}s', mode, backend);
+    }
+    return backend;
   }
 
   /** GPU 能力判定: 马良 (Mali-Gxxx) 920 以上支持 DXVK 2.6。 */
@@ -358,6 +390,16 @@ export class WineEngineService {
     } catch (_) {
       return true;
     }
+  }
+
+  selectHostShadowForExecutable(executable: string): string {
+    this.hostShadowProfile = executableWantsVkd3dHostShadow(executable) ?
+      HOST_SHADOW_VKD3D : HOST_SHADOW_DXVK;
+    return this.hostShadowProfile;
+  }
+
+  needsHostShadowRestart(): boolean {
+    return this.appliedHostShadowProfile !== this.hostShadowProfile;
   }
 
   /**

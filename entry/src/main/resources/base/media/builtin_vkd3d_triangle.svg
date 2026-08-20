@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="285" height="239" viewBox="0 0 285 239">
+  <defs>
+    <linearGradient id="bg" x1="20" y1="6" x2="262" y2="236" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#14285B"/>
+      <stop offset="0.54" stop-color="#176A91"/>
+      <stop offset="1" stop-color="#103D68"/>
+    </linearGradient>
+    <linearGradient id="top" x1="84" y1="61" x2="184" y2="112" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D7FBFF"/>
+      <stop offset="0.56" stop-color="#69E8F4"/>
+      <stop offset="1" stop-color="#42A7E8"/>
+    </linearGradient>
+    <linearGradient id="left" x1="90" y1="97" x2="148" y2="186" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#43CEE7"/>
+      <stop offset="1" stop-color="#1666B5"/>
+    </linearGradient>
+    <linearGradient id="right" x1="147" y1="99" x2="204" y2="180" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7B9CFF"/>
+      <stop offset="1" stop-color="#2549A7"/>
+    </linearGradient>
+  </defs>
+  <rect width="285" height="239" rx="25" fill="url(#bg)"/>
+  <circle cx="216" cy="36" r="84" fill="#69E7FF" opacity=".09"/>
+  <circle cx="43" cy="204" r="78" fill="#807DFF" opacity=".1"/>
+  <path d="M-12 190C43 151 75 174 121 204C172 237 226 237 303 190" fill="none" stroke="#B9F7FF" stroke-opacity=".15" stroke-width="1.5"/>
+  <path d="M-16 208C42 167 83 188 128 215C176 244 231 246 305 205" fill="none" stroke="#B9F7FF" stroke-opacity=".12" stroke-width="1.2"/>
+  <path d="M54 171H233M70 185H216M85 198H201" stroke="#A9F5FF" stroke-opacity=".15" stroke-width="1"/>
+  <path d="M87 163L142 194L198 163M102 154L142 176L183 154M116 145L142 159L169 145" fill="none" stroke="#A9F5FF" stroke-opacity=".14" stroke-width="1"/>
+  <ellipse cx="142" cy="177" rx="72" ry="14" fill="#071C49" opacity=".38"/>
+  <path d="M142 43L207 81L142 120L77 81L142 43Z" fill="url(#top)"/>
+  <path d="M77 81L142 120V190L77 151V81Z" fill="url(#left)"/>
+  <path d="M142 120L207 81V151L142 190V120Z" fill="url(#right)"/>
+  <path d="M142 59L190 87L142 115L94 87L142 59Z" fill="none" stroke="#F4FFFF" stroke-opacity=".78" stroke-width="2"/>
+  <path d="M142 120V178M78 82L142 120L206 82" fill="none" stroke="#E7FFFF" stroke-opacity=".52" stroke-width="1.5"/>
+  <circle cx="142" cy="83" r="7" fill="#F7FFFF" opacity=".95"/>
+  <circle cx="142" cy="83" r="15" fill="#C0FAFF" opacity=".18"/>
+</svg>
