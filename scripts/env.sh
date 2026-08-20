@@ -166,6 +166,19 @@ EOF
         fi
     fi
     [ -n "${WAYLAND_SCANNER:-}" ] || err "wayland-scanner not found in PATH; install libwayland-bin or set WAYLAND_SCANNER"
+    # 自举/预置的 scanner 元数据在 host-tools。Linux CI 镜像没有系统
+    # wayland-scanner 时, wayland/xkbcommon 的 meson build-machine 依赖
+    # 查找需要这个 pkgconfig 目录; 各平台统一在此导出, 幂等。
+    if [ -f "$BUILD_DIR/host-tools/lib/pkgconfig/wayland-scanner.pc" ]; then
+        case ":${PKG_CONFIG_PATH:-}:" in
+            *":$BUILD_DIR/host-tools/lib/pkgconfig:"*) ;;
+            *) export PKG_CONFIG_PATH="$BUILD_DIR/host-tools/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" ;;
+        esac
+        case ":${PKG_CONFIG_PATH_FOR_BUILD:-}:" in
+            *":$BUILD_DIR/host-tools/lib/pkgconfig:"*) ;;
+            *) export PKG_CONFIG_PATH_FOR_BUILD="$BUILD_DIR/host-tools/lib/pkgconfig${PKG_CONFIG_PATH_FOR_BUILD:+:$PKG_CONFIG_PATH_FOR_BUILD}" ;;
+        esac
+    fi
 fi
 
 # HAP 项目
