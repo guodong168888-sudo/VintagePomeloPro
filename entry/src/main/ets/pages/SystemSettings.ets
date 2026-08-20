@@ -925,13 +925,15 @@ struct SystemSettingsPage {
   }
 
   /** 渲染模式: auto / dxvk_2_6 / dxvk_1_10 / virgl。
-   *  自动: DX11→DXVK 2.6 (GPU 不适配自动 1.10), D3D12→VKD3D, 渲染 VirGL 优先。 */
+   *  自动: DX11→DXVK 2.6 (GPU 不适配自动 1.10), D3D12→VKD3D, 渲染 VirGL 优先。
+   *  切换后自动重启引擎即时生效, 无需手动重启。 */
   private updateRenderMode(mode: string): void {
     const selected = mode === 'dxvk_2_6' || mode === 'dxvk_1_10' || mode === 'virgl' ? mode : 'auto';
     const current = AppStorage.get<string>('winehua.render.mode') ?? 'auto';
     if (current === selected) return;
     AppStorage.setOrCreate<string>('winehua.render.mode', selected);
-    promptAction.showToast({ message: '渲染模式已保存；重启 Wine 引擎后生效' });
+    promptAction.showToast({ message: '渲染模式已切换，正在重启引擎…' });
+    this.restartEngine();
   }
 
   /** DXVK 版本: 1.10 (dxvk_legacy) / 2.6 (dxvk_modern_2_6, 含 VKD3D 实验 D3D12)。 */
@@ -1854,8 +1856,8 @@ struct SystemSettingsPage {
             .fontColor($r('app.color.text_secondary')).width('100%')
           Row({ space: 6 }) {
             this.RenderModeChip('自动', 'auto')
-            this.RenderModeChip('2.6', 'dxvk_2_6', this.gpuSupportDxvk26)
-            this.RenderModeChip('1.10', 'dxvk_1_10')
+            this.RenderModeChip('DXVK 2.6', 'dxvk_2_6', this.gpuSupportDxvk26)
+            this.RenderModeChip('DXVK 1.10', 'dxvk_1_10')
             this.RenderModeChip('VirGL', 'virgl')
           }.width('100%')
           if (!this.gpuSupportDxvk26) {
