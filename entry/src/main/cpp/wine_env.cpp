@@ -166,6 +166,8 @@ void AppendD3dBackendEnv(std::vector<std::string>& env,
 
     std::string profile = d3dBackend.substr(strlen("dxvk_"));
     if (profile.empty()) profile = "legacy";
+    // dxvk_modern_2_6 → 运行时目录 dxvk/modern-2.6 (与打包目录一致)
+    if (profile == "modern_2_6") profile = "modern-2.6";
     const std::string overlayRoot = std::string(WINE_RUNTIME_ROOT) +
         "/dxvk/" + profile;
     const std::string overlay64 = overlayRoot + "/x64";

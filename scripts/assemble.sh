@@ -391,6 +391,32 @@ PY
                 "$wine_data/dxvk/legacy/$dxvk_arch/$dxvk_dll"
         done
     done
+    # DXVK Modern 2.6 (dxvk_modern_2_6 后端): 独立版本化目录, 与 legacy 并列。
+    local dxvk_modern_root="$DXVK_MODERN_BUILD_ROOT"
+    if [ -d "$dxvk_modern_root" ]; then
+        mkdir -p "$wine_data/dxvk/modern-2.6/x64" "$wine_data/dxvk/modern-2.6/x86"
+        for dxvk_arch in x64 x86; do
+            for dxvk_dll in d3d11.dll dxgi.dll; do
+                [ -f "$dxvk_modern_root/$dxvk_arch/bin/$dxvk_dll" ] || \
+                    err "DXVK Modern $dxvk_arch $dxvk_dll missing: $dxvk_modern_root/$dxvk_arch/bin/$dxvk_dll"
+                cp "$dxvk_modern_root/$dxvk_arch/bin/$dxvk_dll" \
+                    "$wine_data/dxvk/modern-2.6/$dxvk_arch/$dxvk_dll"
+            done
+        done
+    else
+        log "warn: DXVK Modern 2.6 未构建, dxvk_modern_2_6 后端不可用"
+    fi
+    # VKD3D-Proton (D3D12): limited-500K profile
+    local vkd3d_root="$VKD3D_PROTON_BUILD_ROOT/limited-500k"
+    if [ -f "$vkd3d_root/x64/d3d12.dll" ]; then
+        mkdir -p "$wine_data/vkd3d/limited-500k/x64"
+        cp "$vkd3d_root/x64/d3d12.dll" "$wine_data/vkd3d/limited-500k/x64/d3d12.dll"
+        [ -f "$vkd3d_root/manifest.json" ] && \
+            cp "$vkd3d_root/manifest.json" "$wine_data/vkd3d/manifest.json"
+        log "    vkd3d-proton d3d12.dll → rawfile vkd3d/limited-500k/"
+    else
+        log "warn: VKD3D-Proton 未构建, vkd3d 后端不可用"
+    fi
     # The DXVK binaries are runtime-owned overlays.  Do not place them next
     # to the smoke executables: that would make the test layout look like a
     # game distribution and would force real games to carry WineHua-specific

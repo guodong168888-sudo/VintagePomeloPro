@@ -45,6 +45,21 @@ DXVK_ARTIFACTS := \
 	$(BUILD_DIR)/dxvk/legacy/x86/bin/dxgi.dll
 DXVK_STAMP := $(STAMPS)/dxvk-legacy
 DXVK_SOURCE_INPUTS := $(shell find $(ROOT)/thirdparty/dxvk/src -type f 2>/dev/null; find $(ROOT)/thirdparty/dxvk -maxdepth 1 -type f 2>/dev/null)
+DXVK_MODERN_ARTIFACTS := \
+	$(BUILD_DIR)/dxvk/modern-2.6/x64/bin/d3d11.dll \
+	$(BUILD_DIR)/dxvk/modern-2.6/x64/bin/dxgi.dll \
+	$(BUILD_DIR)/dxvk/modern-2.6/x86/bin/d3d11.dll \
+	$(BUILD_DIR)/dxvk/modern-2.6/x86/bin/dxgi.dll
+DXVK_MODERN_STAMP := $(STAMPS)/dxvk-modern-2.6
+DXVK_MODERN_SOURCE_INPUTS := $(shell find $(ROOT)/thirdparty/dxvk-modern/src -type f 2>/dev/null; find $(ROOT)/thirdparty/dxvk-modern -maxdepth 1 -type f 2>/dev/null)
+VKD3D_PROTON_ARTIFACTS := \
+	$(BUILD_DIR)/vkd3d-proton/limited-500k/x64/d3d12.dll \
+	$(BUILD_DIR)/vkd3d-proton/limited-500k/x64/winehua-d3d12-smoke.exe \
+	$(BUILD_DIR)/vkd3d-proton/limited-500k/x64/triangle.exe \
+	$(BUILD_DIR)/vkd3d-proton/limited-500k/x64/gears.exe \
+	$(BUILD_DIR)/vkd3d-proton/limited-500k/manifest.json
+VKD3D_PROTON_STAMP := $(STAMPS)/vkd3d-proton-limited-500k
+VKD3D_PROTON_SOURCE_INPUTS := $(shell find $(ROOT)/thirdparty/vkd3d-proton -maxdepth 2 -type f 2>/dev/null)
 
 # 架构列表 (NATIVE_ARCH=all 时展开为两个)
 ifeq ($(NATIVE_ARCH),all)
@@ -78,6 +93,32 @@ $(DXVK_STAMP): $(SCRIPTS)/build_dxvk.sh $(DXVK_SOURCE_INPUTS) | $(STAMPS)
 	@echo "=== dxvk legacy ==="
 	bash $(SCRIPTS)/build_dxvk.sh
 	touch $@
+
+# dxvk-modern — WineHua DXVK 2.6.2 compatibility profile (x64 + x86)
+# ============================================================
+.PHONY: dxvk-modern
+dxvk-modern: $(DXVK_MODERN_STAMP)
+
+$(DXVK_MODERN_STAMP): $(SCRIPTS)/build_dxvk_modern.sh $(DXVK_MODERN_SOURCE_INPUTS) | $(STAMPS)
+	@echo "=== dxvk modern 2.6 ==="
+	bash $(SCRIPTS)/build_dxvk_modern.sh
+	touch $@
+
+$(DXVK_MODERN_ARTIFACTS): $(DXVK_MODERN_STAMP)
+	@test -s "$@" || { echo "ERROR: DXVK Modern artifact missing after build: $@" >&2; exit 1; }
+
+# vkd3d-proton — x64-only, explicit, default-off 2.6 limited-500K profile
+# ============================================================
+.PHONY: vkd3d-proton
+vkd3d-proton: $(VKD3D_PROTON_STAMP)
+
+$(VKD3D_PROTON_STAMP): $(SCRIPTS)/build_vkd3d_proton.sh $(VKD3D_PROTON_SOURCE_INPUTS) | $(STAMPS)
+	@echo "=== vkd3d-proton 2.6 limited-500K ==="
+	bash $(SCRIPTS)/build_vkd3d_proton.sh
+	touch $@
+
+$(VKD3D_PROTON_ARTIFACTS): $(VKD3D_PROTON_STAMP)
+	@test -s "$@" || { echo "ERROR: VKD3D-Proton artifact missing after build: $@" >&2; exit 1; }
 
 # DXVK is produced as a versioned multi-DLL side effect of the stamp recipe. Give each
 # packaged DLL an explicit rule so a clean checkout can resolve the assemble
@@ -330,9 +371,11 @@ define assemble_rule
 
 assemble-$(1): $$(STAMPS)/$(1)/assemble
 
-$$(STAMPS)/$(1)/assemble: $(SCRIPTS)/assemble.sh $(SCRIPTS)/env.sh $(DXVK_ARTIFACTS) \
+$$(STAMPS)/$(1)/assemble: $(SCRIPTS)/assemble.sh $(SCRIPTS)/env.sh $(DXVK_ARTIFACTS) $(DXVK_MODERN_ARTIFACTS) \
+	$(VKD3D_PROTON_ARTIFACTS) \
 	$(ROOT)/smoke/winehua_d3d8_smoke.c \
 	$(ROOT)/smoke/winehua_d3d_switch_cube.c \
+	$(ROOT)/smoke/winehua_dxvk26_requirements.c \
 	$(ROOT)/smoke/winehua_win32_driver.c \
 	$(ROOT)/smoke/winehua_network_probe.c \
 	$(ROOT)/smoke/winehua_network_wininet.c \

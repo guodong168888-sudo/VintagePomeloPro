@@ -1,4 +1,4 @@
-import { hilog } from '../service/LogService';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import testNapi from 'libentry.so';
 
 const DOMAIN = 0x0000;

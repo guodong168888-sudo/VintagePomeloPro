@@ -442,6 +442,16 @@ static napi_value StopHostVulkanProbeNapi(napi_env env, napi_callback_info) {
     return result;
 }
 
+// 返回 host Vulkan 物理设备 GPU 名称 (如 "Mali-G920"), 供 ArkTS 按 GPU 能力
+// 控制 DXVK2.6 选项 (马良 920 以下不支持)。失败返回空串。
+static napi_value GetHostGpuNameNapi(napi_env env, napi_callback_info) {
+    const std::string name = ProbeGpuDeviceName();
+    napi_value result;
+    napi_create_string_utf8(env, name.c_str(), NAPI_AUTO_LENGTH, &result);
+    OH_LOG_INFO(LOG_APP, "[HostVulkan] gpuName=%{public}s", name.c_str());
+    return result;
+}
+
 
 // -- NAPI: stopClient — 杀掉所有 Wine 进程 --
 static napi_value StopClient(napi_env, napi_callback_info) {
@@ -1155,6 +1165,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"resetWinePrefix",nullptr, ResetWinePrefix,nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runHostVulkanProbe", nullptr, RunHostVulkanProbe, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"stopHostVulkanProbe", nullptr, StopHostVulkanProbeNapi, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getHostGpuName", nullptr, GetHostGpuNameNapi, nullptr, nullptr, nullptr, napi_default, nullptr},
         // surfaceId 驱动的渲染器管理 (XComponentController 回调)
         {"createRenderer",  nullptr, CreateRenderer,  nullptr, nullptr, nullptr, napi_default, nullptr},
         {"resizeRenderer",  nullptr, ResizeRenderer,  nullptr, nullptr, nullptr, napi_default, nullptr},

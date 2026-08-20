@@ -28,6 +28,7 @@ add_library(entry SHARED
     game_controller_bridge.cpp
     virgl_host_config.cpp
     napi_init.cpp
+    experiment_payload.cpp
     wine_process.cpp
     wine_env.cpp
     wine_launch.cpp

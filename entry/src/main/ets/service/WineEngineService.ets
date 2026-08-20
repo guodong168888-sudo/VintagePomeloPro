@@ -340,7 +340,13 @@ export class WineEngineService {
 
   private selectedD3DBackend(): string {
     const preference = AppSettingsStore.getInstance().getGlobalSettings().d3dRendererPreference;
-    return preference === D3DRendererPreference.VIRGL ? 'wined3d' : 'dxvk_legacy';
+    if (preference === D3DRendererPreference.VIRGL) {
+      // VirGL 优先: 渲染通道强制 WineD3D/OpenGL/VirGL
+      return 'wined3d';
+    }
+    // DXVK: 按版本选择 (dxvk 1.10 默认 / dxvk 2.6 含 VKD3D 实验 D3D12)
+    const dxvkVersion = AppStorage.get<string>('winehua.dxvk.preference');
+    return dxvkVersion === 'dxvk_modern_2_6' ? 'dxvk_modern_2_6' : 'dxvk_legacy';
   }
 
   /**

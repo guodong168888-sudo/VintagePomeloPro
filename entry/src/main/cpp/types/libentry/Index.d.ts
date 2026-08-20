@@ -81,6 +81,7 @@ export const checkWinePrefix: (prefixMode?: string) => boolean;
 export const resetWinePrefix: (prefixMode?: string) => boolean;
 export const runHostVulkanProbe: (surfaceId: bigint, runId: string) => boolean;
 export const stopHostVulkanProbe: () => boolean;
+export const getHostGpuName: () => string;
 export const setOutputSize: (w: number, h: number) => void;
 export const setDisplayScale: (scale: number) => void;
 export const setDesktopMode: (enabled: boolean) => void;

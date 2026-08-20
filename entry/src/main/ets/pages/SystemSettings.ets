@@ -43,6 +43,7 @@ import { hilog } from '../service/LogService';
 import { InputProfileService } from '../service/InputProfileService';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { LengthMetrics, window } from '@kit.ArkUI';
+import pasteboard from '@ohos.pasteboard';
 import deviceInfo from '@ohos.deviceInfo';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
 import {
@@ -247,6 +248,9 @@ struct SystemSettingsPage {
   @State private titleContentTopInsetVp: number = 40;
   @State private navBarInsetVp: number = 0;
   @State private appVersion: string = '版本信息读取中…';
+  // host GPU 名称 + DXVK2.6 支持判定 (马良 920 以下不支持, 经 testNapi.getHostGpuName)
+  @State private gpuName: string = '';
+  @State private gpuSupportDxvk26: boolean = true;
   @State private fontImporting: boolean = false;
   @State private fontImportStage: string = '';
   @State private fontImportProgress: number = 0;
@@ -337,6 +341,7 @@ struct SystemSettingsPage {
     WineEngineService.getInstance().subscribe(this.engineCallback);
     this.loadInputProfiles();
     this.loadApplicationVersion();
+    this.loadGpuInfo();
   }
 
   onPageShow(): void {
@@ -900,6 +905,35 @@ struct SystemSettingsPage {
       this.settings.outputScale, this.settings.themeMode, direction);
   }
 
+  /** host GPU 名称 + DXVK2.6 支持判定: 马良 (Mali-Gxxx) 920 以下不支持 DXVK2.6。 */
+  private loadGpuInfo(): void {
+    try {
+      const name = (testNapi.getHostGpuName() as string) ?? '';
+      this.gpuName = name;
+      const m = /Mali-G(\d+)/i.exec(name);
+      if (m) {
+        this.gpuSupportDxvk26 = parseInt(m[1], 10) >= 920;
+      } else {
+        // 非 Mali (Adreno/自研) 或未知: 默认支持 (按实际能力)
+        this.gpuSupportDxvk26 = true;
+      }
+      hilog.info(DOMAIN, 'Settings', 'GPU=%{public}s dxvk26=%{public}s',
+        name, this.gpuSupportDxvk26 ? 'yes' : 'no');
+    } catch (_) {
+      this.gpuSupportDxvk26 = true;
+    }
+  }
+
+  /** DXVK 版本: 1.10 (dxvk_legacy) / 2.6 (dxvk_modern_2_6, 含 VKD3D 实验 D3D12)。 */
+  private updateDxvkVersion(version: string): void {
+    const selected = version === 'dxvk_modern_2_6' ? 'dxvk_modern_2_6' : 'dxvk_legacy';
+    const current = AppStorage.get<string>('winehua.dxvk.preference') ?? 'auto';
+    if (current === selected) return;
+    AppStorage.setOrCreate<string>('winehua.dxvk.preference', selected);
+    AppStorage.setOrCreate<string>('winehua.dxvk.backend', selected);
+    promptAction.showToast({ message: 'DXVK 版本已保存；重启 Wine 引擎后生效' });
+  }
+
   private updateD3DRendererPreference(preference: D3DRendererPreference): void {
     if (preference === this.settings.d3dRendererPreference) return;
     this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
@@ -1307,6 +1341,24 @@ struct SystemSettingsPage {
         $r('app.color.accent') : $r('app.color.search_background'))
       .id('d3d-renderer-' + preference)
       .onClick((): void => this.updateD3DRendererPreference(preference))
+  }
+
+  private dxvkVersionActive(version: string): boolean {
+    return AppStorage.get<string>('winehua.dxvk.preference') === version;
+  }
+
+  @Builder
+  private DxvkVersionChip(label: string, version: string, enabled: boolean = true) {
+    Button(label)
+      .height(42)
+      .layoutWeight(1)
+      .borderRadius(14)
+      .fontSize(13)
+      .enabled(enabled)
+      .fontColor(!enabled ? '#666' : (this.dxvkVersionActive(version) ? '#FFFFFFFF' : $r('app.color.text_primary')))
+      .backgroundColor(!enabled ? '#222' : (this.dxvkVersionActive(version) ? $r('app.color.accent') : $r('app.color.search_background')))
+      .id('dxvk-version-' + version)
+      .onClick((): void => this.updateDxvkVersion(version))
   }
 
   private selectedProfileName(): string {
@@ -1770,15 +1822,25 @@ struct SystemSettingsPage {
           .width('100%').padding(14).borderRadius(16)
           .backgroundColor($r('app.color.search_background'))
 
-          Text('Direct3D 渲染策略').fontSize(12).fontWeight(FontWeight.Medium)
+          Text('DXVK').fontSize(12).fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_secondary')).width('100%')
           Row({ space: 10 }) {
-            this.D3DRendererChip('DXVK 优先', D3DRendererPreference.DXVK)
-            this.D3DRendererChip('VirGL 兼容优先', D3DRendererPreference.VIRGL)
+            this.DxvkVersionChip('1.10', 'dxvk_legacy')
+            this.DxvkVersionChip('2.6', 'dxvk_modern_2_6', this.gpuSupportDxvk26)
           }.width('100%')
-          Text(this.settings.d3dRendererPreference === D3DRendererPreference.DXVK ?
-            'Direct3D 9–11 使用 DXVK/Vulkan，通常性能更高。Direct3D 8 仍使用 WineD3D。' :
-            'Direct3D 8–11 强制使用 WineD3D/OpenGL/VirGL，适合 DXVK 不兼容的旧游戏。')
+          if (!this.gpuSupportDxvk26) {
+            Text(`当前 GPU (${this.gpuName}) 不支持 DXVK 2.6，需要马良 920 及以上。`)
+              .fontSize(11).fontColor('#C47A20').width('100%')
+          }
+          Text('DXVK 2.6 含 VKD3D 实验支持（D3D12）；DXVK 1.10 兼容性更好。')
+            .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+          Text('VirGL').fontSize(12).fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_secondary')).width('100%').padding({ top: 6 })
+          Row({ space: 10 }) {
+            this.D3DRendererChip('优先', D3DRendererPreference.VIRGL)
+            this.D3DRendererChip('自动', D3DRendererPreference.DXVK)
+          }.width('100%')
+          Text('VirGL 优先：渲染通道强制 VirGL/OpenGL；自动：按能力选择。')
             .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
           Text('更改后需要重启 Wine 引擎；运行中的游戏不会被立即中断。')
             .fontSize(11).fontColor('#C47A20').width('100%')
@@ -1932,6 +1994,20 @@ struct SystemSettingsPage {
           Button('打开帮助中心').width('100%').height(48).borderRadius(14)
             .backgroundColor($r('app.color.accent')).fontColor('#FFFFFFFF')
             .onClick((): void => { router.pushUrl({ url: 'pages/HelpCenter' }); })
+          Button('GitHub 开源地址').width('100%').height(48).borderRadius(14)
+            .backgroundColor($r('app.color.search_background'))
+            .fontColor($r('app.color.text_primary'))
+            .id('about-github')
+            .onClick((): void => {
+              try {
+                const clip = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN,
+                  'https://github.com/yifengling0/VintagePomeloPro');
+                pasteboard.getSystemPasteboard().setData(clip);
+                promptAction.showToast({ message: '已复制开源地址到剪贴板' });
+              } catch (_) {
+                promptAction.showToast({ message: 'https://github.com/yifengling0/VintagePomeloPro' });
+              }
+            })
         }
         .width('100%')
         .padding(this.isNarrowPhone() ? 12 : 24)
