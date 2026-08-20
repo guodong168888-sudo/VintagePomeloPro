@@ -339,14 +339,24 @@ export class WineEngineService {
   }
 
   private selectedD3DBackend(): string {
-    const preference = AppSettingsStore.getInstance().getGlobalSettings().d3dRendererPreference;
-    if (preference === D3DRendererPreference.VIRGL) {
-      // VirGL 优先: 渲染通道强制 WineD3D/OpenGL/VirGL
-      return 'wined3d';
+    const mode = AppStorage.get<string>('winehua.render.mode') ?? 'auto';
+    if (mode === 'virgl') return 'wined3d';
+    if (mode === 'dxvk_1_10') return 'dxvk_legacy';
+    // dxvk_2_6 / auto: DXVK 2.6 (GPU 不适配回退 1.10)
+    if (this.gpuSupportsDxvk26()) return 'dxvk_modern_2_6';
+    return 'dxvk_legacy';
+  }
+
+  /** GPU 能力判定: 马良 (Mali-Gxxx) 920 以上支持 DXVK 2.6。 */
+  private gpuSupportsDxvk26(): boolean {
+    try {
+      const name = (testNapi.getHostGpuName() as string) ?? '';
+      const m = /Mali-G(\d+)/i.exec(name);
+      if (m) return parseInt(m[1], 10) >= 920;
+      return true;
+    } catch (_) {
+      return true;
     }
-    // DXVK: 按版本选择 (dxvk 1.10 默认 / dxvk 2.6 含 VKD3D 实验 D3D12)
-    const dxvkVersion = AppStorage.get<string>('winehua.dxvk.preference');
-    return dxvkVersion === 'dxvk_modern_2_6' ? 'dxvk_modern_2_6' : 'dxvk_legacy';
   }
 
   /**

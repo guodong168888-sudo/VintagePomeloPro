@@ -1100,6 +1100,40 @@ export class WineWindowManager {
     }
   }
 
+  /** PC 虚拟桌面 hover 菜单: 最小化桌面窗口 (经 DesktopAbility ctx 取主窗口)。 */
+  async minimizeDesktopWindow(): Promise<void> {
+    if (!this.desktopAbilityCtx) {
+      hilog.warn(DOMAIN, TAG, '[MW] minimizeDesktopWindow: no desktop ctx');
+      return;
+    }
+    try {
+      const win = await window.getLastWindow(this.desktopAbilityCtx);
+      if (win) {
+        await win.minimize();
+        hilog.info(DOMAIN, TAG, '[MW] minimizeDesktopWindow OK');
+      }
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, '[MW] minimizeDesktopWindow failed: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /** PC 虚拟桌面 hover 菜单: 退出沉浸全屏 (recover 回普通窗口)。 */
+  async recoverDesktopWindow(): Promise<void> {
+    if (!this.desktopAbilityCtx) {
+      hilog.warn(DOMAIN, TAG, '[MW] recoverDesktopWindow: no desktop ctx');
+      return;
+    }
+    try {
+      const win = await window.getLastWindow(this.desktopAbilityCtx);
+      if (win) {
+        await win.recover();
+        hilog.info(DOMAIN, TAG, '[MW] recoverDesktopWindow OK');
+      }
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, '[MW] recoverDesktopWindow failed: %{public}s', JSON.stringify(e));
+    }
+  }
+
   isDesktopAbilityRunning(rootId: number): boolean {
     return this.desktopAbilityRunning && this.desktopAbilityRootId === rootId;
   }

@@ -924,6 +924,16 @@ struct SystemSettingsPage {
     }
   }
 
+  /** 渲染模式: auto / dxvk_2_6 / dxvk_1_10 / virgl。
+   *  自动: DX11→DXVK 2.6 (GPU 不适配自动 1.10), D3D12→VKD3D, 渲染 VirGL 优先。 */
+  private updateRenderMode(mode: string): void {
+    const selected = mode === 'dxvk_2_6' || mode === 'dxvk_1_10' || mode === 'virgl' ? mode : 'auto';
+    const current = AppStorage.get<string>('winehua.render.mode') ?? 'auto';
+    if (current === selected) return;
+    AppStorage.setOrCreate<string>('winehua.render.mode', selected);
+    promptAction.showToast({ message: '渲染模式已保存；重启 Wine 引擎后生效' });
+  }
+
   /** DXVK 版本: 1.10 (dxvk_legacy) / 2.6 (dxvk_modern_2_6, 含 VKD3D 实验 D3D12)。 */
   private updateDxvkVersion(version: string): void {
     const selected = version === 'dxvk_modern_2_6' ? 'dxvk_modern_2_6' : 'dxvk_legacy';
@@ -1345,6 +1355,24 @@ struct SystemSettingsPage {
 
   private dxvkVersionActive(version: string): boolean {
     return AppStorage.get<string>('winehua.dxvk.preference') === version;
+  }
+
+  private renderModeActive(mode: string): boolean {
+    return (AppStorage.get<string>('winehua.render.mode') ?? 'auto') === mode;
+  }
+
+  @Builder
+  private RenderModeChip(label: string, mode: string, enabled: boolean = true) {
+    Button(label)
+      .height(42)
+      .layoutWeight(1)
+      .borderRadius(14)
+      .fontSize(13)
+      .enabled(enabled)
+      .fontColor(!enabled ? '#666' : (this.renderModeActive(mode) ? '#FFFFFFFF' : $r('app.color.text_primary')))
+      .backgroundColor(!enabled ? '#222' : (this.renderModeActive(mode) ? $r('app.color.accent') : $r('app.color.search_background')))
+      .id('render-mode-' + mode)
+      .onClick((): void => this.updateRenderMode(mode))
   }
 
   @Builder
@@ -1822,25 +1850,19 @@ struct SystemSettingsPage {
           .width('100%').padding(14).borderRadius(16)
           .backgroundColor($r('app.color.search_background'))
 
-          Text('DXVK').fontSize(12).fontWeight(FontWeight.Medium)
+          Text('渲染模式').fontSize(12).fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_secondary')).width('100%')
-          Row({ space: 10 }) {
-            this.DxvkVersionChip('1.10', 'dxvk_legacy')
-            this.DxvkVersionChip('2.6', 'dxvk_modern_2_6', this.gpuSupportDxvk26)
+          Row({ space: 6 }) {
+            this.RenderModeChip('自动', 'auto')
+            this.RenderModeChip('2.6', 'dxvk_2_6', this.gpuSupportDxvk26)
+            this.RenderModeChip('1.10', 'dxvk_1_10')
+            this.RenderModeChip('VirGL', 'virgl')
           }.width('100%')
           if (!this.gpuSupportDxvk26) {
-            Text(`当前 GPU (${this.gpuName}) 不支持 DXVK 2.6，需要马良 920 及以上。`)
+            Text(`GPU (${this.gpuName}) 不支持 DXVK 2.6，已自动用 1.10。`)
               .fontSize(11).fontColor('#C47A20').width('100%')
           }
-          Text('DXVK 2.6 含 VKD3D 实验支持（D3D12）；DXVK 1.10 兼容性更好。')
-            .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
-          Text('VirGL').fontSize(12).fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_secondary')).width('100%').padding({ top: 6 })
-          Row({ space: 10 }) {
-            this.D3DRendererChip('优先', D3DRendererPreference.VIRGL)
-            this.D3DRendererChip('自动', D3DRendererPreference.DXVK)
-          }.width('100%')
-          Text('VirGL 优先：渲染通道强制 VirGL/OpenGL；自动：按能力选择。')
+          Text('自动: DX11→DXVK 2.6 + D3D12→VKD3D，GPU 不适配自动用 1.10')
             .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
           Text('更改后需要重启 Wine 引擎；运行中的游戏不会被立即中断。')
             .fontSize(11).fontColor('#C47A20').width('100%')

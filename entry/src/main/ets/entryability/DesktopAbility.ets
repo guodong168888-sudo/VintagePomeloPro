@@ -138,11 +138,19 @@ export default class DesktopAbility extends UIAbility {
       WineWindowManager.getInstance().isDesktopMode) {
       try {
         await target.setWindowLayoutFullScreen(false);
+        // 隐藏系统标题栏: 桌面窗口无标题栏, 最大化/关闭经顶部 hover 控制条
+        // (DesktopWindow.ets 反色控制条)。隐藏后 XComponent 从窗口顶部铺满,
+        // 与 master VirtualDesktop 无偏移语义一致。
+        try {
+          target.setWindowDecorVisible(false);
+        } catch (err) {
+          hilog.warn(DOMAIN, TAG, '[DWA] pc-virtual hide decor skipped: %{public}s', JSON.stringify(err));
+        }
         // 对齐上游 VirtualDesktopAbility: PC 虚拟桌面浮窗不强制显示系统
         // 状态栏/导航条 — 强制 status=true 会让浮窗顶部多出系统状态栏,
         // 内容区/输入坐标基准向下偏移一个状态栏高度 (≈一个文字高度),
-        // 鼠标光标相对游戏光标整体偏下。隐藏系统栏后 XComponent 从标题栏
-        // 下方铺满内容区, 与 master 无偏移语义一致。
+        // 鼠标光标相对游戏光标整体偏下。隐藏系统栏后 XComponent 从窗口
+        // 顶部铺满内容区。
         await Promise.all([
           target.setSpecificSystemBarEnabled('status', false),
           target.setSpecificSystemBarEnabled('navigationIndicator', false)
