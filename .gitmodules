@@ -71,10 +71,10 @@
 	url = https://gitlab.com/gnutls/gnutls.git
 [submodule "thirdparty/pcre2"]
 	path = thirdparty/pcre2
-	url = https://github.com/PCRE2Project/pcre2.git
+	url = https://github.com/winehua/pcre2.git
 [submodule "thirdparty/glib"]
 	path = thirdparty/glib
-	url = https://github.com/GNOME/glib.git
+	url = https://github.com/winehua/glib.git
 [submodule "thirdparty/gstreamer"]
 	path = thirdparty/gstreamer
 	url = https://gitlab.freedesktop.org/gstreamer/gstreamer.git
