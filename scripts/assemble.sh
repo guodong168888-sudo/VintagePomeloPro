@@ -414,6 +414,17 @@ PY
         [ -f "$vkd3d_root/manifest.json" ] && \
             cp "$vkd3d_root/manifest.json" "$wine_data/vkd3d/manifest.json"
         log "    vkd3d-proton d3d12.dll → rawfile vkd3d/limited-500k/"
+        # VKD3D smoke 演示 (D3D12): 旋转方块 + 齿轮, 进内建程序可测
+        if [ -f "$vkd3d_root/x64/triangle.exe" ]; then
+            mkdir -p "$smoke_dir/x64"
+            cp "$vkd3d_root/x64/triangle.exe" "$smoke_dir/x64/triangle.exe"
+            log "    vkd3d triangle.exe → rawfile smoke/x64/"
+        fi
+        if [ -f "$vkd3d_root/x64/gears.exe" ]; then
+            mkdir -p "$smoke_dir/x64"
+            cp "$vkd3d_root/x64/gears.exe" "$smoke_dir/x64/gears.exe"
+            log "    vkd3d gears.exe → rawfile smoke/x64/"
+        fi
     else
         log "warn: VKD3D-Proton 未构建, vkd3d 后端不可用"
     fi

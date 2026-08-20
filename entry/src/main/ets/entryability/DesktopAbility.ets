@@ -156,17 +156,18 @@ export default class DesktopAbility extends UIAbility {
           target.setSpecificSystemBarEnabled('navigationIndicator', false)
         ]);
         await target.setWindowBackgroundColor('#000000');
-        // 浮窗初始尺寸 = 屏幕 90% (居中): 保证 Wine 桌面 1:1 显示, 开始菜单/
-        // 任务栏出生即在正确位置。系统默认浮窗可能极小 → 桌面被 letterbox 缩小,
-        // 开始按钮看不见。用户仍可拖动/调整/最大化。
+        // 启动自动全屏: resize 到屏幕 100% + 移动到 (0,0), 铺满整个显示区。
+        // 标题栏/系统栏已隐藏 → 即沉浸全屏效果。顶部 hover 控制条提供
+        // 还原(90% 浮窗)/最小化/关闭, 还原后进入可缩放的窗口模式。
         try {
           const d = display.getDefaultDisplaySync();
-          const w = Math.max(640, Math.round(d.width * 0.9));
-          const h = Math.max(480, Math.round(d.height * 0.9));
-          await target.resize(w, h);
-          await target.moveWindowTo(Math.round((d.width - w) / 2), Math.round((d.height - h) / 2));
+          await target.resize(d.width, d.height);
+          await target.moveWindowTo(0, 0);
+          AppStorage.setOrCreate('vdImmersive', true);
+          hilog.info(DOMAIN, TAG, '[DWA] pc-virtual auto fullscreen %{public}dx%{public}d',
+            d.width, d.height);
         } catch (err) {
-          hilog.warn(DOMAIN, TAG, '[DWA] pc-virtual resize skipped: %{public}s',
+          hilog.warn(DOMAIN, TAG, '[DWA] pc-virtual fullscreen skipped: %{public}s',
             JSON.stringify(err));
         }
       } catch (e) {

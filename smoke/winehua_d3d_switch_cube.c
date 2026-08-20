@@ -1000,7 +1000,10 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
         if (g_app.automation && (!g_app.duration_ms ||
             GetTickCount64() - g_app.run_start_ms < g_app.duration_ms))
             return 0;
-        break;
+        /* 交互启动 (非 automation): 必须销毁 HWND 让 WM_DESTROY/WM_QUIT
+         * 正常退出 — master 误改成 break 导致 cube 无法关闭。 */
+        DestroyWindow(hwnd);
+        return 0;
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;

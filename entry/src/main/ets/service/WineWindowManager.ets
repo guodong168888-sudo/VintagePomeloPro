@@ -1127,10 +1127,33 @@ export class WineWindowManager {
       const win = await window.getLastWindow(this.desktopAbilityCtx);
       if (win) {
         await win.recover();
+        AppStorage.setOrCreate('vdImmersive', false);
         hilog.info(DOMAIN, TAG, '[MW] recoverDesktopWindow OK');
       }
     } catch (e) {
       hilog.warn(DOMAIN, TAG, '[MW] recoverDesktopWindow failed: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  /** PC 虚拟桌面 hover 菜单: 全屏 → 90% 浮窗 (进入可缩放窗口模式)。 */
+  async restoreDesktopWindow(): Promise<void> {
+    if (!this.desktopAbilityCtx) {
+      hilog.warn(DOMAIN, TAG, '[MW] restoreDesktopWindow: no desktop ctx');
+      return;
+    }
+    try {
+      const win = await window.getLastWindow(this.desktopAbilityCtx);
+      if (win) {
+        const d = display.getDefaultDisplaySync();
+        const w = Math.max(640, Math.round(d.width * 0.9));
+        const h = Math.max(480, Math.round(d.height * 0.9));
+        await win.resize(w, h);
+        await win.moveWindowTo(Math.round((d.width - w) / 2), Math.round((d.height - h) / 2));
+        AppStorage.setOrCreate('vdImmersive', false);
+        hilog.info(DOMAIN, TAG, '[MW] restoreDesktopWindow OK %{public}dx%{public}d', w, h);
+      }
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, '[MW] restoreDesktopWindow failed: %{public}s', JSON.stringify(e));
     }
   }
 

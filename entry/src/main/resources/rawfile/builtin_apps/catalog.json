@@ -88,6 +88,28 @@
       "launchKind": "wine-system",
       "launchParams": { "executable": "winehua_audio_smoke.exe", "arguments": [], "workingDirectory": "" },
       "cover": ""
+    },
+    {
+      "id": "builtin-vkd3d-triangle",
+      "title": "VKD3D 方块测试",
+      "launchKind": "wine-system",
+      "launchParams": {
+        "executable": "C:\\smoke\\x64\\triangle.exe",
+        "arguments": [],
+        "workingDirectory": "C:\\smoke\\x64"
+      },
+      "cover": ""
+    },
+    {
+      "id": "builtin-vkd3d-gears",
+      "title": "VKD3D 齿轮测试",
+      "launchKind": "wine-system",
+      "launchParams": {
+        "executable": "C:\\smoke\\x64\\gears.exe",
+        "arguments": [],
+        "workingDirectory": "C:\\smoke\\x64"
+      },
+      "cover": ""
     }
   ]
 }
