@@ -913,11 +913,12 @@ struct SystemSettingsPage {
     try {
       const name = (testNapi.getHostGpuName() as string) ?? '';
       this.gpuName = name;
-      const m = /Mali-G(\d+)/i.exec(name);
+      // 马良 GPU: "Maleoon 910" / "Mali-G920" 等。920 以下不支持 DXVK2.6。
+      const m = /(?:Maleoon|Mali-?G)\s*(\d+)/i.exec(name);
       if (m) {
         this.gpuSupportDxvk26 = parseInt(m[1], 10) >= 920;
       } else {
-        // 非 Mali (Adreno/自研) 或未知: 默认支持 (按实际能力)
+        // 非马良 (Adreno/自研) 或未知: 默认支持 (按实际能力)
         this.gpuSupportDxvk26 = true;
       }
       hilog.info(DOMAIN, 'Settings', 'GPU=%{public}s dxvk26=%{public}s',

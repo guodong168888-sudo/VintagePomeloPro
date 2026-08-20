@@ -351,7 +351,8 @@ export class WineEngineService {
   private gpuSupportsDxvk26(): boolean {
     try {
       const name = (testNapi.getHostGpuName() as string) ?? '';
-      const m = /Mali-G(\d+)/i.exec(name);
+      // 马良 GPU: "Maleoon 910" / "Mali-G920" 等。920 以下不支持 DXVK2.6。
+      const m = /(?:Maleoon|Mali-?G)\s*(\d+)/i.exec(name);
       if (m) return parseInt(m[1], 10) >= 920;
       return true;
     } catch (_) {
