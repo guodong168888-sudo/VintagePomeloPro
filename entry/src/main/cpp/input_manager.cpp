@@ -508,8 +508,9 @@ void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double p
         if (relativeActive) {
             double dx = 0.0, dy = 0.0;
             if (rawDx != 0.0 || rawDy != 0.0) {
-                dx = std::clamp(rawDx * rawScale_, -512.0, 512.0);
-                dy = std::clamp(rawDy * rawScale_, -512.0, 512.0);
+                constexpr double kSensRel = 2.5;
+                dx = std::clamp(rawDx * kSensRel, -512.0, 512.0);
+                dy = std::clamp(rawDy * kSensRel, -512.0, 512.0);
             } else {
                 dx = diffDx;
                 dy = diffDy;
