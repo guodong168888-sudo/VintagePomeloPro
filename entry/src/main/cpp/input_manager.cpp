@@ -365,7 +365,42 @@ void InputManager::SetToplevelVisible(uint32_t tl, bool visible) {
     OH_LOG_INFO(LOG_APP, "[Input] SetToplevelVisible tl=%{public}u visible=%{public}s", tl, visible ? "true" : "false");
 }
 
-void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double py, int button) {
+void InputManager::UpdateRawScale(double rawDx, double rawDy, double diffDx, double diffDy) {
+    // 按轴累积 (状态字段语义见 input_manager.h): 该轴两侧都有真实移动
+    // (未被钳制) 才是有效样本 — 单侧钳制的"沿边缘滑动"样本只累积自由轴。
+    // 离群过滤: 跨窗口 enter 跳变/坐标系切换会产生 diff 尖峰, 单样本位移
+    // 过大或比例超出合理区间的直接丢弃
+    const double rawAx = std::fabs(rawDx), rawAy = std::fabs(rawDy);
+    const double difAx = std::fabs(diffDx), difAy = std::fabs(diffDy);
+    if (rawAx > 0.5 && difAx > 0.3 && difAx < 300.0) {
+        const double r = difAx / rawAx;
+        if (r > 0.05 && r < 20.0) {
+            rawAccumX_ += rawAx;
+            absAccumX_ += difAx;
+        }
+    }
+    if (rawAy > 0.5 && difAy > 0.3 && difAy < 300.0) {
+        const double r = difAy / rawAy;
+        if (r > 0.05 && r < 20.0) {
+            rawAccumY_ += rawAy;
+            absAccumY_ += difAy;
+        }
+    }
+    const double rawSum = rawAccumX_ + rawAccumY_;
+    constexpr double kWarmupRaw = 400;  // 累积 raw 量阈值, 样本不足不动比例
+    if (rawSum < kWarmupRaw) return;
+    const double s = (absAccumX_ + absAccumY_) / rawSum;
+    // 变化 >5% 才更新+记日志 (标定值稳定后不再刷日志; 设备/DPI 切换时会
+    // 自动滑动到新比例)
+    if (std::fabs(s - rawScale_) > 0.05 * rawScale_) {
+        OH_LOG_INFO(LOG_APP, "[Input] RAW-SCALE %{public}.3f → %{public}.3f (rawSum=%{public}.0f)",
+                    rawScale_, s, rawSum);
+        rawScale_ = s;
+    }
+}
+
+void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double py, int button,
+                                    double rawDx, double rawDy, bool fromMouse) {
     // 窗口不可见时抑制输入
     {
         std::lock_guard<std::mutex> lk(visibleMutex_);
@@ -458,43 +493,41 @@ void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double p
         // PC 模式: wx/wy 即窗口局部坐标, 无需额外变换
     }
 
-    // 相对输入只按当前 surface 所属 client 判定，且只在同一坐标空间内差分。
-    // fullscreen/遮罩/目标 surface 或 relative-pointer 生命周期变化时，第一帧
-    // 仅重建基准，不能把坐标系跳变量注入成鼠标移动。
+    // 相对指针增量: 按当前 surface 所属 client 判定 (多窗口勿套旧窗相对模式)。
+    // 优先 rawDelta — 光标被 ClampToContent 钳在边缘后绝对差分恒 0。
     wl_resource* relativeSurface = targetSurf ? targetSurf : ws->GetSurfaceForToplevel(tl);
     const bool relativeActive =
         PointerExtras::GetInstance()->HasRelativePointerForSurface(relativeSurface);
     if (action == ACT_MOVE) {
         const double localX = wl_fixed_to_double(wx);
         const double localY = wl_fixed_to_double(wy);
-        const uint64_t epoch = relativeSpaceEpoch_.load();
-        const bool sameSpace = relativeActive && hasLastLocal_ &&
-            lastRelativeToplevel_ == tl && lastRelativeSurface_ == relativeSurface &&
-            lastRelativeSpaceEpoch_ == epoch;
-        if (sameSpace) {
-            const double dx = localX - lastLocalX_;
-            const double dy = localY - lastLocalY_;
-            if (dx != 0 || dy != 0)
+        const double diffDx = hasLastLocal_ ? (localX - lastLocalX_) : 0.0;
+        const double diffDy = hasLastLocal_ ? (localY - lastLocalY_) : 0.0;
+        if (rawDx != 0.0 || rawDy != 0.0)
+            UpdateRawScale(rawDx, rawDy, diffDx, diffDy);
+        if (relativeActive) {
+            double dx = 0.0, dy = 0.0;
+            if (rawDx != 0.0 || rawDy != 0.0) {
+                dx = std::clamp(rawDx * rawScale_, -512.0, 512.0);
+                dy = std::clamp(rawDy * rawScale_, -512.0, 512.0);
+            } else {
+                dx = diffDx;
+                dy = diffDy;
+            }
+            if (dx != 0.0 || dy != 0.0) {
                 Enqueue(InputEvent::REL_MOTION, 0, relativeSurface,
                         wl_fixed_from_double(dx), wl_fixed_from_double(dy), 0, 0);
-        } else if (relativeActive) {
-            OH_LOG_INFO(LOG_APP,
-                        "[Input] relative baseline rebase tl=%{public}u surf=%{public}p epoch=%{public}llu",
-                        tl, static_cast<void*>(relativeSurface),
-                        static_cast<unsigned long long>(epoch));
-        }
-        if (relativeActive) {
-            lastLocalX_ = localX;
-            lastLocalY_ = localY;
+            }
             lastRelativeToplevel_ = tl;
             lastRelativeSurface_ = relativeSurface;
-            lastRelativeSpaceEpoch_ = epoch;
-            hasLastLocal_ = true;
+            lastRelativeSpaceEpoch_ = relativeSpaceEpoch_.load();
         } else {
-            hasLastLocal_ = false;
             lastRelativeToplevel_ = 0;
             lastRelativeSurface_ = nullptr;
         }
+        lastLocalX_ = localX;
+        lastLocalY_ = localY;
+        hasLastLocal_ = true;
     }
 
 
@@ -517,29 +550,32 @@ void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double p
 
     switch (action) {
         case ACT_PRESS: {
-            // 每次都发 enter: Wine 在两次点击间需要新的 pointer focus。
-            // 相对模式 (relative_pointer 对象存在) 且聚焦已建立时跳过:
-            // wine 的 enter 处理会把光标跳到 enter 坐标 (pointer_handle_enter
-            // → motion_internal, 相对模式只丢弃 motion 不丢弃 enter) — 点击
-            // 瞬间游戏内光标瞬移到设备绝对位置 (实测偏移量 = 光标距屏幕
-            // 中心的偏移)。相对模式聚焦持续有效, 无需重发 enter。
-            const bool relSkipEnter = relativeActive &&
-                                      pointerFocusedSurface_.load() != nullptr;
-            if (!relSkipEnter) {
-                wl_resource* surf = targetSurf ? targetSurf : ws->GetSurfaceForToplevel(tl);
-                if (surf) {
-                    // desktop: surface 级比较 (菜单层与父窗口同 toplevelId);
-                    // 其余模式保持 toplevel 级比较 (一窗一 surface, 语义等价)
-                    wl_resource* focused = pointerFocusedSurface_.load();
-                    const bool needLeave = targetSurf
-                        ? (focused != nullptr && focused != surf)
-                        : (pointerFocusedToplevel_.load() != 0 && pointerFocusedToplevel_.load() != tl);
-                    if (needLeave)
-                        Enqueue(InputEvent::PTR_LEAVE, 0, nullptr, 0, 0, 0, 0);
-                    Enqueue(InputEvent::PTR_ENTER, tl, surf, wx, wy, 0, 0);
-                }
+            wl_resource* pressTargetSurf =
+                targetSurf ? targetSurf : ws->GetSurfaceForToplevel(tl);
+            const bool skipEnter = fromMouse
+                && pressTargetSurf != nullptr
+                && PointerExtras::GetInstance()->HasRelativePointerForSurface(pressTargetSurf)
+                && pointerFocusedSurface_.load() == pressTargetSurf;
+            OH_LOG_INFO(LOG_APP, "[Input] PRESS-ENTER tl=%{public}u surf=%{public}p"
+                        " relMode=%{public}d skip=%{public}d focused=%{public}p",
+                        tl, static_cast<void*>(pressTargetSurf),
+                        skipEnter || relativeActive ? 1 : 0,
+                        skipEnter ? 1 : 0,
+                        static_cast<void*>(pointerFocusedSurface_.load()));
+            if (pressTargetSurf && !skipEnter) {
+                wl_resource* focused = pointerFocusedSurface_.load();
+                const bool needLeave = targetSurf
+                    ? (focused != nullptr && focused != pressTargetSurf)
+                    : (pointerFocusedToplevel_.load() != 0 && pointerFocusedToplevel_.load() != tl);
+                if (needLeave)
+                    Enqueue(InputEvent::PTR_LEAVE, 0, nullptr, 0, 0, 0, 0);
+                Enqueue(InputEvent::PTR_ENTER, tl, pressTargetSurf, wx, wy, 0, 0);
+                lastLocalX_ = wl_fixed_to_double(wx);
+                lastLocalY_ = wl_fixed_to_double(wy);
+                hasLastLocal_ = true;
             }
-            Enqueue(InputEvent::PTR_MOTION, 0, nullptr, wx, wy, 0, 0);
+            if (!skipEnter)
+                Enqueue(InputEvent::PTR_MOTION, 0, nullptr, wx, wy, 0, 0);
             if (button) {
                 unsigned bit = ButtonToBit(button);
                 if (bit < 32) {

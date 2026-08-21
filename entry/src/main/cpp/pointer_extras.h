@@ -1,6 +1,7 @@
 #pragma once
 
 #include <wayland-server-core.h>
+#include <functional>
 #include <mutex>
 #include <vector>
 
@@ -45,6 +46,14 @@ public:
     // 相对模式误套到新窗口，造成光标漂移。
     void SendRelativeMotion(wl_resource* surface, double dx, double dy);
     bool HasRelativePointerForSurface(wl_resource* surface) const;
+    bool HasRelativePointer() const;
+
+    // -- Host 光标锁定 (dinput 相对模式的系统侧配套) --
+    // wine 建立 Lock 约束 = 游戏进入"隐藏光标无限移动"的相对模式 (FPS 视角)。
+    // host 侧同步两件事: OH_WindowManager_LockCursor 冻结系统光标, tsfn 通知
+    // ets pointer.setPointerVisible(false) 隐藏光标。confine 不触发。
+    static void RegisterHostWindow(int32_t windowId);
+    void SetPointerLockCallback(std::function<void(bool)> cb);
 
     // -- 协议接口实现 (public: wl 接口表在类外初始化, 与 wayland_server.h 同例) --
     // zwp_pointer_constraints_v1
@@ -98,4 +107,11 @@ private:
     static void constraints_bind(wl_client* client, void* data, uint32_t version, uint32_t id);
     static void warp_bind(wl_client* client, void* data, uint32_t version, uint32_t id);
     static void relmgr_bind(wl_client* client, void* data, uint32_t version, uint32_t id);
+
+    // Host 光标锁定实施 (见上方 public 注释); 失败只记日志不阻断 — A 方案
+    // (rawDelta 相对位移) 不依赖锁定, 老系统 (API<22) 上相对模式仍工作
+    void ApplyHostCursorLock(bool lock);
+    std::vector<int32_t> hostWindowIds_;       // mutex_ 保护; 各 Ability 主窗口
+    int32_t lockedWindowId_ = 0;               // 实际锁定成功的窗口 (0=未锁)
+    std::function<void(bool)> lockCallback_;   // mutex_ 保护
 };

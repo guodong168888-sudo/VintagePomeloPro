@@ -544,7 +544,7 @@ export struct DesktopLayer {
               hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE-MOVE tl=%{public}d px=(%{public}d,%{public}d) n=%{public}d',
                 tl, px, py, this.hoverLogCounter);
             }
-            testNapi.sendPointerEvent(tl, MouseAction.Move, px, py, 0);
+            testNapi.sendPointerEvent(tl, MouseAction.Move, px, py, 0, ev.rawDeltaX, ev.rawDeltaY);
             return;
           }
           if (ev.action !== MouseAction.Press && ev.action !== MouseAction.Release) return;
@@ -573,7 +573,7 @@ export struct DesktopLayer {
               testNapi.raiseToplevel(tl);
               InputRouter.getInstance().setActiveToplevel(tl);
               hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE-LEFT press tl=%{public}d px=(%{public}d,%{public}d)', tl, px, py);
-              testNapi.sendPointerEvent(tl, MouseAction.Press, px, py, btnLeft);
+              testNapi.sendPointerEvent(tl, MouseAction.Press, px, py, btnLeft, 0, 0, true);
             } else {
               if (this.leftBtnTl <= 0) {
                 this.mouseLeftActive = false;
@@ -599,7 +599,7 @@ export struct DesktopLayer {
             testNapi.raiseToplevel(tl);
             InputRouter.getInstance().setActiveToplevel(tl);
             hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE-RIGHT press tl=%{public}d px=(%{public}d,%{public}d)', tl, px, py);
-            testNapi.sendPointerEvent(tl, MouseAction.Press, px, py, btnRight);
+            testNapi.sendPointerEvent(tl, MouseAction.Press, px, py, btnRight, 0, 0, true);
           } else {
             if (this.rightBtnTl <= 0) return;
             hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE-RIGHT release tl=%{public}d px=(%{public}d,%{public}d)', this.rightBtnTl, px, py);
