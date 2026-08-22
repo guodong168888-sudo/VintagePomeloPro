@@ -384,40 +384,6 @@ void InputManager::SetToplevelVisible(uint32_t tl, bool visible) {
     OH_LOG_INFO(LOG_APP, "[Input] SetToplevelVisible tl=%{public}u visible=%{public}s", tl, visible ? "true" : "false");
 }
 
-void InputManager::UpdateRawScale(double rawDx, double rawDy, double diffDx, double diffDy) {
-    // 按轴累积 (状态字段语义见 input_manager.h): 该轴两侧都有真实移动
-    // (未被钳制) 才是有效样本 — 单侧钳制的"沿边缘滑动"样本只累积自由轴。
-    // 离群过滤: 跨窗口 enter 跳变/坐标系切换会产生 diff 尖峰, 单样本位移
-    // 过大或比例超出合理区间的直接丢弃
-    const double rawAx = std::fabs(rawDx), rawAy = std::fabs(rawDy);
-    const double difAx = std::fabs(diffDx), difAy = std::fabs(diffDy);
-    if (rawAx > 0.5 && difAx > 0.3 && difAx < 300.0) {
-        const double r = difAx / rawAx;
-        if (r > 0.05 && r < 20.0) {
-            rawAccumX_ += rawAx;
-            absAccumX_ += difAx;
-        }
-    }
-    if (rawAy > 0.5 && difAy > 0.3 && difAy < 300.0) {
-        const double r = difAy / rawAy;
-        if (r > 0.05 && r < 20.0) {
-            rawAccumY_ += rawAy;
-            absAccumY_ += difAy;
-        }
-    }
-    const double rawSum = rawAccumX_ + rawAccumY_;
-    constexpr double kWarmupRaw = 400;  // 累积 raw 量阈值, 样本不足不动比例
-    if (rawSum < kWarmupRaw) return;
-    const double s = (absAccumX_ + absAccumY_) / rawSum;
-    // 变化 >5% 才更新+记日志 (标定值稳定后不再刷日志; 设备/DPI 切换时会
-    // 自动滑动到新比例)
-    if (std::fabs(s - rawScale_) > 0.05 * rawScale_) {
-        OH_LOG_INFO(LOG_APP, "[Input] RAW-SCALE %{public}.3f → %{public}.3f (rawSum=%{public}.0f)",
-                    rawScale_, s, rawSum);
-        rawScale_ = s;
-    }
-}
-
 void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double py, int button,
                                     double rawDx, double rawDy, bool fromMouse) {
     // 窗口不可见时抑制输入
@@ -529,14 +495,13 @@ void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double p
         const double localY = wl_fixed_to_double(wy);
         const double diffDx = hasLastLocal_ ? (localX - lastLocalX_) : 0.0;
         const double diffDy = hasLastLocal_ ? (localY - lastLocalY_) : 0.0;
-        if (rawDx != 0.0 || rawDy != 0.0)
-            UpdateRawScale(rawDx, rawDy, diffDx, diffDy);
         if (relativeActive) {
             double dx = 0.0, dy = 0.0;
             if (rawDx != 0.0 || rawDy != 0.0) {
-                constexpr double kSensRel = 2.5;
-                dx = std::clamp(rawDx * kSensRel, -512.0, 512.0);
-                dy = std::clamp(rawDy * kSensRel, -512.0, 512.0);
+                // 相对模式视角: rawDelta 已由 ArkTS 按设备类型缩放 (鼠标
+                // 2.5 / 触控板 0.625, 见 InputDeviceMapper.ets), C++ 直接使用。
+                dx = std::clamp(rawDx, -512.0, 512.0);
+                dy = std::clamp(rawDy, -512.0, 512.0);
             } else {
                 dx = diffDx;
                 dy = diffDy;
@@ -544,6 +509,11 @@ void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double p
             if (dx != 0.0 || dy != 0.0) {
                 Enqueue(InputEvent::REL_MOTION, 0, relativeSurface,
                         wl_fixed_from_double(dx), wl_fixed_from_double(dy), 0, 0);
+                static uint32_t sRelLogN = 0;
+                if (++sRelLogN % 120 == 0)
+                    OH_LOG_INFO(LOG_APP, "[Input] REL d=(%{public}.1f,%{public}.1f) raw=(%{public}.1f,%{public}.1f)"
+                                " base=(%{public}.1f,%{public}.1f)",
+                                dx, dy, rawDx, rawDy, lastLocalX_, lastLocalY_);
             }
             lastRelativeToplevel_ = tl;
             lastRelativeSurface_ = relativeSurface;
