@@ -1,6 +1,6 @@
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '../service/LogService';
-import { window, display } from '@kit.ArkUI';
+import { window } from '@kit.ArkUI';
 import testNapi from 'libentry.so';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { WineWindowManager } from '../service/WineWindowManager';
@@ -25,6 +25,8 @@ export default class DesktopAbility extends UIAbility {
   private windowResizeGeneration: number = 0;
   private desktopOrientation: ScreenOrientationSetting = ScreenOrientationSetting.SENSOR_LANDSCAPE;
   private lastAppliedWindowMode: string = '';
+  private immersiveMaximized: boolean = false;
+  private vdStatusAttached: boolean = false;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
@@ -83,6 +85,10 @@ export default class DesktopAbility extends UIAbility {
       }
       hilog.info(DOMAIN, TAG, '[DWA] loadContent OK tl=%{public}d', this.toplevelId);
 
+      this.immersiveMaximized = false;
+      this.vdStatusAttached = false;
+      AppStorage.setOrCreate('vdImmersive', false);
+
       // 沉浸模式: 全屏 + 隐藏状态栏和导航栏
       void this.finishDesktopWindowSetup(windowStage);
     });
@@ -138,44 +144,28 @@ export default class DesktopAbility extends UIAbility {
       WineWindowManager.getInstance().isDesktopMode) {
       try {
         await target.setWindowLayoutFullScreen(false);
-        // 隐藏系统标题栏: 桌面窗口无标题栏, 最大化/关闭经顶部 hover 控制条
-        // (DesktopWindow.ets 反色控制条)。隐藏后 XComponent 从窗口顶部铺满,
-        // 与 master VirtualDesktop 无偏移语义一致。
         try {
-          target.setWindowDecorVisible(false);
-        } catch (err) {
-          hilog.warn(DOMAIN, TAG, '[DWA] pc-virtual hide decor skipped: %{public}s', JSON.stringify(err));
+          target.setWindowTitle('Wine 桌面');
+        } catch (_) {
         }
-        // 对齐上游 VirtualDesktopAbility: PC 虚拟桌面浮窗不强制显示系统
-        // 状态栏/导航条 — 强制 status=true 会让浮窗顶部多出系统状态栏,
-        // 内容区/输入坐标基准向下偏移一个状态栏高度 (≈一个文字高度),
-        // 鼠标光标相对游戏光标整体偏下。隐藏系统栏后 XComponent 从窗口
-        // 顶部铺满内容区。
+        // 保留系统标题栏: 沉浸全屏由 maximize(DISABLE_HOVER) 隐藏, 还原后
+        // 标题栏回来供关闭/最小化。不要 setWindowDecorVisible(false),
+        // 也不要用 resize(屏幕) 冒充全屏 (会和 immersive 抢几何、弄歪鼠标)。
         await Promise.all([
           target.setSpecificSystemBarEnabled('status', false),
           target.setSpecificSystemBarEnabled('navigationIndicator', false)
         ]);
         await target.setWindowBackgroundColor('#000000');
-        // 启动自动全屏: resize 到屏幕 100% + 移动到 (0,0), 铺满整个显示区。
-        // 标题栏/系统栏已隐藏 → 即沉浸全屏效果。顶部 hover 控制条提供
-        // 还原(90% 浮窗)/最小化/关闭, 还原后进入可缩放的窗口模式。
-        try {
-          const d = display.getDefaultDisplaySync();
-          await target.resize(d.width, d.height);
-          await target.moveWindowTo(0, 0);
-          AppStorage.setOrCreate('vdImmersive', true);
-          hilog.info(DOMAIN, TAG, '[DWA] pc-virtual auto fullscreen %{public}dx%{public}d',
-            d.width, d.height);
-        } catch (err) {
-          hilog.warn(DOMAIN, TAG, '[DWA] pc-virtual fullscreen skipped: %{public}s',
-            JSON.stringify(err));
-        }
+        this.attachVirtualDesktopStatus(target);
+        this.immersiveMaximized = true;
+        WineWindowManager.getInstance().enterImmersiveFullscreen(target, 0);
+        hilog.info(DOMAIN, TAG, '[DWA] pc-virtual auto immersive (DISABLE_HOVER)');
       } catch (e) {
-        hilog.warn(DOMAIN, TAG, '[DWA] pc-virtual floating setup partial: %{public}s',
+        hilog.warn(DOMAIN, TAG, '[DWA] pc-virtual immersive setup partial: %{public}s',
           JSON.stringify(e));
       }
       this.lastAppliedWindowMode = 'pc-virtual';
-      hilog.info(DOMAIN, TAG, '[DWA] pc virtual desktop: floating window sized to screen');
+      hilog.info(DOMAIN, TAG, '[DWA] pc virtual desktop: immersive fullscreen');
       return;
     }
     const mode = AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode
@@ -315,6 +305,32 @@ export default class DesktopAbility extends UIAbility {
     } catch (e) {
       hilog.error(DOMAIN, TAG, '[DWA] ERR onDestroy: %{public}s', JSON.stringify(e));
     }
+  }
+
+  /**
+   * PC 虚拟桌面: 最大化 → 沉浸全屏 (DISABLE_HOVER), 还原后标题栏回归。
+   * WindowStatusType: 1=FULL_SCREEN 2=MAXIMIZE 4=FLOATING。
+   */
+  private attachVirtualDesktopStatus(target: window.Window): void {
+    if (this.vdStatusAttached) return;
+    this.vdStatusAttached = true;
+    target.on('windowStatusChange', (statusType: number) => {
+      hilog.info(DOMAIN, TAG, '[DWA] windowStatusChange status=%{public}d immersive=%{public}s',
+        statusType, this.immersiveMaximized ? 'yes' : 'no');
+      if (statusType === window.WindowStatusType.MAXIMIZE) {
+        if (!this.immersiveMaximized) {
+          this.immersiveMaximized = true;
+          WineWindowManager.getInstance().enterImmersiveFullscreen(target, 0);
+        }
+      } else if (statusType === window.WindowStatusType.FULL_SCREEN) {
+        AppStorage.setOrCreate('vdImmersive', true);
+      } else {
+        if (this.immersiveMaximized) {
+          this.immersiveMaximized = false;
+        }
+        AppStorage.setOrCreate('vdImmersive', false);
+      }
+    });
   }
 
   /** 桌面打开期间按设置保持屏幕常亮，避免游玩中自动锁屏。 */

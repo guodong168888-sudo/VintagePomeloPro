@@ -747,6 +747,32 @@ export class WineWindowManager {
     }
   }
 
+  /**
+   * PC 沉浸全屏: 铺满屏幕并禁用顶/底边 hover 标题栏、关闭条和 Dock。
+   * 默认无参 maximize() 是 ENTER_IMMERSIVE, 会弹出关闭条抢走边缘鼠标。
+   */
+  enterImmersiveFullscreen(win: window.Window, logId: number = 0): void {
+    const label = logId > 0 ? '#' + logId.toString() : 'desktop';
+    try {
+      hilog.info(DOMAIN, TAG, '[MW] fullscreen %{public}s → DISABLE_TITLE_AND_DOCK_HOVER', label);
+      win.maximize(window.MaximizePresentation.ENTER_IMMERSIVE_DISABLE_TITLE_AND_DOCK_HOVER).then(() => {
+        hilog.info(DOMAIN, TAG, '[MW] fullscreen %{public}s OK (DISABLE_HOVER)', label);
+      }).catch((err: Error) => {
+        hilog.warn(DOMAIN, TAG, '[MW] fullscreen %{public}s DISABLE_HOVER failed, fallback: %{public}s',
+          label, JSON.stringify(err));
+        win.maximize().then(() => {
+          hilog.info(DOMAIN, TAG, '[MW] fullscreen %{public}s OK (ENTER_IMMERSIVE fallback)', label);
+        }).catch((fallbackErr: Error) => {
+          hilog.warn(DOMAIN, TAG, '[MW] fullscreen %{public}s fallback failed: %{public}s',
+            label, JSON.stringify(fallbackErr));
+        });
+      });
+    } catch (err) {
+      hilog.warn(DOMAIN, TAG, '[MW] fullscreen %{public}s exception: %{public}s',
+        label, JSON.stringify(err));
+    }
+  }
+
   // -- apply 单个事件到 window.Window --
   private applyEvent(toplevelId: number, event: string, data: string): void {
     const win = this.windows.get(toplevelId);
@@ -857,19 +883,10 @@ export class WineWindowManager {
         break;
       case 'fullscreen':
         // PC 模式游戏 xdg fullscreen: OHOS 沉浸式全屏 (铺满屏幕、盖住 dock)。
-        // 与 maximize 的 EXIT_IMMERSIVE (工作区最大化) 区分 — 游戏全屏是
-        // 真正的全屏; win.maximize() 不带参数默认 ENTER_IMMERSIVE。
-        // 画面由 popup (全屏拉伸) 承载, 主窗口沉浸式保证无系统 UI 露出。
-        try {
-          hilog.info(DOMAIN, TAG, '[MW] fullscreen #%{public}d → win.maximize() (ENTER_IMMERSIVE)', toplevelId);
-          win.maximize().then(() => {
-            hilog.info(DOMAIN, TAG, '[MW] fullscreen OK #%{public}d', toplevelId);
-          }).catch((err: Error) => {
-            hilog.warn(DOMAIN, TAG, '[MW] fullscreen #%{public}d failed: %{public}s', toplevelId, JSON.stringify(err));
-          });
-        } catch (err) {
-          hilog.warn(DOMAIN, TAG, '[MW] fullscreen #%{public}d exception: %{public}s', toplevelId, JSON.stringify(err));
-        }
+        // ENTER_IMMERSIVE_DISABLE_TITLE_AND_DOCK_HOVER (API 14+): 进入沉浸
+        // 全屏且鼠标悬停屏幕边缘热区时不唤出标题栏/关闭条/Dock — 默认
+        // ENTER_IMMERSIVE 会 hover 弹出关闭条, 抢走游戏边缘鼠标事件。
+        this.enterImmersiveFullscreen(win, toplevelId);
         break;
       case 'unfullscreen':
         // 退出沉浸式全屏, 恢复普通窗口; 尺寸由 C++ 侧 configure(preFs)

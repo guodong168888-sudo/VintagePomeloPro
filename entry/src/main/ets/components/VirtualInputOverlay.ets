@@ -10,6 +10,7 @@ import {
   resolveVirtualJoystickDirection
 } from '../model/AppModels';
 import { InputDispatcher } from '../service/InputDispatcher';
+import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
 import { mapMouseButton } from '../common/MouseMap';
 import { display } from '@kit.ArkUI';
 import testNapi from 'libentry.so';
@@ -43,11 +44,13 @@ interface StickVisualState {
   active: boolean;
 }
 
-const STROKE_COLOR = '#FF2196F3';
-const FILL_IDLE = '#CC404040';
-const FILL_PRESSED = '#FF2979FF';
-const TEXT_IDLE = '#FFE7F2FF';
-const TEXT_PRESSED = '#FFFFFFFF';
+/** Winlator ControlElement 配色：白描边、按下白填充、按下文字转黑。 */
+const WINLATOR_LIGHT = '#FFFFFFFF';
+const WINLATOR_DARK = '#FF000000';
+const WINLATOR_HIGHLIGHT = '#FF0277BD';
+const WINLATOR_CLEAR = '#00000000';
+/** 摇杆拇指填充：Winlator ColorUtils.setAlphaComponent(light, 50)。 */
+const WINLATOR_THUMB_FILL = '#32FFFFFF';
 
 /** Toggle 按钮长按锁定阈值（毫秒）：短按=点按，长按=锁定保持。 */
 const LONG_PRESS_LOCK_MS = 400;
@@ -70,6 +73,8 @@ export struct VirtualInputOverlay {
   @Prop @Watch('onControlBarPositionChanged') controlBarPositionX: number = 1;
   @Prop @Watch('onControlBarPositionChanged') controlBarPositionY: number = 0;
   @Prop @Watch('onTouchpadModeChanged') touchpadMode: boolean = false;
+  /** 触摸板箭头指针；关闭后仍移动与点击，只是不画光标。 */
+  @Prop showCursor: boolean = true;
   /** 浮窗模式全屏态: 控制栏显示 home 按钮 (缩回 Index 悬浮窗)。 */
   @StorageProp('desktopFloatingFullscreen') desktopFloatingFullscreen: boolean = false;
   /** 编辑器模式：不注入按键，元素可拖动/缩放并支持选中框。 */
@@ -148,10 +153,8 @@ export struct VirtualInputOverlay {
   private vcInit: boolean = false;
   private scrWPx: number = 0;
   private scrHPx: number = 0;
-  @State private cursorVpX: number = -100;  // 指示点 vp 坐标 (屏外=隐藏)
+  @State private cursorVpX: number = -100;  // 箭头尖 vp 坐标 (屏外=隐藏)
   @State private cursorVpY: number = -100;
-  @State private tpFlash: boolean = false;  // 点击 flash 动画
-  private tpFlashTimer: number = -1;
   // 双指轻点=右键: 两指快速落下又抬起且中点几乎不动
   private tpTwoFingerStartAt: number = 0;
   private tpTwoFingerStartMidX: number = 0;
@@ -264,10 +267,61 @@ export struct VirtualInputOverlay {
   }
 
   private elementRadius(element: ControlElement): number {
-    if (element.shape === ControlElementShape.ROUND_RECT) return Math.min(this.elementWidth(element), this.elementHeight(element)) * 0.28;
-    if (element.shape === ControlElementShape.RECT) return 4;
-    if (element.shape === ControlElementShape.SQUARE) return 6;
+    // 对齐 Winlator ControlElement.draw：ROUND_RECT 为半高胶囊，SQUARE 为 0.75s。
+    if (element.shape === ControlElementShape.ROUND_RECT) {
+      return this.elementHeight(element) * 0.5;
+    }
+    if (element.shape === ControlElementShape.RECT) {
+      return 0;
+    }
+    if (element.shape === ControlElementShape.SQUARE) {
+      return Math.min(this.elementWidth(element), this.elementHeight(element)) * 0.15;
+    }
     return Math.min(this.elementWidth(element), this.elementHeight(element)) / 2;
+  }
+
+  /** snappingSize = viewWidth / 100，strokeWidth = snappingSize × 0.25。 */
+  private winlatorStrokeWidth(): number {
+    return Math.max(1.25, this.overlayW / 400);
+  }
+
+  private winlatorStrokeColor(element: ControlElement): string {
+    return (this.editMode && this.selectedElementId === element.id) ? WINLATOR_HIGHLIGHT : WINLATOR_LIGHT;
+  }
+
+  private winlatorFill(pressed: boolean): string {
+    return pressed ? WINLATOR_LIGHT : WINLATOR_CLEAR;
+  }
+
+  private winlatorTextColor(pressed: boolean): string {
+    return pressed ? WINLATOR_DARK : WINLATOR_LIGHT;
+  }
+
+  private dpadArmPath(element: ControlElement, direction: string): string {
+    const w = this.elementWidth(element);
+    const h = this.elementHeight(element);
+    const inset = this.winlatorStrokeWidth() * 0.5;
+    const cx = w / 2;
+    const cy = h / 2;
+    const s = Math.min(w, h) / 14;
+    const ox = s * 2;
+    const oy = s * 3;
+    const start = s;
+    const pt = (x: number, y: number): string => x.toFixed(1) + ' ' + y.toFixed(1);
+    if (direction === 'up') {
+      return 'M ' + pt(cx, cy - start) + ' L ' + pt(cx - ox, cy - oy) + ' L ' + pt(cx - ox, inset) +
+        ' L ' + pt(cx + ox, inset) + ' L ' + pt(cx + ox, cy - oy) + ' Z';
+    }
+    if (direction === 'down') {
+      return 'M ' + pt(cx, cy + start) + ' L ' + pt(cx - ox, cy + oy) + ' L ' + pt(cx - ox, h - inset) +
+        ' L ' + pt(cx + ox, h - inset) + ' L ' + pt(cx + ox, cy + oy) + ' Z';
+    }
+    if (direction === 'left') {
+      return 'M ' + pt(cx - start, cy) + ' L ' + pt(cx - oy, cy - ox) + ' L ' + pt(inset, cy - ox) +
+        ' L ' + pt(inset, cy + ox) + ' L ' + pt(cx - oy, cy + ox) + ' Z';
+    }
+    return 'M ' + pt(cx + start, cy) + ' L ' + pt(cx + oy, cy - ox) + ' L ' + pt(w - inset, cy - ox) +
+      ' L ' + pt(w - inset, cy + ox) + ' L ' + pt(cx + oy, cy + ox) + ' Z';
   }
 
   /** 键盘键帽文字按实际键面尺寸放大, 保证平板/手机上清晰可读。 */
@@ -456,7 +510,8 @@ export struct VirtualInputOverlay {
   }
 
   private stickKnobSize(element: ControlElement): number {
-    return 44 * (element.scale ?? 1);
+    // Winlator thumbRadius = 3.5s，外环半径 6s，直径比 7/12。
+    return Math.min(this.elementWidth(element), this.elementHeight(element)) * (7 / 12);
   }
 
   private bindingSource(element: ControlElement, slot: string, touchId: number): string {
@@ -867,30 +922,36 @@ export struct VirtualInputOverlay {
 
   // -- 触摸板模式: 虚拟光标状态机 (移植 upstream main-ui DesktopLayer.handleTouchpad) --
   private ensureScreenPx(): void {
-    if (this.scrWPx > 0) return;
-    try {
-      const d = display.getDefaultDisplaySync();
-      this.scrWPx = d.width;
-      this.scrHPx = d.height;
-    } catch (_) {
-      this.scrWPx = 1280;
-      this.scrHPx = 800;
+    const rect = InputOverlayWindowCoordinator.getInstance().getOverlayWindowRect();
+    if (rect.width > 0 && rect.height > 0) {
+      this.scrWPx = rect.width;
+      this.scrHPx = rect.height;
+    } else if (this.overlayW > 0 && this.overlayH > 0) {
+      this.scrWPx = vp2px(this.overlayW);
+      this.scrHPx = vp2px(this.overlayH);
+    } else {
+      try {
+        const d = display.getDefaultDisplaySync();
+        this.scrWPx = d.width;
+        this.scrHPx = d.height;
+      } catch (_) {
+        this.scrWPx = 1280;
+        this.scrHPx = 800;
+      }
     }
   }
 
   private syncCursorIndicator(): void {
-    this.cursorVpX = px2vp(this.vcX) - 7;
-    this.cursorVpY = px2vp(this.vcY) - 7;
+    // 箭头热点在图片左上尖端，position 即热点，不要减半径、不要 markAnchor。
+    this.cursorVpX = px2vp(this.vcX);
+    this.cursorVpY = px2vp(this.vcY);
   }
 
-  /** 点击 flash: 指示点短暂放大变绿 (对齐 InputOverlay 原反馈)。 */
-  private flashCursorIndicator(): void {
-    this.tpFlash = true;
-    if (this.tpFlashTimer >= 0) clearTimeout(this.tpFlashTimer);
-    this.tpFlashTimer = setTimeout((): void => {
-      this.tpFlashTimer = -1;
-      this.tpFlash = false;
-    }, 90) as number;
+  private clampCursor(): void {
+    this.ensureScreenPx();
+    this.vcX = Math.min(Math.max(this.vcX, 0), this.scrWPx);
+    this.vcY = Math.min(Math.max(this.vcY, 0), this.scrHPx);
+    this.syncCursorIndicator();
   }
 
   // 性能: 光标移动时缓存目标 toplevel, 避免每次 move 都 native 查询
@@ -936,11 +997,6 @@ export struct VirtualInputOverlay {
     this.tpTwoFinger = false;
     this.tpLastTapTime = 0;
     this.cachedMoveTl = -1;
-    if (this.tpFlashTimer >= 0) {
-      clearTimeout(this.tpFlashTimer);
-      this.tpFlashTimer = -1;
-    }
-    this.tpFlash = false;
   }
 
   private handleTouchpad(ev: TouchEvent): void {
@@ -1044,9 +1100,9 @@ export struct VirtualInputOverlay {
           this.tpMoved = true;
         }
       }
-      this.vcX = Math.min(Math.max(this.vcX + dxPx, 0), this.scrWPx);
-      this.vcY = Math.min(Math.max(this.vcY + dyPx, 0), this.scrHPx);
-      this.syncCursorIndicator();
+      this.vcX = this.vcX + dxPx;
+      this.vcY = this.vcY + dyPx;
+      this.clampCursor();
       if (this.tpDragArmed && !this.tpDragging && this.tpMoved) {
         // 拖拽开始: 在光标处按下左键 (拖动窗口/元素)
         this.tpDragging = true;
@@ -1080,7 +1136,6 @@ export struct VirtualInputOverlay {
       if (!this.tpMoved) {
         // 轻点 = 左键 (右键走双指轻点, 保持虚拟鼠标本地语义)
         this.clickAtCursor(mapMouseButton(1));
-        this.flashCursorIndicator();
         this.tpLastTapTime = Date.now();
         this.tpLastTapVcX = this.vcX;
         this.tpLastTapVcY = this.vcY;
@@ -1293,8 +1348,8 @@ export struct VirtualInputOverlay {
     Stack()
       .width(this.elementWidth(element)).height(this.elementHeight(element))
       .borderRadius(this.elementRadius(element))
-      .backgroundColor('#B81A1D28')
-      .border({ width: 2, color: '#66FFFFFF' })
+      .backgroundColor(WINLATOR_CLEAR)
+      .border({ width: this.winlatorStrokeWidth(), color: this.winlatorStrokeColor(element) })
       .opacity(this.elementOpacity(element))
       .hitTestBehavior(HitTestMode.None)
       .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2,
@@ -1306,13 +1361,14 @@ export struct VirtualInputOverlay {
   private ButtonElement(element: ControlElement) {
     Stack({ alignContent: Alignment.Center }) {
       Text(element.text.length > 0 ? element.text : '键')
-        .fontSize(this.buttonLabelFontSize(element)).fontWeight(FontWeight.Bold).maxLines(1)
-        .fontColor(this.isElementPressed(element.id) ? TEXT_PRESSED : TEXT_IDLE)
+        .fontSize(this.buttonLabelFontSize(element)).fontWeight(FontWeight.Medium).maxLines(1)
+        .fontColor(this.winlatorTextColor(this.isElementPressed(element.id)))
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))
     .borderRadius(this.elementRadius(element))
-    .backgroundColor(this.isElementPressed(element.id) ? FILL_PRESSED : FILL_IDLE)
-    .border({ width: 2, color: this.isElementPressed(element.id) ? STROKE_COLOR : '#55FFFFFF' })
+    .backgroundColor(this.winlatorFill(this.isElementPressed(element.id)))
+    .border({ width: this.winlatorStrokeWidth(), color: this.winlatorStrokeColor(element) })
+    .clip(true)
     .opacity(this.elementOpacity(element))
     .hitTestBehavior(HitTestMode.None)
     .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
@@ -1320,43 +1376,26 @@ export struct VirtualInputOverlay {
   }
 
   @Builder
+  private DPadArm(element: ControlElement, direction: string) {
+    Path()
+      .width(this.elementWidth(element))
+      .height(this.elementHeight(element))
+      .commands(this.dpadArmPath(element, direction))
+      .fill(this.winlatorFill(this.isDpadDirectionPressed(element.id, direction)))
+      .stroke(this.winlatorStrokeColor(element))
+      .strokeWidth(this.winlatorStrokeWidth())
+      .strokeLineJoin(LineJoinStyle.Round)
+  }
+
+  @Builder
   private DPadElement(element: ControlElement) {
     Stack() {
-      // 圆形底座
-      Circle()
-        .width(this.elementWidth(element)).height(this.elementHeight(element))
-        .fill('#33404040')
-        .stroke(this.isElementPressed(element.id) ? '#FF4CAF50' : STROKE_COLOR)
-        .strokeWidth(2)
-      // 小霸王风格十字键：细臂直角，无圆角无箭头文字，置于圆内。
-      // 上臂
-      Stack()
-        .width(this.elementWidth(element) * 0.30).height(this.elementWidth(element) * 0.42)
-        .backgroundColor(this.isDpadDirectionPressed(element.id, 'up') ? FILL_PRESSED : FILL_IDLE)
-        .position({ x: this.elementWidth(element) * 0.35, y: this.elementWidth(element) * 0.04 })
-      // 下臂
-      Stack()
-        .width(this.elementWidth(element) * 0.30).height(this.elementWidth(element) * 0.42)
-        .backgroundColor(this.isDpadDirectionPressed(element.id, 'down') ? FILL_PRESSED : FILL_IDLE)
-        .position({ x: this.elementWidth(element) * 0.35, y: this.elementWidth(element) * 0.54 })
-      // 左臂
-      Stack()
-        .width(this.elementWidth(element) * 0.42).height(this.elementWidth(element) * 0.30)
-        .backgroundColor(this.isDpadDirectionPressed(element.id, 'left') ? FILL_PRESSED : FILL_IDLE)
-        .position({ x: this.elementWidth(element) * 0.04, y: this.elementWidth(element) * 0.35 })
-      // 右臂
-      Stack()
-        .width(this.elementWidth(element) * 0.42).height(this.elementWidth(element) * 0.30)
-        .backgroundColor(this.isDpadDirectionPressed(element.id, 'right') ? FILL_PRESSED : FILL_IDLE)
-        .position({ x: this.elementWidth(element) * 0.54, y: this.elementWidth(element) * 0.35 })
-      // 中心方块
-      Stack()
-        .width(this.elementWidth(element) * 0.30).height(this.elementWidth(element) * 0.30)
-        .backgroundColor(this.isElementPressed(element.id) ? FILL_PRESSED : FILL_IDLE)
-        .position({ x: this.elementWidth(element) * 0.35, y: this.elementWidth(element) * 0.35 })
+      this.DPadArm(element, 'up')
+      this.DPadArm(element, 'right')
+      this.DPadArm(element, 'down')
+      this.DPadArm(element, 'left')
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))
-    .borderRadius(this.elementRadius(element))
     .opacity(this.elementOpacity(element))
     .hitTestBehavior(HitTestMode.None)
     .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
@@ -1367,16 +1406,17 @@ export struct VirtualInputOverlay {
   private StickElement(element: ControlElement) {
     Stack({ alignContent: Alignment.Center }) {
       Circle().width(this.elementWidth(element)).height(this.elementHeight(element))
-        .fill('#33404040').stroke(STROKE_COLOR).strokeWidth(2)
+        .fill(WINLATOR_CLEAR).stroke(this.winlatorStrokeColor(element)).strokeWidth(this.winlatorStrokeWidth())
       Stack({ alignContent: Alignment.Center }) {
         Circle().width(this.stickKnobSize(element)).height(this.stickKnobSize(element))
-          .fill(this.stickState(element.id).active ? FILL_PRESSED : '#CC606060')
-          .stroke('#AAFFFFFF').strokeWidth(2)
+          .fill(WINLATOR_THUMB_FILL)
+          .stroke(this.winlatorStrokeColor(element))
+          .strokeWidth(this.winlatorStrokeWidth())
       }
       .translate({ x: this.stickState(element.id).dx, y: this.stickState(element.id).dy })
       if (element.text.length > 0) {
-        Text(element.text).fontSize(12 * (element.scale ?? 1)).fontWeight(FontWeight.Bold)
-          .fontColor(this.stickState(element.id).active ? TEXT_PRESSED : TEXT_IDLE)
+        Text(element.text).fontSize(12 * (element.scale ?? 1)).fontWeight(FontWeight.Medium)
+          .fontColor(WINLATOR_LIGHT)
           .translate({ x: 0, y: this.elementHeight(element) / 2 + 8 * (element.scale ?? 1) })
       }
     }
@@ -1390,13 +1430,23 @@ export struct VirtualInputOverlay {
   @Builder
   private TrackpadElement(element: ControlElement) {
     Stack({ alignContent: Alignment.Center }) {
-      Text(element.text.length > 0 ? element.text : '视角').fontSize(12 * (element.scale ?? 1))
-        .fontColor(this.isElementPressed(element.id) ? '#FFB9F6CA' : '#88FFFFFF')
+      Stack()
+        .width('100%').height('100%')
+        .borderRadius(this.elementHeight(element) * 0.15)
+        .border({ width: this.winlatorStrokeWidth(), color: this.winlatorStrokeColor(element) })
+      Stack()
+        .width(Math.max(8, this.elementWidth(element) - this.winlatorStrokeWidth() * 5))
+        .height(Math.max(8, this.elementHeight(element) - this.winlatorStrokeWidth() * 5))
+        .borderRadius(Math.max(2, this.elementHeight(element) * 0.15 -
+          this.winlatorStrokeWidth() * 1.5))
+        .border({ width: this.winlatorStrokeWidth() * 2, color: this.winlatorStrokeColor(element) })
+      if (element.text.length > 0) {
+        Text(element.text).fontSize(12 * (element.scale ?? 1))
+          .fontColor(WINLATOR_LIGHT)
+      }
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))
-    .borderRadius(this.elementRadius(element))
-    .backgroundColor(this.isElementPressed(element.id) ? '#B04CAF50' : '#33404040')
-    .border({ width: 2, color: this.isElementPressed(element.id) ? '#FF4CAF50' : STROKE_COLOR })
+    .backgroundColor(WINLATOR_CLEAR)
     .opacity(this.elementOpacity(element))
     .hitTestBehavior(HitTestMode.None)
     .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
@@ -1407,26 +1457,34 @@ export struct VirtualInputOverlay {
   private RangeButtonElement(element: ControlElement) {
     Stack({ alignContent: Alignment.Top }) {
       if (element.text.length > 0 && element.orientation !== 'horizontal') {
-        Text(element.text).fontSize(10 * (element.scale ?? 1)).fontColor(TEXT_IDLE)
+        Text(element.text).fontSize(10 * (element.scale ?? 1)).fontColor(WINLATOR_LIGHT)
           .padding(3).width('100%').textAlign(TextAlign.Center)
       }
       ForEach(element.keyList ?? [], (code: number, index: number): void => {
         Stack({ alignContent: Alignment.Center }) {
+          if (index > 0 && this.rangeSelection(element.id) !== index &&
+            this.rangeSelection(element.id) !== index - 1) {
+            Row()
+              .width(element.orientation === 'horizontal' ? this.winlatorStrokeWidth() : '100%')
+              .height(element.orientation === 'horizontal' ? '100%' : this.winlatorStrokeWidth())
+              .backgroundColor(this.winlatorStrokeColor(element))
+              .position(element.orientation === 'horizontal' ? { x: 0, y: 0 } : { x: 0, y: 0 })
+          }
           Text(this.keyLabel(code)).fontSize((element.orientation === 'horizontal' ? 8 : 10) * (element.scale ?? 1))
-            .fontColor(this.rangeSelection(element.id) === index ? TEXT_PRESSED : TEXT_IDLE)
+            .fontColor(this.winlatorTextColor(this.rangeSelection(element.id) === index))
         }
         .width(element.orientation === 'horizontal' ? this.rangeSlotHeight(element) : '100%')
         .height(element.orientation === 'horizontal' ? '100%' : this.rangeSlotHeight(element))
-        .backgroundColor(this.rangeSelection(element.id) === index ? FILL_PRESSED : '#44000000')
+        .backgroundColor(this.winlatorFill(this.rangeSelection(element.id) === index))
         .position(element.orientation === 'horizontal' ?
           { x: this.rangeSlotTop(element) + index * this.rangeSlotHeight(element), y: 0 } :
           { x: 0, y: this.rangeSlotTop(element) + index * this.rangeSlotHeight(element) })
       }, (code: number, index: number): string => element.id + '-' + code.toString() + '-' + index.toString())
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))
-    .borderRadius(this.elementRadius(element))
-    .backgroundColor('#33404040')
-    .border({ width: 2, color: STROKE_COLOR })
+    .borderRadius(Math.min(this.elementWidth(element), this.elementHeight(element)) * 0.15)
+    .backgroundColor(WINLATOR_CLEAR)
+    .border({ width: this.winlatorStrokeWidth(), color: this.winlatorStrokeColor(element) })
     .clip(true)
     .opacity(this.elementOpacity(element))
     .hitTestBehavior(HitTestMode.None)
@@ -1504,6 +1562,15 @@ export struct VirtualInputOverlay {
 
   private onTouchpadModeChanged(): void {
     this.touchpadModeVisual = this.touchpadMode;
+    if (this.touchpadMode) {
+      this.ensureScreenPx();
+      if (!this.vcInit && this.scrWPx > 0 && this.scrHPx > 0) {
+        this.vcInit = true;
+        this.vcX = this.scrWPx / 2;
+        this.vcY = this.scrHPx / 2;
+      }
+      this.clampCursor();
+    }
   }
 
   private onProfileChanged(): void {
@@ -2000,13 +2067,12 @@ export struct VirtualInputOverlay {
   build() {
     Stack() {
       Text(this.renderRevision.toString()).width(0).height(0).opacity(0).hitTestBehavior(HitTestMode.None)
-      // 触摸板模式虚拟光标指示点 (原样式: 小圆 7px, 点击 flash 10px 绿)
-      if (this.touchpadModeVisual && this.cursorVpX >= 0 && this.cursorVpY >= 0) {
-        Circle({ width: this.tpFlash ? 10 : 7, height: this.tpFlash ? 10 : 7 })
-          .fill(this.tpFlash ? '#FF4CAF50' : '#E6FFFFFF')
-          .stroke(this.tpFlash ? '#CCB9F6CA' : '#D9000000')
-          .strokeWidth(1)
-          .shadow({ radius: this.tpFlash ? 8 : 4, color: '#66000000', offsetX: 0, offsetY: 1 })
+      if (this.touchpadModeVisual && this.showCursor && this.cursorVpX >= 0 && this.cursorVpY >= 0) {
+        Image($r('app.media.virtual_mouse_arrow'))
+          .width(28)
+          .height(28)
+          .objectFit(ImageFit.Contain)
+          .interpolation(ImageInterpolation.Medium)
           .position({ x: this.cursorVpX, y: this.cursorVpY })
           .hitTestBehavior(HitTestMode.None)
           .zIndex(50)
@@ -2030,6 +2096,9 @@ export struct VirtualInputOverlay {
       this.overlayW = area.width as number;
       this.overlayH = area.height as number;
       this.applyConfiguredToolbarPosition();
+      if (this.touchpadModeVisual && this.vcInit) {
+        this.clampCursor();
+      }
     })
   }
 }

@@ -855,6 +855,7 @@ struct InputOverlayPage {
           controlBarPositionX: this.settings.controlBarPositionX,
           controlBarPositionY: this.settings.controlBarPositionY,
           touchpadMode: this.touchpadMode,
+          showCursor: this.settings.virtualMouseConfig.showCursor,
           onOpenLayoutEditor: (): void => { this.openInputEditor('input-layout'); },
           onOpenKeyMappingEditor: (): void => { this.openInputEditor('key-mapping'); },
           onToggleHostKeyboard: (): void => { this.toggleHostKeyboard(); },

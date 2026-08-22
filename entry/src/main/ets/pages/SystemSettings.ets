@@ -344,7 +344,9 @@ struct SystemSettingsPage {
     this.loadInputProfiles();
     this.loadApplicationVersion();
     this.loadGpuInfo();
-    this.renderMode = AppStorage.get<string>('winehua.render.mode') ?? 'auto';
+    this.renderMode = AppSettingsStore.getInstance().getRenderMode()
+      || AppStorage.get<string>('winehua.render.mode')
+      || 'auto';
   }
 
   onPageShow(): void {
@@ -470,10 +472,32 @@ struct SystemSettingsPage {
   }
 
   private resetPrefix(): void {
+    const preserve = this.settings.preserveUserDataOnReset;
     this.runEngineOperation('正在重置 Wine prefix，请勿退出应用…', async (): Promise<boolean> => {
       await AppSessionService.getInstance().resetPrefix();
       return true;
-    }, 'Wine 环境已重置');
+    }, preserve ? 'Wine 沙盒已重建，文档和注册表已还原' : 'Wine 环境已重置');
+  }
+
+  private setPreserveUserDataOnReset(value: boolean): void {
+    this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
+      this.settings.useGlassEffect, this.settings.usePageBackground,
+      this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
+      this.settings.controlOpacity, this.settings.gamepadDeadzone,
+      this.settings.outputScale, this.settings.themeMode,
+      this.settings.controlBarDirection, this.settings.virtualMouseConfig,
+      this.settings.desktopInputProfileId, this.settings.pageBackgroundUri,
+      this.settings.virtualInputEnabled, this.settings.desktopOrientation,
+      this.settings.controlBarPositionX, this.settings.controlBarPositionY,
+      this.settings.d3dRendererPreference, this.settings.desktopWindowMode,
+      this.settings.keepScreenOn, value);
+  }
+
+  private resetPrefixConfirmMessage(): string {
+    if (this.settings.preserveUserDataOnReset) {
+      return '将清空 Wine 沙盒并重装运行时，然后还原文档和注册表。损坏的系统目录会被重建。';
+    }
+    return '将删除当前 Wine prefix 中的全部数据，且无法撤销。';
   }
 
   private async exportLogs(): Promise<void> {
@@ -541,7 +565,8 @@ struct SystemSettingsPage {
       controlBarPositionY: number = this.settings.controlBarPositionY,
       d3dRendererPreference: D3DRendererPreference = this.settings.d3dRendererPreference,
       desktopWindowMode: DesktopWindowMode = this.settings.desktopWindowMode,
-      keepScreenOn: boolean = this.settings.keepScreenOn): void {
+      keepScreenOn: boolean = this.settings.keepScreenOn,
+      preserveUserDataOnReset: boolean = this.settings.preserveUserDataOnReset): void {
     const virtualInputChanged = this.settings.virtualInputEnabled !== virtualInputEnabled;
     this.settings = {
       defaultDisplayMode: mode,
@@ -565,7 +590,8 @@ struct SystemSettingsPage {
       controlOpacity: opacity,
       gamepadDeadzone: deadzone,
       outputScale: scale,
-      d3dRendererPreference: d3dRendererPreference
+      d3dRendererPreference: d3dRendererPreference,
+      preserveUserDataOnReset: preserveUserDataOnReset
     };
     GamepadManager.getInstance().setDeadzone(deadzone);
     WineWindowManager.getInstance().setOutputScalePercent(scale);
@@ -929,26 +955,24 @@ struct SystemSettingsPage {
   }
 
   /** 渲染模式: auto / dxvk_2_6 / dxvk_1_10 / virgl。
-   *  自动: DX11→DXVK 2.6 (GPU 不适配自动 1.10), D3D12→VKD3D, 渲染 VirGL 优先。
-   *  切换后自动重启引擎即时生效, 无需手动重启。 */
+   *  自动: DX11→DXVK 2.6 (GPU 不适配自动 1.10), D3D12→VKD3D。
+   *  写入 Preferences 后再重启引擎，避免下次冷启动回退 auto。 */
   private updateRenderMode(mode: string): void {
     const selected = mode === 'dxvk_2_6' || mode === 'dxvk_1_10' || mode === 'virgl' ? mode : 'auto';
-    const current = AppStorage.get<string>('winehua.render.mode') ?? 'auto';
+    const current = AppSettingsStore.getInstance().getRenderMode()
+      || AppStorage.get<string>('winehua.render.mode')
+      || 'auto';
     if (current === selected) return;
-    AppStorage.setOrCreate<string>('winehua.render.mode', selected);
-    this.renderMode = selected;   // 立即刷新按钮选中态
+    this.renderMode = selected;
     promptAction.showToast({ message: '渲染模式已切换，正在重启引擎…' });
-    this.restartEngine();
+    void AppSettingsStore.getInstance().setRenderMode(selected).then((): void => {
+      this.restartEngine();
+    });
   }
 
-  /** DXVK 版本: 1.10 (dxvk_legacy) / 2.6 (dxvk_modern_2_6, 含 VKD3D 实验 D3D12)。 */
+  /** DXVK 版本芯片与渲染模式共用同一持久化项。 */
   private updateDxvkVersion(version: string): void {
-    const selected = version === 'dxvk_modern_2_6' ? 'dxvk_modern_2_6' : 'dxvk_legacy';
-    const current = AppStorage.get<string>('winehua.dxvk.preference') ?? 'auto';
-    if (current === selected) return;
-    AppStorage.setOrCreate<string>('winehua.dxvk.preference', selected);
-    AppStorage.setOrCreate<string>('winehua.dxvk.backend', selected);
-    promptAction.showToast({ message: 'DXVK 版本已保存；重启 Wine 引擎后生效' });
+    this.updateRenderMode(version === 'dxvk_modern_2_6' ? 'dxvk_2_6' : 'dxvk_1_10');
   }
 
   private updateD3DRendererPreference(preference: D3DRendererPreference): void {
@@ -989,7 +1013,8 @@ struct SystemSettingsPage {
       controlOpacity: this.settings.controlOpacity,
       gamepadDeadzone: this.settings.gamepadDeadzone,
       outputScale: this.settings.outputScale,
-      d3dRendererPreference: this.settings.d3dRendererPreference
+      d3dRendererPreference: this.settings.d3dRendererPreference,
+      preserveUserDataOnReset: this.settings.preserveUserDataOnReset
     };
     void ThemeSettingsService.getInstance().update(this.settings);
     promptAction.showToast({ message: '兼容性预设已保存，新启动的程序生效' });
@@ -1361,20 +1386,17 @@ struct SystemSettingsPage {
   }
 
   private dxvkVersionActive(version: string): boolean {
-    return AppStorage.get<string>('winehua.dxvk.preference') === version;
-  }
-
-  /** 自动模式下按 GPU 解析出的 DXVK 版本, 用来同时高亮「自动」和实际后端。 */
-  private resolvedDxvkMode(): string {
-    return this.gpuSupportDxvk26 ? 'dxvk_2_6' : 'dxvk_1_10';
+    if (version === 'dxvk_modern_2_6') {
+      return this.renderMode === 'dxvk_2_6';
+    }
+    if (version === 'dxvk_legacy') {
+      return this.renderMode === 'dxvk_1_10';
+    }
+    return false;
   }
 
   private renderModeActive(mode: string): boolean {
-    if (this.renderMode === mode) return true;
-    if (this.renderMode === 'auto' && (mode === 'dxvk_2_6' || mode === 'dxvk_1_10')) {
-      return mode === this.resolvedDxvkMode();
-    }
-    return false;
+    return this.renderMode === mode;
   }
 
   @Builder
@@ -1823,7 +1845,7 @@ struct SystemSettingsPage {
               Text('全屏触摸板模式').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
               Text('从 Wine 画面右上角手指图标切换。开启后单指相对移动鼠标、轻点左键；双指轻点右键、双指滑动滚轮。')
                 .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
-              this.SwitchRow('显示触摸光标', '操作时短暂显示鼠标位置与点击反馈', this.settings.virtualMouseConfig.showCursor,
+              this.SwitchRow('显示箭头指针', '触摸板模式用箭头显示鼠标位置，箭头尖即点击点', this.settings.virtualMouseConfig.showCursor,
                 (value: boolean): void => this.updateVirtualMouse(this.settings.virtualMouseConfig.mouseSensitivity, value))
               Text('轻点为左键，双指轻点为右键；轻点后再次按住并移动可拖拽窗口')
                 .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
@@ -1963,16 +1985,30 @@ struct SystemSettingsPage {
               Column({ space: 3 }) {
                 Text('重置 Wine 环境').fontSize(14).fontWeight(FontWeight.Medium)
                   .fontColor($r('app.color.text_primary')).width('100%')
-                Text('删除当前 Wine prefix 中的应用数据，仅在环境损坏时使用。')
+                Text('重建 Wine 沙盒并重装运行时。默认保留文档和注册表。')
                   .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
               }.layoutWeight(1).alignItems(HorizontalAlign.Start)
             }.width('100%')
+            this.SwitchRow('保留文档和注册表',
+              '开启则还原用户文档与注册表；关闭则全部清空',
+              this.settings.preserveUserDataOnReset,
+              (value: boolean): void => this.setPreserveUserDataOnReset(value),
+              'wine-reset-preserve-user-data')
             Button('重置 Wine prefix').width('100%').height(48).borderRadius(14)
               .backgroundColor('#18D94848')
               .fontColor('#D94848')
               .enabled(!this.engineBusy)
               .id('wine-engine-reset-prefix')
-              .onClick(() => AlertDialog.show({ title: '重置 Wine 环境', message: '这会删除当前 Wine prefix 中的应用数据，且无法撤销。', primaryButton: { value: '取消', action: (): void => {} }, secondaryButton: { value: '重置', fontColor: '#D94848', action: (): void => { this.resetPrefix(); } } }))
+              .onClick(() => AlertDialog.show({
+                title: '重置 Wine 环境',
+                message: this.resetPrefixConfirmMessage(),
+                primaryButton: { value: '取消', action: (): void => {} },
+                secondaryButton: {
+                  value: '重置',
+                  fontColor: '#D94848',
+                  action: (): void => { this.resetPrefix(); }
+                }
+              }))
           }
           .width('100%').padding(14).borderRadius(16)
           .backgroundColor('#0FD94848').border({ width: 1, color: '#28D94848' })

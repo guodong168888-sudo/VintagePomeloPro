@@ -21,6 +21,7 @@ const APP_SETTINGS_KEY = 'app_settings_v1';
 const LIBRARY_PATH_KEY = 'library_path_v1';
 const CATALOG_CACHE_KEY = 'catalog_cache_v1';
 const RECENT_LAUNCHES_KEY = 'recent_launches_v1';
+const RENDER_MODE_KEY = 'winehua_render_mode_v1';
 // v6 briefly selected single-app on tablets.  Keep the product's desktop
 // workflow as the default and migrate only those tablet installations back.
 const PLATFORM_DEFAULTS_KEY = 'platform_defaults_v7';
@@ -34,6 +35,7 @@ export class AppSettingsStore {
   private recentLaunches: string[] = [];
   private libraryPath: string = '';
   private managedWineWindowsHost: boolean = false;
+  private renderMode: string = 'auto';
 
   static getInstance(): AppSettingsStore {
     if (!AppSettingsStore.instance) AppSettingsStore.instance = new AppSettingsStore();
@@ -49,6 +51,51 @@ export class AppSettingsStore {
     this.loadApps();
     this.libraryPath = this.store.getSync(LIBRARY_PATH_KEY, '') as string;
     this.loadRecentLaunches();
+    this.loadRenderMode();
+  }
+
+  private normalizeRenderMode(value: string): string {
+    if (value === 'dxvk_2_6' || value === 'dxvk_1_10' || value === 'virgl') {
+      return value;
+    }
+    if (value === 'dxvk_modern_2_6') {
+      return 'dxvk_2_6';
+    }
+    if (value === 'dxvk_legacy') {
+      return 'dxvk_1_10';
+    }
+    return 'auto';
+  }
+
+  private loadRenderMode(): void {
+    if (!this.store) {
+      AppStorage.setOrCreate<string>('winehua.render.mode', this.renderMode);
+      return;
+    }
+    this.renderMode = this.normalizeRenderMode(
+      this.store.getSync(RENDER_MODE_KEY, 'auto') as string);
+    AppStorage.setOrCreate<string>('winehua.render.mode', this.renderMode);
+    const preference = this.renderMode === 'dxvk_2_6' ? 'dxvk_modern_2_6' :
+      this.renderMode === 'dxvk_1_10' ? 'dxvk_legacy' : 'auto';
+    AppStorage.setOrCreate<string>('winehua.dxvk.preference', preference);
+    AppStorage.setOrCreate<string>('winehua.dxvk.backend', preference);
+  }
+
+  getRenderMode(): string {
+    return this.renderMode;
+  }
+
+  async setRenderMode(mode: string): Promise<void> {
+    const selected = this.normalizeRenderMode(mode);
+    this.renderMode = selected;
+    AppStorage.setOrCreate<string>('winehua.render.mode', selected);
+    const preference = selected === 'dxvk_2_6' ? 'dxvk_modern_2_6' :
+      selected === 'dxvk_1_10' ? 'dxvk_legacy' : 'auto';
+    AppStorage.setOrCreate<string>('winehua.dxvk.preference', preference);
+    AppStorage.setOrCreate<string>('winehua.dxvk.backend', preference);
+    if (!this.store) return;
+    await this.store.put(RENDER_MODE_KEY, selected);
+    await this.store.flush();
   }
 
   /** Restore the v6 tablet default without overwriting other device preferences. */
@@ -84,7 +131,8 @@ export class AppSettingsStore {
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
       outputScale: current.outputScale,
-      d3dRendererPreference: current.d3dRendererPreference
+      d3dRendererPreference: current.d3dRendererPreference,
+      preserveUserDataOnReset: current.preserveUserDataOnReset
     };
     await this.store.put(GLOBAL_KEY, JSON.stringify(this.globalSettings));
     await this.store.put(PLATFORM_DEFAULTS_KEY, '1');
@@ -144,7 +192,8 @@ export class AppSettingsStore {
         controlOpacity: stored.controlOpacity ?? defaults.controlOpacity,
         gamepadDeadzone: stored.gamepadDeadzone ?? defaults.gamepadDeadzone,
         outputScale: stored.outputScale ?? defaults.outputScale,
-        d3dRendererPreference: stored.d3dRendererPreference ?? D3DRendererPreference.DXVK
+        d3dRendererPreference: stored.d3dRendererPreference ?? D3DRendererPreference.DXVK,
+        preserveUserDataOnReset: stored.preserveUserDataOnReset ?? defaults.preserveUserDataOnReset
       };
     } catch (_) {
       this.globalSettings = createDefaultGlobalSettings();
@@ -221,7 +270,8 @@ export class AppSettingsStore {
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
       outputScale: current.outputScale,
-      d3dRendererPreference: current.d3dRendererPreference
+      d3dRendererPreference: current.d3dRendererPreference,
+      preserveUserDataOnReset: current.preserveUserDataOnReset
     });
   }
 
@@ -249,7 +299,8 @@ export class AppSettingsStore {
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
       outputScale: current.outputScale,
-      d3dRendererPreference: current.d3dRendererPreference
+      d3dRendererPreference: current.d3dRendererPreference,
+      preserveUserDataOnReset: current.preserveUserDataOnReset
     });
   }
 
@@ -277,7 +328,8 @@ export class AppSettingsStore {
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
       outputScale: current.outputScale,
-      d3dRendererPreference: current.d3dRendererPreference
+      d3dRendererPreference: current.d3dRendererPreference,
+      preserveUserDataOnReset: current.preserveUserDataOnReset
     });
   }
 
@@ -306,7 +358,8 @@ export class AppSettingsStore {
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
       outputScale: current.outputScale,
-      d3dRendererPreference: current.d3dRendererPreference
+      d3dRendererPreference: current.d3dRendererPreference,
+      preserveUserDataOnReset: current.preserveUserDataOnReset
     });
   }
 
@@ -334,7 +387,8 @@ export class AppSettingsStore {
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
       outputScale: current.outputScale,
-      d3dRendererPreference: current.d3dRendererPreference
+      d3dRendererPreference: current.d3dRendererPreference,
+      preserveUserDataOnReset: current.preserveUserDataOnReset
     });
   }
 

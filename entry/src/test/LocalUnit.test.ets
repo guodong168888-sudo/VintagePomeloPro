@@ -9,6 +9,7 @@ import {
   DisplayMode,
   EngineState,
   LaunchKind,
+  ViewMode,
   WinePresentationMode,
   RightJoystickOutputMode,
   VirtualGamepadLayout,
@@ -173,6 +174,9 @@ export default function localUnitTest() {
       expect(settings.virtualMouseConfig.mouseSensitivity).assertEqual(100);
       expect(settings.virtualMouseConfig.doubleClickInterval).assertEqual(100);
       expect(settings.virtualMouseConfig.showCursor).assertTrue();
+      expect(settings.viewMode).assertEqual(ViewMode.GRID);
+      expect(ViewMode.FILES).assertEqual('files');
+      expect(settings.preserveUserDataOnReset).assertTrue();
     });
 
     it('clonesVirtualMouseSettingsWithoutSharingMutableState', 0, () => {

@@ -7,6 +7,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import testNapi from 'libentry.so';
 import { AppSearchBar } from '../components/SearchBar';
 import { AppCard } from '../components/AppCard';
+import { FileBrowserView } from '../components/FileBrowserView';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import {
   AppDescriptor,
@@ -712,8 +713,12 @@ struct Index {
     }
   }
 
+  private catalogCardViewMode(): ViewMode {
+    return this.settings.viewMode === ViewMode.FILES ? ViewMode.GRID : this.settings.viewMode;
+  }
+
   private gridColumns(): string {
-    if (this.settings.viewMode === ViewMode.COMPACT) return '1fr';
+    if (this.catalogCardViewMode() === ViewMode.COMPACT) return '1fr';
     // VintagePomelo keeps cover cards in two columns on phones. A single
     // flexible column makes one icon fill almost the entire compact window.
     if (this.isPhoneLandscape()) return '1fr 1fr';
@@ -755,8 +760,8 @@ struct Index {
     // Grid can under-measure an auto-height card while a narrow two-column
     // layout is settling. Reserve the cover, fixed title row and shadow inset
     // explicitly so the following row can never paint over this card.
-    if (this.settings.viewMode === ViewMode.COMPACT) return 120;
-    const coverHeight = this.settings.viewMode === ViewMode.LARGE ? 196 : 120;
+    if (this.catalogCardViewMode() === ViewMode.COMPACT) return 120;
+    const coverHeight = this.catalogCardViewMode() === ViewMode.LARGE ? 196 : 120;
     return coverHeight + 71 + 16;
   }
 
@@ -907,18 +912,21 @@ struct Index {
       buttons: [
         { text: (this.settings.viewMode === ViewMode.GRID ? '✓ ' : '') + '网格封面', color: $r('sys.color.ohos_id_color_text_primary') },
         { text: (this.settings.viewMode === ViewMode.COMPACT ? '✓ ' : '') + '紧凑列表', color: $r('sys.color.ohos_id_color_text_primary') },
-        { text: (this.settings.viewMode === ViewMode.LARGE ? '✓ ' : '') + '大封面', color: $r('sys.color.ohos_id_color_text_primary') }
+        { text: (this.settings.viewMode === ViewMode.LARGE ? '✓ ' : '') + '大封面', color: $r('sys.color.ohos_id_color_text_primary') },
+        { text: (this.settings.viewMode === ViewMode.FILES ? '✓ ' : '') + '文件浏览', color: $r('sys.color.ohos_id_color_text_primary') }
       ]
     }).then((result) => {
       if (result.index === 0) this.setViewMode(ViewMode.GRID);
       else if (result.index === 1) this.setViewMode(ViewMode.COMPACT);
       else if (result.index === 2) this.setViewMode(ViewMode.LARGE);
+      else if (result.index === 3) this.setViewMode(ViewMode.FILES);
     }).catch(() => {});
   }
 
   private phoneViewModeIcon(): Resource {
     if (this.settings.viewMode === ViewMode.COMPACT) return $r('sys.symbol.list_bullet');
     if (this.settings.viewMode === ViewMode.LARGE) return $r('sys.symbol.rectangle_grid_1x2');
+    if (this.settings.viewMode === ViewMode.FILES) return $r('sys.symbol.folder');
     return $r('sys.symbol.square_grid_2x2');
   }
 
@@ -1077,6 +1085,8 @@ struct Index {
               .width(48).height(48).backgroundColor(this.settings.viewMode === ViewMode.COMPACT ? $r('app.color.selected_background') : $r('app.color.search_background')).onClick(() => this.setViewMode(ViewMode.COMPACT))
             Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.rectangle_grid_1x2')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
               .width(48).height(48).backgroundColor(this.settings.viewMode === ViewMode.LARGE ? $r('app.color.selected_background') : $r('app.color.search_background')).onClick(() => this.setViewMode(ViewMode.LARGE))
+            Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.folder')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
+              .width(48).height(48).backgroundColor(this.settings.viewMode === ViewMode.FILES ? $r('app.color.selected_background') : $r('app.color.search_background')).onClick(() => this.setViewMode(ViewMode.FILES))
           }
           .id('library-view-modes')
           // Keep the complete system-reported title-button area. PC window
@@ -1136,8 +1146,8 @@ struct Index {
         .constraintSize({ minHeight: this.isPhone() ? this.phoneGridItemMinHeight() : 0 })
       }, (app: AppDescriptor): string => app.id)
     }
-    .columnsTemplate(this.settings.viewMode === ViewMode.COMPACT ? this.compactGridColumns() :
-      (this.settings.viewMode === ViewMode.LARGE ? this.largeGridColumns() : this.gridColumns()))
+    .columnsTemplate(this.catalogCardViewMode() === ViewMode.COMPACT ? this.compactGridColumns() :
+      (this.catalogCardViewMode() === ViewMode.LARGE ? this.largeGridColumns() : this.gridColumns()))
     .columnsGap(8)
     .rowsGap(this.isPhone() ? 8 : 4)
     .width('100%')
@@ -1147,7 +1157,7 @@ struct Index {
   private CatalogCard(app: AppDescriptor) {
     AppCard({
       app: app,
-      viewMode: this.settings.viewMode,
+      viewMode: this.catalogCardViewMode(),
       running: this.runningAppIds.has(app.id),
       useGlassEffect: this.settings.useGlassEffect,
       narrowPhone: this.isPhone(),
@@ -1227,7 +1237,9 @@ struct Index {
   @Builder
   private WindowsRefreshContent() {
     Refresh({ refreshing: $$this.refreshing }) {
-      if (this.scanning) {
+      if (this.settings.viewMode === ViewMode.FILES) {
+        FileBrowserView()
+      } else if (this.scanning) {
         Row({ space: 10 }) {
           LoadingProgress().width(20).height(20)
           Text('正在扫描应用目录…').fontColor($r('app.color.text_secondary'))

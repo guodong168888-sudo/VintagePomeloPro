@@ -29,6 +29,13 @@ export interface InputOverlaySnapshot {
 
 export type InputOverlayListener = (snapshot: InputOverlaySnapshot) => void;
 
+interface OverlayWindowRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
 const OVERLAY_DOMAIN = 0x0000;
 const OVERLAY_TAG = 'InputOverlay';
 
@@ -418,6 +425,18 @@ export class InputOverlayWindowCoordinator {
     }
     this.publish();
     setTimeout(() => this.runNextStressFrame(), 16);
+  }
+
+  /** Overlay window bounds in physical pixels. Size is the virtual-cursor clamp. */
+  getOverlayWindowRect(): OverlayWindowRect {
+    if (!this.overlayWindow) {
+      return { left: 0, top: 0, width: 0, height: 0 };
+    }
+    try {
+      return this.overlayWindow.getWindowProperties().windowRect;
+    } catch (_) {
+      return { left: 0, top: 0, width: 0, height: 0 };
+    }
   }
 
   async detach(reason: string): Promise<void> {
