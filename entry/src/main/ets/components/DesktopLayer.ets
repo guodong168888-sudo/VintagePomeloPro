@@ -40,15 +40,11 @@ class DesktopController extends XComponentController {
     if (rootId > 0) {
       try {
         testNapi.resizeRenderer(rootId, rect.surfaceWidth, rect.surfaceHeight);
-        // 悬浮窗态 (Index 小窗缩略): 跳过 root resize — 桌面分辨率保持全屏,
-        // 缩略显示靠 renderer letterbox (ComputeFitRect) 等比缩放。若把
-        // XComponent 小窗尺寸同步给 Wine 桌面, 桌面分辨率被改成小窗尺寸 →
-        // explorer 布局重排 → 全屏态时任务栏/开始菜单缺失或错位。
-        // 对齐 main_ui DesktopLayer desktopLauncherVisible 门控语义。
-        // 仅浮窗模式 (Index 承载) 生效; 非浮窗模式 (DesktopAbility 承载) 正常 resize。
-        if (AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode === DesktopWindowMode.FLOATING &&
-          WineWindowManager.getInstance().desktopLauncherVisible) {
-          hilog.info(DOMAIN, 'LIFE', '[XComp] launcher-visible: skip root resize, letterbox full desktop');
+        // 浮窗模式: 桌面分辨率由 prepareOutputForOrientation 设定, XComponent
+        // 只做 letterbox 显示口。动画中/缩略态/全屏态都不要 syncOutputSize,
+        // 否则 explorer 会再提交 desktop-shell。
+        if (AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode === DesktopWindowMode.FLOATING) {
+          hilog.info(DOMAIN, 'LIFE', '[XComp] floating: skip root resize, letterbox full desktop');
           return;
         }
         const s = WineWindowManager.getInstance().getEffectiveScale();

@@ -105,7 +105,7 @@ export default class DesktopAbility extends UIAbility {
           // a landscape launch. Apply the window chrome first, then wait for
           // the final rectangle before the first compositor resize.
           await this.applyDesktopWindowMode(mw);
-          await this.waitForRequestedOrientation(mw);
+          await DeviceCapabilityPolicy.waitForRequestedOrientation(mw, this.desktopOrientation, TAG);
           this.applyKeepScreenOn(mw);
 
           // 输出尺寸以 XComponent surface 为唯一权威 (onSurfaceChanged → 
@@ -159,6 +159,7 @@ export default class DesktopAbility extends UIAbility {
         this.attachVirtualDesktopStatus(target);
         this.immersiveMaximized = true;
         WineWindowManager.getInstance().enterImmersiveFullscreen(target, 0);
+        AppStorage.setOrCreate('vdImmersive', true);
         hilog.info(DOMAIN, TAG, '[DWA] pc-virtual auto immersive (DISABLE_HOVER)');
       } catch (e) {
         hilog.warn(DOMAIN, TAG, '[DWA] pc-virtual immersive setup partial: %{public}s',
@@ -201,29 +202,6 @@ export default class DesktopAbility extends UIAbility {
       } catch (_) {
       }
       hilog.info(DOMAIN, TAG, '[DWA] desktop window fullscreen layout applied');
-    }
-  }
-
-  private async waitForRequestedOrientation(target: window.Window): Promise<void> {
-    const needLandscape = this.desktopOrientation !== ScreenOrientationSetting.PORTRAIT;
-    for (let attempt = 0; attempt < 16; attempt++) {
-      try {
-        const rect = target.getWindowProperties().windowRect;
-        if (rect.width > 0 && rect.height > 0 &&
-          (needLandscape ? rect.width >= rect.height : rect.height >= rect.width)) {
-          hilog.info(DOMAIN, TAG, '[DWA] final window rect=%{public}dx%{public}d orientation=%{public}s',
-            rect.width, rect.height, this.desktopOrientation);
-          return;
-        }
-      } catch (_) {
-      }
-      await new Promise<void>((resolve: () => void) => setTimeout(resolve, 100));
-    }
-    try {
-      const rect = target.getWindowProperties().windowRect;
-      hilog.warn(DOMAIN, TAG, '[DWA] orientation settle timeout rect=%{public}dx%{public}d requested=%{public}s',
-        rect.width, rect.height, this.desktopOrientation);
-    } catch (_) {
     }
   }
 
@@ -317,12 +295,12 @@ export default class DesktopAbility extends UIAbility {
     target.on('windowStatusChange', (statusType: number) => {
       hilog.info(DOMAIN, TAG, '[DWA] windowStatusChange status=%{public}d immersive=%{public}s',
         statusType, this.immersiveMaximized ? 'yes' : 'no');
-      if (statusType === window.WindowStatusType.MAXIMIZE) {
+      if (statusType === window.WindowStatusType.MAXIMIZE ||
+        statusType === window.WindowStatusType.FULL_SCREEN) {
         if (!this.immersiveMaximized) {
           this.immersiveMaximized = true;
           WineWindowManager.getInstance().enterImmersiveFullscreen(target, 0);
         }
-      } else if (statusType === window.WindowStatusType.FULL_SCREEN) {
         AppStorage.setOrCreate('vdImmersive', true);
       } else {
         if (this.immersiveMaximized) {

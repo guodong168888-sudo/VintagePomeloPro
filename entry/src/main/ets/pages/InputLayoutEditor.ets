@@ -10,6 +10,7 @@ import {
   InputBindingKind,
   InputProfile,
   ThemeMode,
+  cloneControlElement,
   cloneInputProfile,
   createControlElement,
   createDefaultInputProfile,
@@ -142,7 +143,7 @@ struct InputLayoutEditor {
     this.resumeWineAbility();
   }
 
-  /** 绘制编辑参考网格：20px 细线 + 80px 加粗线，高密度便于对齐。 */
+  /** 绘制编辑参考网格：20vp 细线 + 80vp 加粗线。Canvas 默认单位是 vp。 */
   private drawEditorGrid(): void {
     if (this.previewW <= 0 || this.previewH <= 0) {
       hilog.info(DOMAIN, 'InputLayoutEditor', 'drawEditorGrid skip w=%{public}d h=%{public}d',
@@ -328,27 +329,20 @@ struct InputLayoutEditor {
   }
 
   private withElement(element: ControlElement, patch: ElementPatch): ControlElement {
-    return {
-      id: element.id,
-      type: element.type,
-      shape: patch.shape ?? element.shape,
-      x: patch.x ?? element.x,
-      y: patch.y ?? element.y,
-      scale: patch.scale ?? element.scale,
-      widthScale: patch.widthScale ?? element.widthScale ?? 1,
-      heightScale: element.heightScale ?? 1,
-      panelWidthRatio: element.panelWidthRatio,
-      panelHeightRatio: element.panelHeightRatio,
-      opacity: patch.opacity ?? element.opacity,
-      bindings: patch.bindings ?? element.bindings,
-      toggleSwitch: patch.toggleSwitch ?? element.toggleSwitch,
-      text: patch.text ?? element.text,
-      iconId: element.iconId,
-      visible: element.visible,
-      keyList: patch.keyList ?? element.keyList,
-      orientation: patch.orientation ?? element.orientation ?? 'vertical',
-      outputMode: patch.outputMode ?? element.outputMode ?? 'keys'
-    };
+    const next = cloneControlElement(element);
+    if (patch.x !== undefined) next.x = patch.x;
+    if (patch.y !== undefined) next.y = patch.y;
+    if (patch.scale !== undefined) next.scale = patch.scale;
+    if (patch.widthScale !== undefined) next.widthScale = patch.widthScale;
+    if (patch.text !== undefined) next.text = patch.text;
+    if (patch.shape !== undefined) next.shape = patch.shape;
+    if (patch.toggleSwitch !== undefined) next.toggleSwitch = patch.toggleSwitch;
+    if (patch.opacity !== undefined) next.opacity = patch.opacity;
+    if (patch.bindings !== undefined) next.bindings = patch.bindings;
+    if (patch.keyList !== undefined) next.keyList = patch.keyList;
+    if (patch.orientation !== undefined) next.orientation = patch.orientation;
+    if (patch.outputMode !== undefined) next.outputMode = patch.outputMode;
+    return next;
   }
 
   private elementPixelWidth(element: ControlElement): number {
@@ -357,6 +351,10 @@ struct InputLayoutEditor {
     }
     const viewportScale = this.previewControlScale();
     const widthScale = element.widthScale ?? 1;
+    const keyWidthRatio = element.keyWidthRatio;
+    if (keyWidthRatio !== undefined && keyWidthRatio > 0) {
+      return this.previewW * keyWidthRatio * (element.scale ?? 1) * widthScale;
+    }
     if (element.type === ControlElementType.TRACKPAD) {
       return 150 * (element.scale ?? 1) * widthScale * viewportScale;
     }
@@ -375,6 +373,10 @@ struct InputLayoutEditor {
     }
     const viewportScale = this.previewControlScale();
     const heightScale = element.heightScale ?? 1;
+    const keyHeightRatio = element.keyHeightRatio;
+    if (keyHeightRatio !== undefined && keyHeightRatio > 0) {
+      return this.previewH * keyHeightRatio * (element.scale ?? 1) * heightScale;
+    }
     if (element.type === ControlElementType.TRACKPAD) {
       return 100 * (element.scale ?? 1) * heightScale * viewportScale;
     }

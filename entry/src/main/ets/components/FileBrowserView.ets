@@ -35,10 +35,13 @@ interface DriveRoot {
 
 @Component
 export struct FileBrowserView {
+  @Prop topInsetVp: number = 0;
+  @Prop bottomInsetVp: number = 0;
   @State engineState: EngineState = EngineState.STOPPED;
   @State curDir: string = DRIVE_C;
   @State entries: FileEntry[] = [];
   @State atRootList: boolean = true;
+  @State private viewW: number = 0;
   private iconFail: Set<string> = new Set<string>();
 
   private onEngine = (state: EngineState, _message: string): void => {
@@ -53,6 +56,10 @@ export struct FileBrowserView {
 
   aboutToDisappear(): void {
     WineEngineService.getInstance().unsubscribe(this.onEngine);
+  }
+
+  private compactRows(): boolean {
+    return this.viewW > 0 && this.viewW < 560;
   }
 
   private zRoot(): string {
@@ -309,7 +316,8 @@ export struct FileBrowserView {
       if (this.rowKindOf(entry) === 'exe' && entry.icon) {
         Image(`file://${entry.icon}`)
           .width(26).height(26)
-          .margin({ right: 2 })
+          .margin({ right: 8 })
+          .objectFit(ImageFit.Contain)
       } else {
         SymbolGlyph(this.rowKindOf(entry) === 'dir' ? $r('sys.symbol.folder_fill') :
           this.rowKindOf(entry) === 'exe' ? $r('sys.symbol.square_grid_2x2') : $r('sys.symbol.doc'))
@@ -317,23 +325,31 @@ export struct FileBrowserView {
           .fontColor([this.rowKindOf(entry) === 'dir' ? $r('app.color.accent') :
             this.rowKindOf(entry) === 'exe' ? $r('app.color.accent') : $r('app.color.text_secondary')])
           .width(28)
+          .margin({ right: 8 })
       }
       Text(entry.name)
+        .fontSize(14)
         .fontColor(this.rowKindOf(entry) === 'other' ? $r('app.color.text_secondary') : $r('app.color.text_primary'))
         .layoutWeight(1)
         .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-      Text(this.rowKindOf(entry) === 'dir' ? '—' : this.fmtSize(entry.size))
-        .width(72).fontSize(11)
-        .fontColor($r('app.color.text_secondary'))
-        .textAlign(TextAlign.End).maxLines(1)
-      Text(this.fmtTime(entry.mtime))
-        .width(126).fontSize(11)
-        .fontColor($r('app.color.text_secondary'))
-        .textAlign(TextAlign.End).maxLines(1)
+      if (!this.compactRows()) {
+        Text(this.rowKindOf(entry) === 'dir' ? '—' : this.fmtSize(entry.size))
+          .width(72).fontSize(11)
+          .fontColor($r('app.color.text_secondary'))
+          .textAlign(TextAlign.End).maxLines(1)
+        Text(this.fmtTime(entry.mtime))
+          .width(126).fontSize(11)
+          .fontColor($r('app.color.text_secondary'))
+          .textAlign(TextAlign.End).maxLines(1)
+      }
       Row() {
         if (this.rowKindOf(entry) === 'exe') {
           Button('启动')
             .height(32)
+            .padding({ left: 8, right: 8 })
+            .fontSize(12)
+            .fontColor($r('app.color.text_primary'))
+            .backgroundColor($r('app.color.selected_background'))
             .onClick(() => this.launchExe(this.fullPath(entry.name)))
         } else if (this.rowKindOf(entry) === 'dir') {
           SymbolGlyph($r('sys.symbol.chevron_right'))
@@ -341,8 +357,8 @@ export struct FileBrowserView {
             .fontColor([$r('app.color.text_secondary')])
         }
       }
-      .width(88)
-      .margin({ left: 14 })
+      .width(this.compactRows() ? 64 : 88)
+      .margin({ left: this.compactRows() ? 6 : 14 })
       .justifyContent(FlexAlign.End)
       .alignItems(VerticalAlign.Center)
     }
@@ -381,20 +397,26 @@ export struct FileBrowserView {
 
   build() {
     Column() {
-      Row() {
+      Row({ space: 8 }) {
         if (!this.atRootList) {
-          Button('← 上级目录')
-            .height(32)
-            .backgroundColor($r('app.color.search_background'))
-            .onClick((): void => { this.goUp(); })
+          Button({ type: ButtonType.Circle }) {
+            SymbolGlyph($r('sys.symbol.chevron_up'))
+              .fontSize(18)
+              .fontColor([$r('app.color.text_primary')])
+          }
+          .width(36).height(36)
+          .backgroundColor($r('app.color.search_background'))
+          .onClick((): void => { this.goUp(); })
         }
         Text(this.displayPath())
+          .fontSize(14)
           .fontColor($r('app.color.text_secondary'))
-          .height(32)
-          .margin({ left: 10 }).layoutWeight(1)
+          .height(36)
+          .layoutWeight(1)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
       }
-      .width('100%').padding({ left: 14, right: 14, top: 10, bottom: 6 })
+      .width('100%').padding({ left: 14, right: 14, top: 8, bottom: 6 })
+      .alignItems(VerticalAlign.Center)
 
       if (this.atRootList) {
         List({ space: 1 }) {
@@ -425,5 +447,9 @@ export struct FileBrowserView {
     }
     .width('100%')
     .layoutWeight(1)
+    .padding({ top: this.topInsetVp, bottom: this.bottomInsetVp })
+    .onAreaChange((_oldValue: Area, area: Area): void => {
+      this.viewW = area.width as number;
+    })
   }
 }
