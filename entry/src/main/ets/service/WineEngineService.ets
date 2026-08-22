@@ -624,7 +624,7 @@ export class WineEngineService {
       } catch (error) {
         hilog.error(DOMAIN, TAG, 'prefix user-data backup failed: %{public}s', JSON.stringify(error));
         this.setState(EngineState.ERROR, '备份文档或注册表失败，已中止重置');
-        throw error;
+        throw new Error('备份文档或注册表失败: ' + JSON.stringify(error));
       }
     }
     testNapi.resetWinePrefix();
@@ -636,7 +636,7 @@ export class WineEngineService {
       } catch (error) {
         hilog.error(DOMAIN, TAG, 'prefix user-data restore failed: %{public}s', JSON.stringify(error));
         this.setState(EngineState.ERROR, '还原文档或注册表失败，备份仍在 cache/wine-reset-keep');
-        throw error;
+        throw new Error('还原文档或注册表失败: ' + JSON.stringify(error));
       }
     } else {
       removeRecursive(RESET_KEEP_DIR);
