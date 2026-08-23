@@ -124,6 +124,7 @@ private:
     FitRect letterbox_;  // Letterbox 适配矩形 (ComputeFitRect, 保持宽高比)
     int bufW_ = 0, bufH_ = 0;  // 上次 SET_BUFFER_GEOMETRY 的值, 避免重复调用
     int lastLoggedW_ = 0, lastLoggedH_ = 0;  // 上次输出 resize 日志时的 surface 尺寸
+    uint64_t skipFrames_ = 0;                // 诊断: 无新帧跳过 swap 计数
     std::thread thread_;
     std::atomic<bool> running_{false};
     /** 后台/窗口不可见时暂停 GPU 渲染 (vsync/eglSwapBuffers 在 surface 不可呈现
