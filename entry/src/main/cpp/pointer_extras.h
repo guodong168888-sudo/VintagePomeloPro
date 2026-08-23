@@ -49,9 +49,10 @@ public:
     bool HasRelativePointer() const;
 
     // -- Host 光标锁定 (dinput 相对模式的系统侧配套) --
-    // wine 建立 Lock 约束 = 游戏进入"隐藏光标无限移动"的相对模式 (FPS 视角)。
-    // host 侧同步两件事: OH_WindowManager_LockCursor 冻结系统光标, tsfn 通知
-    // ets pointer.setPointerVisible(false) 隐藏光标。confine 不触发。
+    // wine 创建 zwp_relative_pointer_v1 = 真相对模式 (光标隐藏+约束+焦点一致)。
+    // Lock 约束本身 ≠ 相对模式 (红警2 主菜单可见光标也会挂 Lock)。
+    // host 侧: OH_WindowManager_LockCursor 冻结系统光标, tsfn 通知 ets
+    // pointer.setPointerVisible(false)。confine 不触发。
     static void RegisterHostWindow(int32_t windowId);
     void SetPointerLockCallback(std::function<void(bool)> cb);
 

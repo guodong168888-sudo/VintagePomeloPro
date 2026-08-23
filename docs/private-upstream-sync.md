@@ -4,7 +4,47 @@
 
 基线：WineHua `VintagePomeloMaster` @ `ba7218a`
 
-> **同步基线标记**：最新合并到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `1036ada`）。下次同步先 `git log 1036ada..origin/master --oneline`，避免重复合并。
+> **同步基线标记**：最新核对到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `98eaca5`）。下次同步先 `git fetch winehua && git log 98eaca5..winehua/master --oneline`，避免重复合并。
+
+### 2026-08-23 WineHua master 输入/合成器同步（ff76a8f..98eaca5）
+
+- 分支：`feature/sync-winehua-ff76a8f`（基于 VintagePomeloPro `origin/main` `7986595`）。
+- 原则：保留本仓 `main` 的 UI 与既有修复（浮窗桌面可恢复、PC 沉浸全屏还原钮、蓝牙键盘走桌面 XComponent、宿主 IME、1.2.8 产品身份）；只 overlay WineHua 输入/合成器功能。冲突文件从不整文件采用上游。
+- 已 cherry-pick -x（功能链，上游 SHA → 本地）：
+
+  | 上游 SHA | 本地 SHA | 说明 |
+  | --- | --- | --- |
+  | `ff76a8f` | `fea424b` | dinput 相对模式：ArkTS `rawDelta` + `OH_WindowManager_LockCursor` |
+  | `dd6e11d` | `0bf9d17` | 合成器快照 + 锁外 blit |
+  | `6d4eb5a` | `bfbc0d0` | 桌面合成局部化 R + BlitScaled `-O2` |
+  | `c4e0e01` | `d3333e3` | 相对灵敏度固定系数 2.5（随后收口到 ArkTS） |
+  | `cf63187` | `d543481` | BlitScaled 拆文件 + host 测试 |
+  | `98b87ce` | `aeee93b` | 回退 4 采样；`-O2` 挂到 `compositor_blit.cpp` |
+  | `9742eba` | `66728dd` | RA2 诊断日志（随后被 `affcb98` 清掉） |
+  | `498d873` | `1fa9d7f` | 相对模式冻结死锁：IPC 出 mutex；冻结挂到 relative_pointer |
+  | `f5999b6` | `7014887` | 全屏 Toplevel R = fit 后内容区 |
+  | `7a805bd` | `21a8948` | 全屏 SHM 直传放宽 |
+  | `7d68fa8` | `158666d` | 输入坐标锚定桌面系（直传点击不错位） |
+  | `affcb98` | `fefed3e` | 高危 4 项：partial 黑底裁剪、tsfn 原子、LockCursor 工作线程、剩余 0 才解锁 |
+  | `110b24f` | `e1eb62c` | `InputDeviceMapper`；scale 收口 ArkTS |
+  | `8918fe2` | `400cfdc` | DesktopLayer 补同一套设备校准 |
+  | `de57241` | `ed2ff8b` | 桌面中键 BTN_MIDDLE（只改 DesktopLayer） |
+  | `794cc9a` | `cba2e57` | 指针链路日志两处修复 |
+
+- 跳过：
+  - `13236b5`（Merge #66 VKD3D/DXVK）— 本仓已由 `0533eab` / `bdc895f` 移植
+  - merge commits `1d85ec6`、`550afff`
+  - `93c00ab`（版本 1.0.7→1.0.13）
+  - `06013b3` `b34e16a` `98eaca5`（CI / README / changelog）
+- 冲突处理（要点）：
+  - `CMakeLists.txt`：保留 `app_log.h` force-include、`libz.so`、`libnative_window_manager.so`；BlitScaled `-O2` 跟 `compositor_blit.cpp`
+  - `pointer_extras`：保留按 surface/client 的 `HasRelativePointerForSurface` / `SendRelativeMotion(surface, …)`；冻结与 IPC 按上游迁到 relative_pointer + 工作线程
+  - `input_manager`：相对增量用 ArkTS 已缩放的 rawΔ，但仍按 **当前 surface** 判定相对模式，不套全局 `HasRelativePointer()`
+  - `DesktopLayer.ets`：叠加 rawDelta 设备校准与中键；保留 `floating` 旁路、`eventGate`、XComponent `wine_desktop_xc` 键盘焦点
+  - `DesktopWindow.ets`：整页保持本仓 PC 沉浸还原钮，不引入上游旧页内 onMouse（鼠标在 DesktopLayer）
+  - `VirtualDesktopAbility.ets`：不恢复（本仓已删除）
+- 子模块 gitlink：未跟随上游 wine/dxvk/vkd3d 指针。
+- 验证：`make test`（geometry 52 + blit_scaled 402，0 failures）；`scripts/vpbuild.sh make hap`（winehua-dev，arm64-v8a，API 23）`BUILD SUCCESSFUL`，签名 HAP `entry/build/default/outputs/default/entry-default-signed.hap`。
 
 ### 2026-08-09 版本 1.1.7：sRGB、游戏鼠标与虚拟输入方案
 

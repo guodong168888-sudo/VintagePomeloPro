@@ -548,7 +548,7 @@ export struct DesktopLayer {
               hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE-MOVE tl=%{public}d px=(%{public}d,%{public}d) n=%{public}d',
                 tl, px, py, this.hoverLogCounter);
             }
-            // rawDelta 按设备校准 (与 WineWindow 同规则: 鼠标 2.5 / 触控板 0.75)
+            // rawDelta 按设备校准 (与 WineWindow 同规则: 鼠标 2.5 / 触控板 0.625)
             // — 收口 ArkTS 时此处漏乘, 桌面模式相对模式增量只有融合窗口的
             // 1/2.5, 同一鼠标两种手感; 绝对模式有差分自标定, 不受影响
             let rawDx = ev.rawDeltaX ?? 0;
