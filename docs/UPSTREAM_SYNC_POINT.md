@@ -1,17 +1,25 @@
 # 上游同步基线标记
 
 > 用途：标明本地产品线已合并到 WineHua 上游的哪个提交，避免重复合并/漏合并。
-> 下次同步前先执行：`git fetch winehua && git log LAST_MERGED_UPSTREAM_SHA..winehua/master --oneline`
+> 本地镜像分支：`mirror_master`（跟踪 `winehua/master`，只读对照，不 push）。
+> 维护命令：`git fetch winehua && git branch -f mirror_master winehua/master`
+> 下次同步前先执行：`git log e16d79b..mirror_master --oneline`
 
 | 项 | 值 |
 | --- | --- |
 | 上游仓库 | `https://github.com/winehua/WineHua` |
 | 上游分支 | `master` |
-| **最后核对的上游 SHA** | `98eaca5`（2026-08-23，WineHua CI/README/changelog 尖端；功能已吸收到 `794cc9a`） |
-| 合并方式 | 选择性 cherry-pick -x：只吸收输入/合成器功能，不上游品牌/版本号/CI/README |
-| 本地对应分支 | `feature/sync-winehua-ff76a8f`（合入 `main` 后以 main 为准） |
-| 本地对应提交 | `cba2e57`（`794cc9a` 指针日志修复）+ 本文档提交 |
-| 核对日期 | 2026-08-23 |
+| **最后核对的上游 SHA** | `e16d79b`（2026-08-24，`mirror_master` 尖端） |
+| 功能同步起点（用户指定） | `10a9e6caf33e0147363793947461417dd60a8372`（master 线等价 `189c27c`） |
+| 合并方式 | 选择性 cherry-pick -x：只吸收输入/渲染功能，不上游品牌/版本号/CI/README |
+| 本地对应分支 | `feature/sync-winehua-10a9e6c`（合入 `main` 后以 main 为准） |
+| 核对日期 | 2026-08-24 |
+
+## 已核对的上游增量（10a9e6c..e16d79b）
+
+从用户指定功能基线 `10a9e6c` 到 `winehua/master` 尖端 `e16d79b`。`98eaca5` 已在上一轮同步；本轮采纳 `189c27c`（光标门禁）、`15c53ee`（resize 强制重绘），跳过 `e16d79b`（CI mono）。
+
+明细见 `docs/private-upstream-sync.md`「2026-08-24 WineHua master 增量（10a9e6c..e16d79b）」。
 
 ## 已核对的上游增量（ff76a8f..98eaca5）
 

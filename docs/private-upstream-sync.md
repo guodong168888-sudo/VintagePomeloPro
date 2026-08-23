@@ -4,7 +4,30 @@
 
 基线：WineHua `VintagePomeloMaster` @ `ba7218a`
 
-> **同步基线标记**：最新核对到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `98eaca5`）。下次同步先 `git fetch winehua && git log 98eaca5..winehua/master --oneline`，避免重复合并。
+> **同步基线标记**：最新核对到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `e16d79b`，本地镜像 `mirror_master`）。下次同步先 `git fetch winehua && git branch -f mirror_master winehua/master && git log e16d79b..mirror_master --oneline`，避免重复合并。
+
+### 2026-08-24 WineHua master 增量（10a9e6c..e16d79b）
+
+- 分支：`feature/sync-winehua-10a9e6c`（基于 VintagePomeloPro `main` `c13e132`）。
+- 镜像：`mirror_master` @ `e16d79b`（`winehua/master` 本地只读跟踪）。
+- 原则：保留本仓 UI（浮窗桌面、PC 沉浸、DesktopAbility 模型、虚拟输入、产品身份）；只 overlay 上游输入/渲染功能。`10a9e6c` 与 `189c27c` 同题，只 pick master 线 `189c27c`。
+- 已 cherry-pick -x：
+
+  | 上游 SHA | 本地 SHA | 说明 |
+  | --- | --- | --- |
+  | `189c27c` | `9ed4594` | 光标隐藏/相对模式门禁：展示形态 + desktop root surface；native `toplevelId` 回调 |
+  | `15c53ee` | `98647a4` | 虚拟桌面 resize 后 `sizeDirty_` 强制 letterbox 重绘 |
+
+- 跳过：
+  - `98eaca5`（changelog CI，上一轮已同步）
+  - `e16d79b`（CI `BUILD_WINE_MONO=1`；私有 `vpbuild.sh` 已默认启用）
+  - `10a9e6c`（与 `189c27c` 重复，未双 pick）
+- 冲突处理（要点）：
+  - `pointer_extras`：保留 per-surface `SendRelativeMotion` / `HasRelativePointerForSurface`；叠加 `ApplyHostCursorLock(lock, toplevelId)` + desktop shell `isShell` 跳过冻结
+  - `WineWindowManager.ets`：吸收 `canHideCursor` / `applyPointerVisibility`；门禁适配私有 `desktopLauncherVisible` + `desktopAbilityForeground`（不引入上游 VirtualDesktopAbility）
+  - `egl_renderer`：采纳 `sizeDirty_` 路径，保留 `skipFrames_` 诊断计数
+- 子模块 gitlink：未跟随上游。
+- 验证：见合入 `main` 时的 `make test` + `scripts/vpbuild.sh make hap` 记录。
 
 ### 2026-08-23 WineHua master 输入/合成器同步（ff76a8f..98eaca5）
 
