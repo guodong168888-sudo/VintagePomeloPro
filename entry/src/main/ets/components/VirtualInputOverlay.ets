@@ -6,6 +6,8 @@ import {
   InputBinding,
   InputBindingKind,
   InputProfile,
+  MOUSE_LEFT_BUTTON,
+  MOUSE_RIGHT_BUTTON,
   createDefaultInputProfile,
   resolveVirtualJoystickDirection
 } from '../model/AppModels';
@@ -1378,12 +1380,32 @@ export struct VirtualInputOverlay {
       .id('virtual-element-' + element.id)
   }
 
+  private isMouseButtonElement(element: ControlElement): boolean {
+    const binding = (element.bindings ?? [])[0];
+    return binding !== undefined && binding.kind === InputBindingKind.MOUSE &&
+      (binding.code === MOUSE_LEFT_BUTTON || binding.code === MOUSE_RIGHT_BUTTON);
+  }
+
+  @Builder
+  private MouseButtonIcon(element: ControlElement) {
+    Image((element.bindings ?? [])[0].code === MOUSE_LEFT_BUTTON ?
+      $r('app.media.virtual_mouse_left') : $r('app.media.virtual_mouse_right'))
+      .width(Math.min(this.elementWidth(element), this.elementHeight(element)) * 0.58)
+      .height(Math.min(this.elementWidth(element), this.elementHeight(element)) * 0.58)
+      .objectFit(ImageFit.Contain)
+      .fillColor(this.winlatorTextColor(this.isElementPressed(element.id)))
+  }
+
   @Builder
   private ButtonElement(element: ControlElement) {
     Stack({ alignContent: Alignment.Center }) {
-      Text(element.text.length > 0 ? element.text : '键')
-        .fontSize(this.buttonLabelFontSize(element)).fontWeight(FontWeight.Medium).maxLines(1)
-        .fontColor(this.winlatorTextColor(this.isElementPressed(element.id)))
+      if (this.isMouseButtonElement(element)) {
+        this.MouseButtonIcon(element)
+      } else {
+        Text(element.text.length > 0 ? element.text : '键')
+          .fontSize(this.buttonLabelFontSize(element)).fontWeight(FontWeight.Medium).maxLines(1)
+          .fontColor(this.winlatorTextColor(this.isElementPressed(element.id)))
+      }
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))
     .borderRadius(this.elementRadius(element))
