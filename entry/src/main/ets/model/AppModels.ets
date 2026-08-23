@@ -512,8 +512,8 @@ export function resolveVirtualJoystickDirection(dx: number, dy: number, radius: 
   if (angle >= 67.5 && angle < 112.5) return { up: false, down: true, left: false, right: false };
   if (angle >= 112.5 && angle < 157.5) return { up: false, down: true, left: true, right: false };
   if (angle >= 157.5 || angle < -157.5) return { up: false, down: false, left: true, right: false };
-  if (angle >= -157.5 && angle < -112.5) return { up: true, down: false, left: false, right: false };
-  if (angle >= -112.5 && angle < -67.5) return { up: true, down: false, left: false, right: true };
+  if (angle >= -157.5 && angle < -112.5) return { up: true, down: false, left: true, right: false };
+  if (angle >= -112.5 && angle < -67.5) return { up: true, down: false, left: false, right: false };
   return { up: true, down: false, left: false, right: true };
 }
 
@@ -711,9 +711,9 @@ function defaultTemplateElements(): ControlElement[] {
     createControlElement(ControlElementType.D_PAD, 0.12, 0.70, '', dpadWASD()),
     createControlElement(ControlElementType.TRACKPAD, 0.68, 0.76, '视角', []),
     createControlElement(ControlElementType.BUTTON, 0.86, 0.62, '空格', [keyBinding(57)]),
-    createControlElement(ControlElementType.BUTTON, 0.94, 0.62, '左键', [mouseBinding(MOUSE_LEFT_BUTTON)]),
+    createControlElement(ControlElementType.BUTTON, 0.94, 0.62, '', [mouseBinding(MOUSE_LEFT_BUTTON)]),
     createControlElement(ControlElementType.BUTTON, 0.86, 0.84, 'E', [keyBinding(18)]),
-    createControlElement(ControlElementType.BUTTON, 0.94, 0.84, '右键', [mouseBinding(MOUSE_RIGHT_BUTTON)]),
+    createControlElement(ControlElementType.BUTTON, 0.94, 0.84, '', [mouseBinding(MOUSE_RIGHT_BUTTON)]),
     createControlElement(ControlElementType.BUTTON, 0.06, 0.16, 'Esc', [keyBinding(1)], ControlElementShape.ROUND_RECT, 0.72),
     createControlElement(ControlElementType.BUTTON, 0.14, 0.16, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT, 0.72, true),
     createControlElement(ControlElementType.BUTTON, 0.22, 0.16, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT, 0.72, true)
