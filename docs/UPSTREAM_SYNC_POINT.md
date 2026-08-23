@@ -1,17 +1,25 @@
 # 上游同步基线标记
 
 > 用途：标明本地产品线已合并到 WineHua 上游的哪个提交，避免重复合并/漏合并。
-> 下次同步前先执行：`git fetch origin && git log LAST_MERGED_UPSTREAM_SHA..origin/master --oneline`
+> 下次同步前先执行：`git fetch winehua && git log LAST_MERGED_UPSTREAM_SHA..winehua/master --oneline`
 
 | 项 | 值 |
 | --- | --- |
 | 上游仓库 | `https://github.com/winehua/WineHua` |
 | 上游分支 | `master` |
-| **最后合并的上游 SHA** | `1036ada`（2026-08-06，文档：固化全屏判定两套语义；其后无新提交） |
-| 合并方式 | 选择性 cherry-pick / 手动移植 + 等价内容人工核对 |
-| 本地对应分支 | `private/wine-engine-app` |
-| 本地对应提交 | `7b1c391`（1.1.7 功能提交；发布备忘见 `PRIVATE_1_1_7_RELEASE_AND_MERGE_MEMO.md`） |
-| 核对日期 | 2026-08-09 |
+| **最后核对的上游 SHA** | `98eaca5`（2026-08-23，WineHua CI/README/changelog 尖端；功能已吸收到 `794cc9a`） |
+| 合并方式 | 选择性 cherry-pick -x：只吸收输入/合成器功能，不上游品牌/版本号/CI/README |
+| 本地对应分支 | `feature/sync-winehua-ff76a8f`（合入 `main` 后以 main 为准） |
+| 本地对应提交 | `cba2e57`（`794cc9a` 指针日志修复）+ 本文档提交 |
+| 核对日期 | 2026-08-23 |
+
+## 已核对的上游增量（ff76a8f..98eaca5）
+
+从 `ff76a8f`（含）到 `winehua/master` 尖端 `98eaca5`。功能链已 cherry-pick 到
+`feature/sync-winehua-ff76a8f`，并叠在 VintagePomeloPro `main` 的 UI 上
+（浮窗桌面、PC 沉浸全屏、蓝牙键盘 XComponent 焦点、宿主 IME）。
+
+明细与跳过项见 `docs/private-upstream-sync.md`「2026-08-23 WineHua master 输入/合成器同步」。
 
 ## 已核对的上游增量（d9c667e..1036ada，共 5 个提交）
 

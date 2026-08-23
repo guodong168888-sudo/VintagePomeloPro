@@ -3,6 +3,7 @@ import { common } from '@kit.AbilityKit';
 import { display, window } from '@kit.ArkUI';
 import testNapi from 'libentry.so';
 import { WineWindowManager } from '../service/WineWindowManager';
+import { InputDeviceMapper } from '../service/InputDeviceMapper';
 import { EVDEV_KEY_ENTER, OH2EVDEV } from '../common/KeyMap';
 import { mapMouseButton } from '../common/MouseMap';
 import {
@@ -163,6 +164,9 @@ export struct DesktopLayer {
   private static readonly SCROLL_STEP_PX: number = 40; // 物理像素/滚动步, winewayland.drv 只处理 discrete
   // 物理鼠标右键: Press 时捕获目标 tl, Release 发给同一 tl (按下捕获语义)
   private rightBtnTl: number = 0;
+  // 物理鼠标中键: 同右键的按下捕获 (OHOS 只对左键合成 touch, 右/中键
+  // 仅经 onMouse 到达, 互不干扰, 故共用同一套捕获-配对状态机)
+  private midBtnTl: number = 0;
   // 物理鼠标左键: 同右键的按下捕获; mouseLeftActive 用于抑制 OHOS 为左键
   // 合成派发的 touch 事件 (见 onTouch 注释 — 合成 touch 会把手势状态机的
   // "等 Up 再补发 Press+Release" 作用到鼠标上, 静止点击被压成 0ms 脉冲,
@@ -533,9 +537,9 @@ export struct DesktopLayer {
           if (ev.action === MouseAction.Move) {
             const px = Math.round(vp2px(ev.x));
             const py = Math.round(vp2px(ev.y));
-            // 左右键按住拖动: 发给按下捕获的 tl; 否则按当前位置找目标
+            // 按键按住拖动: 发给按下捕获的 tl; 否则按当前位置找目标
             // (跨窗口 enter/leave 由注入层 ACT_MOVE 的焦点判定处理)
-            let tl = this.leftBtnTl || this.rightBtnTl;
+            let tl = this.leftBtnTl || this.rightBtnTl || this.midBtnTl;
             if (tl <= 0) {
               tl = testNapi.findToplevelAt(px, py) as number;
               if (tl <= 0) return;
@@ -544,7 +548,18 @@ export struct DesktopLayer {
               hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE-MOVE tl=%{public}d px=(%{public}d,%{public}d) n=%{public}d',
                 tl, px, py, this.hoverLogCounter);
             }
-            testNapi.sendPointerEvent(tl, MouseAction.Move, px, py, 0);
+            // rawDelta 按设备校准 (与 WineWindow 同规则: 鼠标 2.5 / 触控板 0.625)
+            // — 收口 ArkTS 时此处漏乘, 桌面模式相对模式增量只有融合窗口的
+            // 1/2.5, 同一鼠标两种手感; 绝对模式有差分自标定, 不受影响
+            let rawDx = ev.rawDeltaX ?? 0;
+            let rawDy = ev.rawDeltaY ?? 0;
+            const devId = ev.deviceId ?? 0;
+            if (devId > 0) {
+              const s = InputDeviceMapper.getInstance().getScale(devId);
+              rawDx *= s;
+              rawDy *= s;
+            }
+            testNapi.sendPointerEvent(tl, MouseAction.Move, px, py, 0, rawDx, rawDy);
             return;
           }
           if (ev.action !== MouseAction.Press && ev.action !== MouseAction.Release) return;
@@ -573,7 +588,7 @@ export struct DesktopLayer {
               testNapi.raiseToplevel(tl);
               InputRouter.getInstance().setActiveToplevel(tl);
               hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE-LEFT press tl=%{public}d px=(%{public}d,%{public}d)', tl, px, py);
-              testNapi.sendPointerEvent(tl, MouseAction.Press, px, py, btnLeft);
+              testNapi.sendPointerEvent(tl, MouseAction.Press, px, py, btnLeft, 0, 0, true);
             } else {
               if (this.leftBtnTl <= 0) {
                 this.mouseLeftActive = false;
@@ -586,25 +601,31 @@ export struct DesktopLayer {
             }
             return;
           }
-          if (ev.button !== MouseButton.Right) return;
-          const btnRight = mapMouseButton(2);
+          // ── 右键 / 中键: 共用按下捕获-释放配对 ──
+          // OHOS 只对左键合成 touch, 右/中键在 onTouch 无对应事件, 不会双发;
+          // 两键各自独立捕获 tl, 同按 (罕见) 也互不串扰
+          if (ev.button !== MouseButton.Right && ev.button !== MouseButton.Middle) return;
+          const isRight = ev.button === MouseButton.Right;
+          const btnCode = mapMouseButton(isRight ? 2 : 4);
+          const btnName = isRight ? 'RIGHT' : 'MIDDLE';
           if (ev.action === MouseAction.Press) {
             const tl: number = testNapi.findToplevelAt(px, py) as number;
             if (tl <= 0) {
-              this.rightBtnTl = 0;
-              hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE-RIGHT skipped (no toplevel at %{public}d,%{public}d)', px, py);
+              if (isRight) this.rightBtnTl = 0; else this.midBtnTl = 0;
+              hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE-%{public}s skipped (no toplevel at %{public}d,%{public}d)', btnName, px, py);
               return;
             }
-            this.rightBtnTl = tl;
+            if (isRight) this.rightBtnTl = tl; else this.midBtnTl = tl;
             testNapi.raiseToplevel(tl);
             InputRouter.getInstance().setActiveToplevel(tl);
-            hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE-RIGHT press tl=%{public}d px=(%{public}d,%{public}d)', tl, px, py);
-            testNapi.sendPointerEvent(tl, MouseAction.Press, px, py, btnRight);
+            hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE-%{public}s press tl=%{public}d px=(%{public}d,%{public}d)', btnName, tl, px, py);
+            testNapi.sendPointerEvent(tl, MouseAction.Press, px, py, btnCode, 0, 0, true);
           } else {
-            if (this.rightBtnTl <= 0) return;
-            hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE-RIGHT release tl=%{public}d px=(%{public}d,%{public}d)', this.rightBtnTl, px, py);
-            testNapi.sendPointerEvent(this.rightBtnTl, MouseAction.Release, px, py, btnRight);
-            this.rightBtnTl = 0;
+            const btnTl = isRight ? this.rightBtnTl : this.midBtnTl;
+            if (btnTl <= 0) return;
+            hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE-%{public}s release tl=%{public}d px=(%{public}d,%{public}d)', btnName, btnTl, px, py);
+            testNapi.sendPointerEvent(btnTl, MouseAction.Release, px, py, btnCode);
+            if (isRight) this.rightBtnTl = 0; else this.midBtnTl = 0;
           }
         } catch (e) {
           hilog.error(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE handler exception: %{public}s', JSON.stringify(e));

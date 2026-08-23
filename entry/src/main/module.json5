@@ -22,6 +22,9 @@
         "name": "ohos.permission.SET_WINDOW_TRANSPARENT"
       },
       {
+        "name": "ohos.permission.LOCK_WINDOW_CURSOR"
+      },
+      {
         "name": "ohos.permission.MICROPHONE",
         "reason": "$string:microphone_permission",
         "usedScene": {

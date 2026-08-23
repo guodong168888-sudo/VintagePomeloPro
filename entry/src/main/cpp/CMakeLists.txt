@@ -43,6 +43,7 @@ add_library(entry SHARED
     phone_adapter/phone_virgl_relay.cpp
     wayland_server.cpp
     wl_core.cpp
+    compositor/compositor_blit.cpp
     compositor/toplevel_manager.cpp
     compositor/move_grab.cpp
     compositor/compositor_utils.cpp
@@ -73,6 +74,8 @@ add_library(entry SHARED
 # 应用日志文件 sink：force-include app_log.h，让所有 OH_LOG_* 调用在保持
 # hilog 行为不变的同时追加写入 Download/.../logs/native-YYYYMMDD.log。
 target_compile_options(entry PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/app_log.h)
+# BlitScaled 热路径单独 -O2，其余保持 -O0 便于调试。
+set_source_files_properties(compositor/compositor_blit.cpp PROPERTIES COMPILE_OPTIONS "-O2")
 
 target_link_libraries(entry PUBLIC
     libace_napi.z.so
@@ -88,6 +91,7 @@ target_link_libraries(entry PUBLIC
     libipc_capi.so
     libohaudio.so
     libz.so
+    libnative_window_manager.so
     ${WAYLAND_LIBS_DIR}/libwayland-server.so.0
 )
 

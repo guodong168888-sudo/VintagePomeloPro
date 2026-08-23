@@ -99,6 +99,7 @@ export default class DesktopAbility extends UIAbility {
         const mw = windowStage.getMainWindowSync();
         if (mw) {
           this.mainWindow = mw;
+          testNapi.registerHostWindow(mw.getWindowProperties().id);
           // The orientation request and the immersive layout are asynchronous.
           // Measuring windowRect before both transactions settle can feed the
           // old portrait rectangle into Wayland and leave a white strip after

@@ -73,6 +73,7 @@ export default class WineWindowAbility extends UIAbility {
       WineWindowManager.getInstance().registerWindow(this.toplevelId, mainWindow);
       this.mainWindow = mainWindow;
       this.applyKeepScreenOn(mainWindow);
+      testNapi.registerHostWindow(mainWindow.getWindowProperties().id);
       // 注册 WindowStage 引用 (popup 子窗口创建入口)
       WineWindowManager.getInstance().registerWindowStage(this.toplevelId, windowStage);
 
