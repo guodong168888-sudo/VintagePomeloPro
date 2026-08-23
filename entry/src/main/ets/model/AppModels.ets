@@ -512,8 +512,8 @@ export function resolveVirtualJoystickDirection(dx: number, dy: number, radius: 
   if (angle >= 67.5 && angle < 112.5) return { up: false, down: true, left: false, right: false };
   if (angle >= 112.5 && angle < 157.5) return { up: false, down: true, left: true, right: false };
   if (angle >= 157.5 || angle < -157.5) return { up: false, down: false, left: true, right: false };
-  if (angle >= -157.5 && angle < -112.5) return { up: true, down: false, left: false, right: false };
-  if (angle >= -112.5 && angle < -67.5) return { up: true, down: false, left: false, right: true };
+  if (angle >= -157.5 && angle < -112.5) return { up: true, down: false, left: true, right: false };
+  if (angle >= -112.5 && angle < -67.5) return { up: true, down: false, left: false, right: false };
   return { up: true, down: false, left: false, right: true };
 }
 

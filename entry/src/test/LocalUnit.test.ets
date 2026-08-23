@@ -206,6 +206,16 @@ export default function localUnitTest() {
       expect(diagonal.up).assertTrue();
       expect(diagonal.right).assertTrue();
       expect(diagonal.down || diagonal.left).assertFalse();
+      const upLeft = resolveVirtualJoystickDirection(-70, -70, 100, 15, true);
+      expect(upLeft.up).assertTrue();
+      expect(upLeft.left).assertTrue();
+      expect(upLeft.down || upLeft.right).assertFalse();
+      const up = resolveVirtualJoystickDirection(0, -70, 100, 15, true);
+      expect(up.up).assertTrue();
+      expect(up.down || up.left || up.right).assertFalse();
+      const left = resolveVirtualJoystickDirection(-70, 0, 100, 15, true);
+      expect(left.left).assertTrue();
+      expect(left.up || left.down || left.right).assertFalse();
       const fourWay = resolveVirtualJoystickDirection(70, -25, 100, 15, false);
       expect(fourWay.right).assertTrue();
       expect(fourWay.up).assertFalse();
