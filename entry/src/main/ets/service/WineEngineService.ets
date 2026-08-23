@@ -11,7 +11,9 @@ import {
   NativeProcessInfo,
   ScreenOrientationSetting,
   WinePresentationMode,
-  canTransitionEngineState
+  canTransitionEngineState,
+  LaunchKind,
+  resolveWinePresentationMode
 } from '../model/AppModels';
 import { AppSettingsStore } from './AppSettingsStore';
 import { syncManagedSmoke } from './SmokeRunner';
@@ -35,6 +37,11 @@ const PREFIX_SYSTEM_REG = FILES_BASE + '/.wine/system.reg';
 // ArkTS 不再用固定阶段死线: native 协调者会发 phase:/fail:/wine-ready 事件,
 // 等待只由事件结束。下面的安全网仅在"长时间完全无事件"时兜底, 正常不会触发。
 const ENGINE_NO_EVENT_SAFETY_MS = 30 * 60 * 1000;
+const PREFIX_DIR = FILES_BASE + '/.wine';
+const RESET_KEEP_DIR = '/data/storage/el2/base/cache/wine-reset-keep';
+const PREFIX_USER_KEEP_FOLDERS: string[] = [
+  'Documents', 'Desktop', 'Pictures', 'Music', 'Videos', 'Saved Games'
+];
 const HOST_SHADOW_DXVK = 'shadow-precise-dirty-ring-inline-upload-coverage-sort';
 const HOST_SHADOW_VKD3D = 'shadow-precise';
 
@@ -131,6 +138,136 @@ function pathMatchesRequirement(item: RuntimePathRequirement): boolean {
 function isCommandScript(executable: string): boolean {
   const lower = executable.trim().toLowerCase();
   return lower.endsWith('.bat') || lower.endsWith('.cmd');
+}
+
+function ensureDirectory(path: string): void {
+  if (!pathExists(path)) {
+    fs.mkdirSync(path, true);
+  }
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return fs.statSync(path).isDirectory();
+  } catch (_) {
+    return false;
+  }
+}
+
+function removeRecursive(path: string): void {
+  if (!pathExists(path)) {
+    return;
+  }
+  try {
+    const stat = fs.lstatSync(path);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      fs.unlinkSync(path);
+      return;
+    }
+  } catch (_) {
+    return;
+  }
+  try {
+    const names = fs.listFileSync(path);
+    for (let i = 0; i < names.length; i++) {
+      removeRecursive(`${path}/${names[i]}`);
+    }
+  } catch (_) {}
+  try {
+    fs.rmdirSync(path);
+  } catch (_) {}
+}
+
+function copyRecursiveOrThrow(source: string, target: string): void {
+  const stat = fs.statSync(source);
+  if (!stat.isDirectory()) {
+    const slash = target.lastIndexOf('/');
+    if (slash > 0) {
+      ensureDirectory(target.substring(0, slash));
+    }
+    fs.copyFileSync(source, target);
+    return;
+  }
+  ensureDirectory(target);
+  const names = fs.listFileSync(source);
+  for (let i = 0; i < names.length; i++) {
+    copyRecursiveOrThrow(`${source}/${names[i]}`, `${target}/${names[i]}`);
+  }
+}
+
+function backupPrefixUserData(keepDir: string): void {
+  removeRecursive(keepDir);
+  ensureDirectory(keepDir);
+  if (!pathExists(PREFIX_DIR)) {
+    return;
+  }
+  const regs: string[] = ['user.reg', 'system.reg', 'userdef.reg'];
+  for (let i = 0; i < regs.length; i++) {
+    const src = `${PREFIX_DIR}/${regs[i]}`;
+    if (pathExists(src)) {
+      copyRecursiveOrThrow(src, `${keepDir}/${regs[i]}`);
+    }
+  }
+  const users = `${PREFIX_DIR}/drive_c/users`;
+  if (!pathExists(users) || !isDirectory(users)) {
+    return;
+  }
+  let names: string[] = [];
+  try {
+    names = fs.listFileSync(users);
+  } catch (_) {
+    return;
+  }
+  for (let u = 0; u < names.length; u++) {
+    const userDir = `${users}/${names[u]}`;
+    if (!isDirectory(userDir)) {
+      continue;
+    }
+    for (let f = 0; f < PREFIX_USER_KEEP_FOLDERS.length; f++) {
+      const folder = PREFIX_USER_KEEP_FOLDERS[f];
+      const src = `${userDir}/${folder}`;
+      if (pathExists(src)) {
+        copyRecursiveOrThrow(src, `${keepDir}/users/${names[u]}/${folder}`);
+      }
+    }
+  }
+}
+
+function restorePrefixUserData(keepDir: string): void {
+  if (!pathExists(keepDir)) {
+    return;
+  }
+  ensureDirectory(PREFIX_DIR);
+  const regs: string[] = ['user.reg', 'system.reg', 'userdef.reg'];
+  for (let i = 0; i < regs.length; i++) {
+    const src = `${keepDir}/${regs[i]}`;
+    if (pathExists(src)) {
+      copyRecursiveOrThrow(src, `${PREFIX_DIR}/${regs[i]}`);
+    }
+  }
+  const usersKeep = `${keepDir}/users`;
+  if (!pathExists(usersKeep) || !isDirectory(usersKeep)) {
+    return;
+  }
+  let names: string[] = [];
+  try {
+    names = fs.listFileSync(usersKeep);
+  } catch (_) {
+    return;
+  }
+  for (let u = 0; u < names.length; u++) {
+    const userDir = `${usersKeep}/${names[u]}`;
+    if (!isDirectory(userDir)) {
+      continue;
+    }
+    for (let f = 0; f < PREFIX_USER_KEEP_FOLDERS.length; f++) {
+      const folder = PREFIX_USER_KEEP_FOLDERS[f];
+      const src = `${userDir}/${folder}`;
+      if (pathExists(src)) {
+        copyRecursiveOrThrow(src, `${PREFIX_DIR}/drive_c/users/${names[u]}/${folder}`);
+      }
+    }
+  }
 }
 
 export class WineEngineService {
@@ -358,14 +495,15 @@ export class WineEngineService {
   }
 
   private selectedD3DBackend(): string {
-    const mode = AppStorage.get<string>('winehua.render.mode') ?? 'auto';
+    const stored = AppSettingsStore.getInstance().getRenderMode();
+    const mode = stored.length > 0 ? stored :
+      (AppStorage.get<string>('winehua.render.mode') ?? 'auto');
     let backend = 'dxvk_legacy';
     if (mode === 'virgl') {
       backend = 'wined3d';
     } else if (mode === 'dxvk_1_10') {
       backend = 'dxvk_legacy';
     } else if (this.gpuSupportsDxvk26()) {
-      // auto / dxvk_2_6: Maleoon/Mali-G 920+ → DXVK 2.6 + VKD3D
       backend = 'dxvk_modern_2_6';
     }
     AppStorage.setOrCreate<string>('winehua.render.resolved', backend);
@@ -475,10 +613,50 @@ export class WineEngineService {
     await this.stopAll();
   }
 
-  async resetPrefix(): Promise<void> {
+  async resetPrefix(preserveUserData?: boolean, homeDirectory?: string): Promise<void> {
+    const preserve = preserveUserData ??
+      AppSettingsStore.getInstance().getGlobalSettings().preserveUserDataOnReset;
+    const home = homeDirectory ?? '';
     await this.stopAll();
+    if (preserve) {
+      try {
+        backupPrefixUserData(RESET_KEEP_DIR);
+      } catch (error) {
+        hilog.error(DOMAIN, TAG, 'prefix user-data backup failed: %{public}s', JSON.stringify(error));
+        this.setState(EngineState.ERROR, '备份文档或注册表失败，已中止重置');
+        throw new Error('备份文档或注册表失败: ' + JSON.stringify(error));
+      }
+    }
     testNapi.resetWinePrefix();
+    await this.forceRefreshRuntime();
+    if (preserve) {
+      try {
+        restorePrefixUserData(RESET_KEEP_DIR);
+        removeRecursive(RESET_KEEP_DIR);
+      } catch (error) {
+        hilog.error(DOMAIN, TAG, 'prefix user-data restore failed: %{public}s', JSON.stringify(error));
+        this.setState(EngineState.ERROR, '还原文档或注册表失败，备份仍在 cache/wine-reset-keep');
+        throw new Error('还原文档或注册表失败: ' + JSON.stringify(error));
+      }
+    } else {
+      removeRecursive(RESET_KEEP_DIR);
+    }
+    if (home.length > 0) {
+      const settings = AppSettingsStore.getInstance().getGlobalSettings();
+      const presentation = resolveWinePresentationMode(
+        LaunchKind.WINE_EXE, settings.defaultDisplayMode,
+        AppSettingsStore.getInstance().usesManagedWineWindows());
+      await this.ensureReady(settings.defaultDisplayMode, presentation, home);
+      return;
+    }
     this.setState(EngineState.STOPPED, 'Wine 环境已重置');
+  }
+
+  private async forceRefreshRuntime(): Promise<void> {
+    try { fs.unlinkSync(RUNTIME_VERSION_MARKER); } catch (_) {}
+    try { fs.unlinkSync(PREFIX_RUNTIME_VERSION_MARKER); } catch (_) {}
+    const bundled = this.getBundledRuntimeVersion();
+    await this.ensureRuntimeInstalled(bundled);
   }
 
   private waitForReady(): Promise<boolean> {

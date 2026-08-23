@@ -4,8 +4,12 @@ import {
   EVDEV_KEY_BACKSPACE,
   EVDEV_KEY_ENTER,
   EVDEV_KEY_LEFTSHIFT,
+  OH2EVDEV,
   asciiToEvdevKey
 } from '../common/KeyMap';
+import { InputRouter } from '../service/InputRouter';
+import { GamepadManager } from '../service/GamepadManager';
+import { WineWindowManager } from '../service/WineWindowManager';
 import {
   DisplayMode,
   GlobalSettings,
@@ -107,6 +111,8 @@ struct InputOverlayPage {
   private static readonly TOUCHPAD_TAP_CONFIRM_MS: number = 150;
   private mouseLeftActive: boolean = false;
   private mouseLeftReleaseTimer: number = -1;
+  private lastEnterDownTs: number = 0;
+  private static readonly ENTER_SYNTH_WINDOW_MS: number = 1000;
 
   aboutToAppear(): void {
     this.listener = (snapshot: InputOverlaySnapshot): void => {
@@ -443,14 +449,45 @@ struct InputOverlayPage {
       this.hostImeReseedPending = true;
       this.hostImeBuffer = InputOverlayPage.HOST_SENTINEL;
       this.hostImeContent = InputOverlayPage.HOST_SENTINEL;
-      focusController.requestFocus('wine-host-keyboard-input');
+      // TextInput 刚从 focusable(false) 切过来, 等一帧再抢焦点, 否则 requestFocus 落空。
+      setTimeout((): void => {
+        try {
+          this.getUIContext().getFocusController().requestFocus('wine-host-keyboard-input');
+        } catch (_) {
+        }
+      }, 32);
     } else {
       focusController.clearFocus();
       testNapi.wineTextInputSetArmed(false);
       this.pendingHostCommit = '';
       this.hostImeBuffer = '';
       this.hostImeContent = '';
+      // overlay 子窗口无法直接 requestFocus 父窗 XComponent; DesktopLayer 监听此 token。
+      AppStorage.setOrCreate('wineDesktopKeyFocusToken', Date.now());
     }
+  }
+
+  /** 宿主键盘关闭时转发蓝牙/实体 KeyEvent; 打开时不拦截, 拼音走 TextInput/IME。 */
+  private handleHardwareKey(ev: KeyEvent): void {
+    if (this.hostKeyboardActive) return;
+    const rootId = WineWindowManager.getInstance().getDesktopRootId();
+    if (rootId <= 0) return;
+    ev.stopPropagation();
+    if (GamepadManager.getInstance().handleKey(ev.keyCode, ev.type === KeyType.Down)) return;
+    const code = OH2EVDEV[ev.keyCode] ?? 0;
+    if (code <= 0) return;
+    const pressed = ev.type === KeyType.Down;
+    if (InputRouter.getInstance().getActiveToplevel() <= 0) {
+      InputRouter.getInstance().setActiveToplevel(rootId);
+    }
+    if (code === EVDEV_KEY_ENTER) {
+      if (pressed) {
+        this.lastEnterDownTs = Date.now();
+      } else if (Date.now() - this.lastEnterDownTs > InputOverlayPage.ENTER_SYNTH_WINDOW_MS) {
+        InputRouter.getInstance().sendKey(EVDEV_KEY_ENTER, true);
+      }
+    }
+    InputRouter.getInstance().sendKey(code, pressed);
   }
 
   /** 哨兵保活: 程序性重填, onChange 按 oldContent→sentinel 识别并忽略。 */
@@ -831,7 +868,7 @@ struct InputOverlayPage {
       // 宿主键盘载体: 平时不可见/不参与命中, 聚焦后唤起系统输入法。
       TextInput({ placeholder: '', text: this.hostImeBuffer, controller: this.hostImeController })
         .id('wine-host-keyboard-input')
-        .focusable(true)
+        .focusable(this.hostKeyboardActive)
         .type(InputType.Normal)
         .enterKeyType(EnterKeyType.NEW_LINE)
         .width(40).height(40)
@@ -855,6 +892,7 @@ struct InputOverlayPage {
           controlBarPositionX: this.settings.controlBarPositionX,
           controlBarPositionY: this.settings.controlBarPositionY,
           touchpadMode: this.touchpadMode,
+          showCursor: this.settings.virtualMouseConfig.showCursor,
           onOpenLayoutEditor: (): void => { this.openInputEditor('input-layout'); },
           onOpenKeyMappingEditor: (): void => { this.openInputEditor('key-mapping'); },
           onToggleHostKeyboard: (): void => { this.toggleHostKeyboard(); },
@@ -910,6 +948,7 @@ struct InputOverlayPage {
     .width('100%').height('100%')
     .backgroundColor('#00000000')
     .id('wine-input-overlay-page')
+    .onKeyEvent((ev: KeyEvent): void => this.handleHardwareKey(ev))
     .onAreaChange((_oldValue: Area, area: Area): void => {
       this.overlayW = area.width as number;
       this.overlayH = area.height as number;

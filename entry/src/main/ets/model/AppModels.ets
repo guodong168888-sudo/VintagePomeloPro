@@ -43,7 +43,8 @@ export enum SessionState {
 export enum ViewMode {
   GRID = 'grid',
   COMPACT = 'compact',
-  LARGE = 'large'
+  LARGE = 'large',
+  FILES = 'files'
 }
 
 export enum ThemeMode {
@@ -335,6 +336,8 @@ export interface GlobalSettings {
   gamepadDeadzone: number;
   outputScale: number;
   d3dRendererPreference: D3DRendererPreference;
+  /** 重置 Wine prefix 时默认保留文档目录与注册表，只重建沙盒。 */
+  preserveUserDataOnReset: boolean;
 }
 
 export interface RuntimeSession {
@@ -665,7 +668,7 @@ export interface InputTemplate {
 export const INPUT_TEMPLATES: InputTemplate[] = [
   {
     id: 'default', name: '通用', description: '方向键、鼠标和常用功能键',
-    builtInProfileId: 'default', profileName: '默认输入方案', revision: 3
+    builtInProfileId: 'default', profileName: '默认输入方案', revision: 4
   },
   {
     id: 'full-keyboard', name: '全键盘', description: '完整字母、数字、功能键与方向键',
@@ -705,12 +708,12 @@ function arrowBindings(): InputBinding[] {
 
 function defaultTemplateElements(): ControlElement[] {
   return [
-    createControlElement(ControlElementType.D_PAD, 0.12, 0.78, '', dpadWASD()),
+    createControlElement(ControlElementType.D_PAD, 0.12, 0.70, '', dpadWASD()),
     createControlElement(ControlElementType.TRACKPAD, 0.68, 0.76, '视角', []),
-    createControlElement(ControlElementType.BUTTON, 0.86, 0.70, '空格', [keyBinding(57)]),
-    createControlElement(ControlElementType.BUTTON, 0.94, 0.70, '左键', [mouseBinding(MOUSE_LEFT_BUTTON)]),
-    createControlElement(ControlElementType.BUTTON, 0.86, 0.82, 'E', [keyBinding(18)]),
-    createControlElement(ControlElementType.BUTTON, 0.94, 0.82, '右键', [mouseBinding(MOUSE_RIGHT_BUTTON)]),
+    createControlElement(ControlElementType.BUTTON, 0.86, 0.62, '空格', [keyBinding(57)]),
+    createControlElement(ControlElementType.BUTTON, 0.94, 0.62, '左键', [mouseBinding(MOUSE_LEFT_BUTTON)]),
+    createControlElement(ControlElementType.BUTTON, 0.86, 0.84, 'E', [keyBinding(18)]),
+    createControlElement(ControlElementType.BUTTON, 0.94, 0.84, '右键', [mouseBinding(MOUSE_RIGHT_BUTTON)]),
     createControlElement(ControlElementType.BUTTON, 0.06, 0.16, 'Esc', [keyBinding(1)], ControlElementShape.ROUND_RECT, 0.72),
     createControlElement(ControlElementType.BUTTON, 0.14, 0.16, 'Shift', [keyBinding(42)], ControlElementShape.ROUND_RECT, 0.72, true),
     createControlElement(ControlElementType.BUTTON, 0.22, 0.16, 'Ctrl', [keyBinding(29)], ControlElementShape.ROUND_RECT, 0.72, true)
@@ -943,7 +946,8 @@ export function createDefaultGlobalSettings(): GlobalSettings {
     controlOpacity: 72,
     gamepadDeadzone: 18,
     outputScale: 100,
-    d3dRendererPreference: D3DRendererPreference.DXVK
+    d3dRendererPreference: D3DRendererPreference.DXVK,
+    preserveUserDataOnReset: true
   };
 }
 

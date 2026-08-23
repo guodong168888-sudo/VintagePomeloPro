@@ -40,15 +40,11 @@ class DesktopController extends XComponentController {
     if (rootId > 0) {
       try {
         testNapi.resizeRenderer(rootId, rect.surfaceWidth, rect.surfaceHeight);
-        // 悬浮窗态 (Index 小窗缩略): 跳过 root resize — 桌面分辨率保持全屏,
-        // 缩略显示靠 renderer letterbox (ComputeFitRect) 等比缩放。若把
-        // XComponent 小窗尺寸同步给 Wine 桌面, 桌面分辨率被改成小窗尺寸 →
-        // explorer 布局重排 → 全屏态时任务栏/开始菜单缺失或错位。
-        // 对齐 main_ui DesktopLayer desktopLauncherVisible 门控语义。
-        // 仅浮窗模式 (Index 承载) 生效; 非浮窗模式 (DesktopAbility 承载) 正常 resize。
-        if (AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode === DesktopWindowMode.FLOATING &&
-          WineWindowManager.getInstance().desktopLauncherVisible) {
-          hilog.info(DOMAIN, 'LIFE', '[XComp] launcher-visible: skip root resize, letterbox full desktop');
+        // 浮窗模式: 桌面分辨率由 prepareOutputForOrientation 设定, XComponent
+        // 只做 letterbox 显示口。动画中/缩略态/全屏态都不要 syncOutputSize,
+        // 否则 explorer 会再提交 desktop-shell。
+        if (AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode === DesktopWindowMode.FLOATING) {
+          hilog.info(DOMAIN, 'LIFE', '[XComp] floating: skip root resize, letterbox full desktop');
           return;
         }
         const s = WineWindowManager.getInstance().getEffectiveScale();
@@ -115,6 +111,9 @@ class DesktopController extends XComponentController {
 export struct DesktopLayer {
   @StorageLink('desktopToplevelId') @Watch('onDesktopToplevelChanged') private desktopToplevelId: number = 0;
   @StorageLink('desktopWindowMode') @Watch('onDesktopWindowModeChanged') private desktopWindowMode: string = '';
+  // overlay 关掉宿主 IME 后跨窗口把焦点要回桌面 XComponent, 蓝牙可打印键才继续走 KeyEvent。
+  @StorageLink('wineDesktopKeyFocusToken') @Watch('onDesktopKeyFocusToken')
+    private wineDesktopKeyFocusToken: number = 0;
   @State private cornerSafeMargin: number = 0;
   // 悬浮窗态 (Index 桌面层容器处于小窗缩略显示): 桌面 XComponent 所有输入
   // 一律旁路 — 点击放大/拖动由 Index 悬浮交互层统一处理, 本组件不转发
@@ -234,6 +233,14 @@ export struct DesktopLayer {
     this.applyCornerSafeMargin();
   }
 
+  private onDesktopKeyFocusToken(): void {
+    if (this.floating || this.wineDesktopKeyFocusToken <= 0) return;
+    try {
+      this.getUIContext().getFocusController().requestFocus('wine_desktop_xc');
+    } catch (_) {
+    }
+  }
+
   /** 切边模式: XComponent 四周让出圆角避让边距 (黑色), 全屏模式无内缩。 */
   private applyCornerSafeMargin(): void {
     // 悬浮窗态 (Index 小浮窗): 无需圆角避让, XComponent 全客户区铺满
@@ -304,7 +311,10 @@ export struct DesktopLayer {
         id: 'wine_desktop_xc',
         type: XComponentType.SURFACE,
         controller: this.controller
-      }).width('100%').height('100%').backgroundColor('#000').focusable(false)
+      }).width('100%').height('100%').backgroundColor('#000')
+        .focusable(true)
+        .focusOnTouch(true)
+        .defaultFocus(true)
 
       // ── 触控处理: 单指→左键/右键/拖拽, 双指→滚轮 ──
       .onTouch((ev: TouchEvent) => {
@@ -617,6 +627,7 @@ export struct DesktopLayer {
         if (vert !== 0) testNapi.sendScrollEvent(tl, 0, vert, step, wpx, wpy);
         if (horiz !== 0) testNapi.sendScrollEvent(tl, 1, horiz, step, wpx, wpy);
       })
+      .onKeyEvent((ev: KeyEvent): void => this.handleHardwareKey(ev))
 
       WineEngineBlockingOverlay()
     }
@@ -628,9 +639,5 @@ export struct DesktopLayer {
       bottom: 0
     })
     .id('wine-desktop-input-root')
-    .focusable(true)
-    .focusOnTouch(true)
-    .defaultFocus(true)
-    .onKeyEvent((ev: KeyEvent): void => this.handleHardwareKey(ev))
   }
 }

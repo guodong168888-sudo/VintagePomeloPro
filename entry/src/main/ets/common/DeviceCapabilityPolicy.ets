@@ -41,6 +41,14 @@ export class DeviceCapabilityPolicy {
     });
   }
 
+  static applyPortraitOrientation(target: window.Window, tag: string): Promise<void> {
+    return target.setPreferredOrientation(window.Orientation.PORTRAIT).then(() => {
+      hilog.info(DOMAIN, tag, 'Portrait orientation applied');
+    }).catch((error: Error) => {
+      hilog.warn(DOMAIN, tag, 'Portrait orientation unavailable: %{public}s', JSON.stringify(error));
+    });
+  }
+
   static applyDesktopOrientation(target: window.Window, setting: ScreenOrientationSetting, tag: string): Promise<void> {
     let orientation: window.Orientation = window.Orientation.AUTO_ROTATION_LANDSCAPE_RESTRICTED;
     if (setting === ScreenOrientationSetting.LANDSCAPE) {
@@ -53,5 +61,30 @@ export class DeviceCapabilityPolicy {
     }).catch((error: Error) => {
       hilog.warn(DOMAIN, tag, 'Desktop orientation unavailable: %{public}s', JSON.stringify(error));
     });
+  }
+
+  /** Wait until windowRect matches the requested portrait/landscape side. */
+  static async waitForRequestedOrientation(target: window.Window, setting: ScreenOrientationSetting,
+    tag: string): Promise<void> {
+    const needLandscape = setting !== ScreenOrientationSetting.PORTRAIT;
+    for (let attempt = 0; attempt < 16; attempt++) {
+      try {
+        const rect = target.getWindowProperties().windowRect;
+        if (rect.width > 0 && rect.height > 0 &&
+          (needLandscape ? rect.width >= rect.height : rect.height >= rect.width)) {
+          hilog.info(DOMAIN, tag, 'final window rect=%{public}dx%{public}d orientation=%{public}s',
+            rect.width, rect.height, setting);
+          return;
+        }
+      } catch (_) {
+      }
+      await new Promise<void>((resolve: () => void) => setTimeout(resolve, 100));
+    }
+    try {
+      const rect = target.getWindowProperties().windowRect;
+      hilog.warn(DOMAIN, tag, 'orientation settle timeout rect=%{public}dx%{public}d requested=%{public}s',
+        rect.width, rect.height, setting);
+    } catch (_) {
+    }
   }
 }

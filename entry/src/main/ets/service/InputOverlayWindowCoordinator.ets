@@ -29,8 +29,16 @@ export interface InputOverlaySnapshot {
 
 export type InputOverlayListener = (snapshot: InputOverlaySnapshot) => void;
 
+interface OverlayWindowRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
 const OVERLAY_DOMAIN = 0x0000;
 const OVERLAY_TAG = 'InputOverlay';
+const OVERLAY_HIDDEN_ORIGIN: number = -10000;
 
 /** 透明 ArkTS 子窗口的生命周期所有者，不受 Wine XComponent 帧提交影响。 */
 export class InputOverlayWindowCoordinator {
@@ -43,6 +51,8 @@ export class InputOverlayWindowCoordinator {
   private stressRemaining: number = 0;
   private attaching: boolean = false;
   private boundsSyncGeneration: number = 0;
+  private visibilityGeneration: number = 0;
+  private visibilityOp: Promise<void> = Promise.resolve();
   private snapshot: InputOverlaySnapshot = {
     session: { sessionId: '', displayMode: DisplayMode.DESKTOP, toplevelId: 0, active: false },
     profileId: 'default', enabled: true, visible: false, controlsVisible: true, opacity: 72,
@@ -147,7 +157,7 @@ export class InputOverlayWindowCoordinator {
       try {
         overlay = await stage.createSubWindowWithOptions('wine_input_overlay', {
           title: '', decorEnabled: false, isModal: false, zLevel: 9000,
-          maximizeSupported: true,
+          maximizeSupported: false,
           windowRect: {
             left: Math.round(initLeft), top: Math.round(initialRect.top),
             width: Math.max(1, Math.round(initWidth)),
@@ -176,6 +186,7 @@ export class InputOverlayWindowCoordinator {
       }
       this.overlayWindow = overlay;
       try { await overlay.setWindowFocusable(false); } catch (_) {}
+      try { await overlay.setWindowDecorVisible(false); } catch (_) {}
       await overlay.loadContent('pages/InputOverlay');
       hilog.info(OVERLAY_DOMAIN, OVERLAY_TAG, 'overlay content loaded');
       await this.syncBounds();
@@ -259,24 +270,72 @@ export class InputOverlayWindowCoordinator {
   }
 
   async setVisible(visible: boolean): Promise<void> {
+    const generation = ++this.visibilityGeneration;
     const resolvedVisible = visible && this.snapshot.enabled;
     this.snapshot.visible = resolvedVisible;
-    if (this.overlayWindow) {
-      // A subwindow is automatically hidden while its parent Ability is in the
-      // background. Merely restoring touchability does not make it visible
-      // again on API 23, so editor return must explicitly show the retained
-      // single overlay window before enabling input.
-      if (resolvedVisible) {
-        try { await this.overlayWindow.showWindow(); } catch (error) {
-          this.snapshot.lastError = 'showWindow: ' + JSON.stringify(error);
-        }
+    if (!resolvedVisible) {
+      InputDispatcher.getInstance().releaseAll('overlay-hidden');
+    }
+    const pending: Promise<void> = this.visibilityOp.then((): Promise<void> => {
+      return this.applyVisibility(generation, resolvedVisible);
+    }).catch((): Promise<void> => {
+      return this.applyVisibility(generation, resolvedVisible);
+    });
+    this.visibilityOp = pending.then((): void => {}).catch((): void => {});
+    await pending;
+    if (generation === this.visibilityGeneration) {
+      this.publish();
+    }
+  }
+
+  /**
+   * Subwindows have no hide(). Keep the retained overlay off-screen and
+   * non-touchable instead of collapsing it to 1x1 at (0,0), which can surface
+   * as a titled speck and race with the next syncBounds.
+   */
+  private async applyVisibility(generation: number, resolvedVisible: boolean): Promise<void> {
+    if (generation !== this.visibilityGeneration) {
+      return;
+    }
+    const overlay = this.overlayWindow;
+    if (!overlay) {
+      return;
+    }
+    if (resolvedVisible) {
+      try {
+        await overlay.showWindow();
+      } catch (error) {
+        this.snapshot.lastError = 'showWindow: ' + JSON.stringify(error);
       }
-      try { await this.overlayWindow.setWindowTouchable(resolvedVisible); } catch (error) {
+      if (generation !== this.visibilityGeneration) {
+        return;
+      }
+      await this.syncBounds();
+      if (generation !== this.visibilityGeneration) {
+        return;
+      }
+      try {
+        await overlay.setWindowTouchable(true);
+      } catch (error) {
         this.snapshot.lastError = 'setWindowTouchable: ' + JSON.stringify(error);
       }
+      await this.raise();
+      return;
     }
-    if (!resolvedVisible) InputDispatcher.getInstance().releaseAll('overlay-hidden');
-    this.publish();
+    try {
+      await overlay.setWindowTouchable(false);
+    } catch (error) {
+      this.snapshot.lastError = 'setWindowTouchable: ' + JSON.stringify(error);
+    }
+    if (generation !== this.visibilityGeneration) {
+      return;
+    }
+    this.boundsSyncGeneration++;
+    try {
+      await overlay.moveWindowToGlobal(OVERLAY_HIDDEN_ORIGIN, OVERLAY_HIDDEN_ORIGIN);
+    } catch (error) {
+      this.snapshot.lastError = 'collapse overlay: ' + JSON.stringify(error);
+    }
   }
 
   async setEnabled(enabled: boolean): Promise<void> {
@@ -310,7 +369,12 @@ export class InputOverlayWindowCoordinator {
   }
 
   async syncBounds(): Promise<void> {
-    if (!this.overlayWindow || !this.parentWindow) return;
+    if (!this.overlayWindow || !this.parentWindow) {
+      return;
+    }
+    if (!this.snapshot.visible && !this.attaching) {
+      return;
+    }
     try {
       const rect = this.parentWindow.getWindowProperties().windowRect;
       // 切边模式: 输入覆盖层与桌面 XComponent 同步左右内缩, 使覆盖层
@@ -420,7 +484,20 @@ export class InputOverlayWindowCoordinator {
     setTimeout(() => this.runNextStressFrame(), 16);
   }
 
+  /** Overlay window bounds in physical pixels. Size is the virtual-cursor clamp. */
+  getOverlayWindowRect(): OverlayWindowRect {
+    if (!this.overlayWindow) {
+      return { left: 0, top: 0, width: 0, height: 0 };
+    }
+    try {
+      return this.overlayWindow.getWindowProperties().windowRect;
+    } catch (_) {
+      return { left: 0, top: 0, width: 0, height: 0 };
+    }
+  }
+
   async detach(reason: string): Promise<void> {
+    this.visibilityGeneration++;
     this.boundsSyncGeneration++;
     InputDispatcher.getInstance().releaseAll(reason);
     const overlay = this.overlayWindow;

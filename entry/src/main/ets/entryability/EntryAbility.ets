@@ -3,6 +3,7 @@ import { hilog } from '../service/LogService';
 import { AppLog } from '../service/LogService';
 import { display, window } from '@kit.ArkUI';
 import { WineWindowManager } from '../service/WineWindowManager';
+import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
 import { AppCatalogService, GamesDirectoryStatus } from '../service/AppCatalogService';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
 import testNapi from 'libentry.so';
@@ -11,6 +12,7 @@ const DOMAIN = 0x0000;
 export default class EntryAbility extends UIAbility {
   private mainWindow: window.Window | null = null;
   private titleButtonRectCallback: ((rect: window.TitleButtonRect) => void) | null = null;
+  private windowRectCallback: (() => void) | null = null;
   // A routed page can briefly change the window layout while it enters or
   // leaves an editor. That transaction reports an empty title-button rect on
   // some tablet/desktop shells even though the controls return afterwards.
@@ -106,6 +108,15 @@ export default class EntryAbility extends UIAbility {
         // below every routed page. Gesture navigation remains available.
         mainWin.setSpecificSystemBarEnabled('navigationIndicator', false).catch(() => {});
         this.observeTitleButtonInset(mainWin);
+        this.windowRectCallback = (): void => {
+          InputOverlayWindowCoordinator.getInstance().syncBounds().catch(() => {});
+        };
+        try {
+          mainWin.on('windowRectChange', this.windowRectCallback);
+        } catch (error) {
+          hilog.warn(DOMAIN, 'EntryAbility', 'windowRectChange unavailable: %{public}s',
+            JSON.stringify(error));
+        }
       }
       hilog.info(DOMAIN, 'testTag', 'Succeeded in loading the content.');
     });
@@ -124,7 +135,14 @@ export default class EntryAbility extends UIAbility {
       } catch (_) {
       }
     }
+    if (this.mainWindow && this.windowRectCallback) {
+      try {
+        this.mainWindow.off('windowRectChange', this.windowRectCallback);
+      } catch (_) {
+      }
+    }
     this.titleButtonRectCallback = null;
+    this.windowRectCallback = null;
     this.mainWindow = null;
     AppStorage.setOrCreate('libraryTitleButtonInsetVp', 0);
   }

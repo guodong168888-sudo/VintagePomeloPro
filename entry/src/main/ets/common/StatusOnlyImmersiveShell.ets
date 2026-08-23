@@ -9,6 +9,7 @@ export const HDS_MINI_TITLE_HEIGHT_VP: number = 56;
 const MANAGED_HDS_MINI_TITLE_HEIGHT_VP: number = 40;
 const STATUS_ONLY_SYSTEM_BARS: Array<'status' | 'navigation'> = ['status'];
 const STATUS_ONLY_SYSTEM_BARS_KEY: string = STATUS_ONLY_SYSTEM_BARS.join(',');
+const DESKTOP_HIDDEN_BARS_KEY: string = 'desktop-hidden';
 
 interface WindowShellState {
   immersive: boolean;
@@ -75,6 +76,38 @@ export async function applyStatusOnlyImmersiveShell(pageWindow: window.Window): 
   }
   windowShellStateCache.set(properties.id,
     { immersive: true, systemBarsKey: STATUS_ONLY_SYSTEM_BARS_KEY });
+}
+
+/**
+ * Wine 桌面全屏壳：藏系统标题/状态栏/导航条，避免库页 status-only 壳把
+ * 状态栏留在桌面上。写入独立 cache key，缩回库页时 applyStatusOnlyImmersiveShell
+ * 才能发现契约变了并真正恢复。
+ */
+export async function applyDesktopFullscreenShell(pageWindow: window.Window): Promise<void> {
+  try {
+    await pageWindow.setWindowDecorVisible(false);
+  } catch (_) {
+  }
+  try {
+    await pageWindow.setWindowLayoutFullScreen(true);
+  } catch (_) {
+  }
+  try {
+    await Promise.all([
+      pageWindow.setSpecificSystemBarEnabled('status', false),
+      pageWindow.setSpecificSystemBarEnabled('navigationIndicator', false)
+    ]);
+  } catch (_) {
+  }
+  try {
+    await pageWindow.setWindowBackgroundColor('#000000');
+  } catch (_) {
+  }
+  try {
+    windowShellStateCache.set(pageWindow.getWindowProperties().id,
+      { immersive: true, systemBarsKey: DESKTOP_HIDDEN_BARS_KEY });
+  } catch (_) {
+  }
 }
 
 /**

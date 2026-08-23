@@ -47,6 +47,8 @@ export class WineWindowManager {
   // 桌面启动器/悬浮窗可见性 (浮窗模式): Index 悬浮窗态=true → DesktopLayer
   // 跳过 root resize (桌面分辨率保持全屏, 缩略显示靠 letterbox); 全屏态=false
   desktopLauncherVisible: boolean = true;
+  /** Index 浮窗放大/缩小动画进行中: 跳过 Wine 桌面 resize，避免 explorer root switch。 */
+  floatingLayoutAnimating: boolean = false;
   private desktopAbilityRunning: boolean = false;
   private desktopAbilityForeground: boolean = false;
   private desktopAbilityRootId: number = 0;
@@ -214,7 +216,7 @@ export class WineWindowManager {
     }
   }
 
-  syncOutputSize(widthPx: number, heightPx: number): void {
+  syncOutputSize(widthPx: number, heightPx: number, forceToplevelResize: boolean = false): void {
     if (widthPx <= 0 || heightPx <= 0) return;
     try {
       const currentDisplay = display.getDefaultDisplaySync();
@@ -232,9 +234,11 @@ export class WineWindowManager {
       // PC 虚拟桌面浮窗: 桌面分辨率固定 (init setOutputSize = 屏幕/scale), 窗口
       // 只是显示口 (letterbox 等比完整呈现) — 跳过 notifyToplevelResize, 否则
       // 浮窗尺寸/标题栏偏差触发 Wine 桌面重排, 底部任务栏/开始菜单被裁。
-      // 对齐 master VirtualDesktop desktopLauncherVisible 门控语义。
+      // Index 浮窗: 缩略/缩放动画中 letterbox, 只在 prepareOutputForOrientation
+      // (force) 时改 Wine 桌面尺寸, 避免 explorer 再提交一个 desktop-shell。
       if (this.presentationMode === WinePresentationMode.DESKTOP && this.desktopRootId > 0 &&
-        !(AppSettingsStore.getInstance().usesManagedWineWindows() && this.isDesktopMode)) {
+        !(AppSettingsStore.getInstance().usesManagedWineWindows() && this.isDesktopMode) &&
+        this.shouldNotifyDesktopToplevelResize(forceToplevelResize)) {
         testNapi.notifyToplevelResize(this.desktopRootId, outW, outH);
       }
       hilog.info(DOMAIN, TAG,
@@ -272,7 +276,7 @@ export class WineWindowManager {
         height = swapped;
       }
       const safe = this.desktopDisplaySafeSize(width, height);
-      this.syncOutputSize(safe.width, safe.height);
+      this.syncOutputSize(safe.width, safe.height, true);
       hilog.info(DOMAIN, TAG, '[MW] prepared output orientation=%{public}s size=%{public}dx%{public}d',
         setting, width, height);
     } catch (error) {
@@ -747,6 +751,58 @@ export class WineWindowManager {
     }
   }
 
+  /**
+   * PC 沉浸全屏: 铺满屏幕并禁用顶/底边 hover 标题栏、关闭条和 Dock。
+   * 默认无参 maximize() 是 ENTER_IMMERSIVE, 会弹出关闭条抢走边缘鼠标。
+   */
+  enterImmersiveFullscreen(win: window.Window, logId: number = 0): void {
+    const label = logId > 0 ? '#' + logId.toString() : 'desktop';
+    try {
+      hilog.info(DOMAIN, TAG, '[MW] fullscreen %{public}s → DISABLE_TITLE_AND_DOCK_HOVER', label);
+      win.maximize(window.MaximizePresentation.ENTER_IMMERSIVE_DISABLE_TITLE_AND_DOCK_HOVER).then(() => {
+        hilog.info(DOMAIN, TAG, '[MW] fullscreen %{public}s OK (DISABLE_HOVER)', label);
+      }).catch((err: Error) => {
+        hilog.warn(DOMAIN, TAG, '[MW] fullscreen %{public}s DISABLE_HOVER failed, fallback: %{public}s',
+          label, JSON.stringify(err));
+        win.maximize().then(() => {
+          hilog.info(DOMAIN, TAG, '[MW] fullscreen %{public}s OK (ENTER_IMMERSIVE fallback)', label);
+        }).catch((fallbackErr: Error) => {
+          hilog.warn(DOMAIN, TAG, '[MW] fullscreen %{public}s fallback failed: %{public}s',
+            label, JSON.stringify(fallbackErr));
+        });
+      });
+    } catch (err) {
+      hilog.warn(DOMAIN, TAG, '[MW] fullscreen %{public}s exception: %{public}s',
+        label, JSON.stringify(err));
+    }
+  }
+
+  /**
+   * PC 退出沉浸全屏。手机/平板只需藏/恢复系统栏；PC 必须先 EXIT_IMMERSIVE
+   * 才能让标题栏和关闭/最小化回来，否则 recover() 会停在无标题的沉浸态。
+   */
+  async exitImmersiveFullscreen(win: window.Window, recoverWindowed: boolean = false,
+    logId: number = 0): Promise<void> {
+    const label = logId > 0 ? '#' + logId.toString() : 'desktop';
+    try {
+      hilog.info(DOMAIN, TAG, '[MW] exit immersive %{public}s → EXIT_IMMERSIVE', label);
+      await win.maximize(window.MaximizePresentation.EXIT_IMMERSIVE);
+      hilog.info(DOMAIN, TAG, '[MW] exit immersive %{public}s OK', label);
+    } catch (err) {
+      hilog.warn(DOMAIN, TAG, '[MW] exit immersive %{public}s failed: %{public}s',
+        label, JSON.stringify(err));
+    }
+    if (recoverWindowed) {
+      try {
+        await win.recover();
+        hilog.info(DOMAIN, TAG, '[MW] recover after exit immersive %{public}s OK', label);
+      } catch (err) {
+        hilog.warn(DOMAIN, TAG, '[MW] recover after exit immersive %{public}s failed: %{public}s',
+          label, JSON.stringify(err));
+      }
+    }
+  }
+
   // -- apply 单个事件到 window.Window --
   private applyEvent(toplevelId: number, event: string, data: string): void {
     const win = this.windows.get(toplevelId);
@@ -857,33 +913,18 @@ export class WineWindowManager {
         break;
       case 'fullscreen':
         // PC 模式游戏 xdg fullscreen: OHOS 沉浸式全屏 (铺满屏幕、盖住 dock)。
-        // 与 maximize 的 EXIT_IMMERSIVE (工作区最大化) 区分 — 游戏全屏是
-        // 真正的全屏; win.maximize() 不带参数默认 ENTER_IMMERSIVE。
-        // 画面由 popup (全屏拉伸) 承载, 主窗口沉浸式保证无系统 UI 露出。
-        try {
-          hilog.info(DOMAIN, TAG, '[MW] fullscreen #%{public}d → win.maximize() (ENTER_IMMERSIVE)', toplevelId);
-          win.maximize().then(() => {
-            hilog.info(DOMAIN, TAG, '[MW] fullscreen OK #%{public}d', toplevelId);
-          }).catch((err: Error) => {
-            hilog.warn(DOMAIN, TAG, '[MW] fullscreen #%{public}d failed: %{public}s', toplevelId, JSON.stringify(err));
-          });
-        } catch (err) {
-          hilog.warn(DOMAIN, TAG, '[MW] fullscreen #%{public}d exception: %{public}s', toplevelId, JSON.stringify(err));
-        }
+        // ENTER_IMMERSIVE_DISABLE_TITLE_AND_DOCK_HOVER (API 14+): 进入沉浸
+        // 全屏且鼠标悬停屏幕边缘热区时不唤出标题栏/关闭条/Dock — 默认
+        // ENTER_IMMERSIVE 会 hover 弹出关闭条, 抢走游戏边缘鼠标事件。
+        this.enterImmersiveFullscreen(win, toplevelId);
         break;
       case 'unfullscreen':
         // 退出沉浸式全屏, 恢复普通窗口; 尺寸由 C++ 侧 configure(preFs)
         // → resize 事件恢复 (tl_unset_fullscreen 用 preFs 尺寸)
-        try {
-          hilog.info(DOMAIN, TAG, '[MW] unfullscreen #%{public}d → win.maximize(EXIT_IMMERSIVE)', toplevelId);
-          win.maximize(window.MaximizePresentation.EXIT_IMMERSIVE).then(() => {
-            hilog.info(DOMAIN, TAG, '[MW] unfullscreen OK #%{public}d', toplevelId);
-          }).catch((err: Error) => {
-            hilog.warn(DOMAIN, TAG, '[MW] unfullscreen #%{public}d failed: %{public}s', toplevelId, JSON.stringify(err));
-          });
-        } catch (err) {
-          hilog.warn(DOMAIN, TAG, '[MW] unfullscreen #%{public}d exception: %{public}s', toplevelId, JSON.stringify(err));
-        }
+        this.exitImmersiveFullscreen(win, false, toplevelId).catch((err: Error) => {
+          hilog.warn(DOMAIN, TAG, '[MW] unfullscreen #%{public}d failed: %{public}s',
+            toplevelId, JSON.stringify(err));
+        });
         break;
       case 'argb':
         /*
@@ -1117,7 +1158,7 @@ export class WineWindowManager {
     }
   }
 
-  /** PC 虚拟桌面 hover 菜单: 退出沉浸全屏 (recover 回普通窗口)。 */
+  /** PC 虚拟桌面: 先 EXIT_IMMERSIVE 再 recover，标题栏才能回来。 */
   async recoverDesktopWindow(): Promise<void> {
     if (!this.desktopAbilityCtx) {
       hilog.warn(DOMAIN, TAG, '[MW] recoverDesktopWindow: no desktop ctx');
@@ -1126,7 +1167,7 @@ export class WineWindowManager {
     try {
       const win = await window.getLastWindow(this.desktopAbilityCtx);
       if (win) {
-        await win.recover();
+        await this.exitImmersiveFullscreen(win, true, 0);
         AppStorage.setOrCreate('vdImmersive', false);
         hilog.info(DOMAIN, TAG, '[MW] recoverDesktopWindow OK');
       }
@@ -1144,6 +1185,7 @@ export class WineWindowManager {
     try {
       const win = await window.getLastWindow(this.desktopAbilityCtx);
       if (win) {
+        await this.exitImmersiveFullscreen(win, false, 0);
         const d = display.getDefaultDisplaySync();
         const w = Math.max(640, Math.round(d.width * 0.9));
         const h = Math.max(480, Math.round(d.height * 0.9));
@@ -1195,6 +1237,21 @@ export class WineWindowManager {
     this.desktopLauncherVisible = visible;
     hilog.info(DOMAIN, TAG, '[MW] setDesktopLauncherVisible=%{public}s',
       visible ? 'true' : 'false');
+  }
+
+  setFloatingLayoutAnimating(animating: boolean): void {
+    this.floatingLayoutAnimating = animating;
+    hilog.info(DOMAIN, TAG, '[MW] setFloatingLayoutAnimating=%{public}s',
+      animating ? 'true' : 'false');
+  }
+
+  private shouldNotifyDesktopToplevelResize(forceToplevelResize: boolean): boolean {
+    if (forceToplevelResize) return true;
+    if (AppSettingsStore.getInstance().getGlobalSettings().desktopWindowMode !==
+      DesktopWindowMode.FLOATING) {
+      return true;
+    }
+    return false;
   }
 
   registerDesktopAbility(ctx: common.UIAbilityContext): void {

@@ -7,6 +7,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import testNapi from 'libentry.so';
 import { AppSearchBar } from '../components/SearchBar';
 import { AppCard } from '../components/AppCard';
+import { FileBrowserView } from '../components/FileBrowserView';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
 import {
   AppDescriptor,
@@ -17,6 +18,7 @@ import {
   GlobalSettings,
   LaunchKind,
   RuntimeSession,
+  ScreenOrientationSetting,
   ThemeMode,
   ViewMode,
   normalizeLaunchPath,
@@ -37,9 +39,10 @@ import { InputProfileService } from '../service/InputProfileService';
 import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
 import { DesktopLayer } from '../components/DesktopLayer';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
-import { LengthMetrics, display, window } from '@kit.ArkUI';
+import { LengthMetrics, window } from '@kit.ArkUI';
 import deviceInfo from '@ohos.deviceInfo';
 import {
+  applyDesktopFullscreenShell,
   applyStatusOnlyImmersiveShell,
   getMiniTitleContentTopInset,
   getStatusOnlyWindowInsets,
@@ -83,8 +86,9 @@ interface ScrollOffsetSnapshot {
   yOffset: number;
 }
 
-// 浮窗模式: 桌面小浮窗宽度 (vp), 高度按屏幕比例折算 (main_ui 同构)
+// 浮窗模式: 小窗始终按横屏桌面比例显示 (手机竖持时也是横条，点开再转横屏全屏)
 const FLOATING_W: number = 320;
+const FLOATING_W_PHONE: number = 248;
 
 @Entry
 @Component
@@ -139,9 +143,12 @@ struct Index {
   private floatPanStartX: number = 0;
   private floatPanStartY: number = 0;
   private transitioning: boolean = false;
+  /** 浮窗全屏或缩回未竖屏稳定前隐藏库页 HDS/底栏，避免标题盖住按键。 */
+  @State private libraryChromeReady: boolean = true;
   private screenW: number = 0;
   private screenH: number = 0;
   @State private floatH: number = 135;
+  private floatPosPlaced: boolean = false;
 
   private isPhone(): boolean {
     return DeviceCapabilityPolicy.isPhoneDevice() || this.breakpoint === 'xs' || this.breakpoint === 'sm';
@@ -166,28 +173,264 @@ struct Index {
     return WineWindowManager.getInstance().getDesktopRootId() > 0;
   }
 
-  // 缩放过渡动画: 显式动画包裹 launcherVisible 翻转, 宽/高/位置/圆角一次过渡
-  private setLauncherVisible(v: boolean): void {
+  private floatingWidth(): number {
+    const preferred = DeviceCapabilityPolicy.isPhoneDevice() ? FLOATING_W_PHONE : FLOATING_W;
+    const maxW = Math.max(160, this.screenW - 24);
+    return Math.min(preferred, maxW);
+  }
+
+  /** 与 Wine 横屏桌面同比例，避免竖持手机把小窗拉成竖屏。 */
+  private floatingHeight(): number {
+    const longSide = Math.max(this.screenW, this.screenH);
+    const shortSide = Math.min(this.screenW, this.screenH);
+    const ratio = (longSide > 0 && shortSide > 0) ? longSide / shortSide : 16 / 9;
+    return Math.max(88, Math.round(this.floatingWidth() / ratio));
+  }
+
+  private floatTopReserve(): number {
+    return Math.max(12, this.titleContentTopInsetVp);
+  }
+
+  private floatBottomReserve(): number {
+    if (this.isPhone()) {
+      return this.isPhoneLandscape() ? 72 : 80;
+    }
+    return Math.max(12, this.navBarInsetVp);
+  }
+
+  private floatMinX(): number {
+    return 0;
+  }
+
+  private floatMinY(): number {
+    return this.floatTopReserve();
+  }
+
+  private floatMaxX(): number {
+    return Math.max(this.floatMinX(), this.screenW - this.floatingWidth());
+  }
+
+  private floatMaxY(): number {
+    return Math.max(this.floatMinY(), this.screenH - this.floatingHeight() - this.floatBottomReserve());
+  }
+
+  private clampFloatPos(): void {
+    this.floatPosX = Math.min(Math.max(this.floatPosX, this.floatMinX()), this.floatMaxX());
+    this.floatPosY = Math.min(Math.max(this.floatPosY, this.floatMinY()), this.floatMaxY());
+  }
+
+  private placeDefaultFloatPos(): void {
+    this.floatH = this.floatingHeight();
+    this.floatPosX = Math.max(12, this.screenW - this.floatingWidth() - 12);
+    this.floatPosY = this.floatMaxY();
+    this.clampFloatPos();
+  }
+
+  private libraryViewportReady(): boolean {
+    if (this.screenW <= 0 || this.screenH <= 0) {
+      return false;
+    }
+    // 手机缩回尚未完成时 viewport 可能仍是横屏；此时 clamp 会把竖屏坐标压坏。
+    if (this.transitioning && DeviceCapabilityPolicy.isPhoneDevice() && this.screenW > this.screenH) {
+      return false;
+    }
+    return true;
+  }
+
+  private ensureFloatPos(): void {
+    if (!this.libraryViewportReady()) {
+      return;
+    }
+    this.floatH = this.floatingHeight();
+    if (!this.floatPosPlaced) {
+      this.placeDefaultFloatPos();
+      this.floatPosPlaced = true;
+      return;
+    }
+    this.clampFloatPos();
+  }
+
+  private resolveMainWindow(): window.Window | null {
+    return WineWindowManager.getInstance().getMainWindow();
+  }
+
+  private animateLauncherVisible(v: boolean, onFinish?: () => void, keepTransitioning: boolean = false): void {
     this.transitioning = true;
     this.getUIContext().animateTo({
       duration: 300,
       curve: Curve.LinearOutSlowIn,
-      onFinish: () => { this.transitioning = false; }
+      onFinish: () => {
+        if (!keepTransitioning) {
+          this.transitioning = false;
+        }
+        if (onFinish) {
+          onFinish();
+        }
+      }
     }, () => {
       this.launcherVisible = v;
     });
   }
 
-  private onLauncherVisibleChange(): void {
-    // 悬浮窗态 → WineWindowManager 跳过 root resize (桌面分辨率保持全屏)
-    WineWindowManager.getInstance().setDesktopLauncherVisible(this.launcherVisible);
-    // 全屏态创建虚拟输入 overlay, 悬浮窗态隐藏
-    if (this.launcherVisible) {
-      InputOverlayWindowCoordinator.getInstance().detach('floating-shrink').catch(() => {});
-    } else {
-      this.attachFloatingOverlay();
+  private libraryChromeVisible(): boolean {
+    if (!this.showDesktopLayer()) {
+      return true;
     }
-    // 同步全屏态标志给 overlay (home 按钮显示)
+    if (!this.launcherVisible) {
+      return false;
+    }
+    return this.libraryChromeReady;
+  }
+
+  // 缩放过渡动画: 显式动画包裹 launcherVisible 翻转, 宽/高/位置/圆角一次过渡
+  // 放大: 锁横屏 → 动画 → 结束后再 show overlay。缩小: 先藏 overlay, 立刻锁竖屏。
+  private setLauncherVisible(v: boolean): void {
+    if (this.transitioning) {
+      return;
+    }
+    if (!v) {
+      if (!this.launcherVisible) {
+        return;
+      }
+      this.transitioning = true;
+      this.libraryChromeReady = false;
+      this.prepareFloatingFullscreen().then((): void => {
+        this.expandFloatingDesktop();
+      }).catch((): void => {
+        this.expandFloatingDesktop();
+      });
+      return;
+    }
+    if (this.launcherVisible && this.libraryChromeReady) {
+      return;
+    }
+    this.shrinkFloatingDesktop();
+  }
+
+  private expandFloatingDesktop(): void {
+    const manager = WineWindowManager.getInstance();
+    manager.setFloatingLayoutAnimating(true);
+    let finished = false;
+    const finishExpand = (): void => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      manager.setFloatingLayoutAnimating(false);
+      manager.setDesktopLauncherVisible(false);
+      this.showFloatingOverlay().then((): void => {
+        this.transitioning = false;
+      }).catch((): void => {
+        this.transitioning = false;
+      });
+    };
+    this.animateLauncherVisible(false, finishExpand, true);
+    setTimeout((): void => {
+      if (!finished) {
+        finishExpand();
+      }
+    }, 800);
+  }
+
+  private shrinkFloatingDesktop(): void {
+    this.transitioning = true;
+    this.libraryChromeReady = false;
+    const manager = WineWindowManager.getInstance();
+    manager.setDesktopLauncherVisible(true);
+    manager.setFloatingLayoutAnimating(true);
+    void this.runShrinkSequence(manager).catch((): void => {
+      this.ensureFloatPos();
+      this.transitioning = false;
+      manager.setFloatingLayoutAnimating(false);
+      this.libraryChromeReady = true;
+      this.launcherVisible = true;
+    });
+  }
+
+  private async runShrinkSequence(manager: WineWindowManager): Promise<void> {
+    try {
+      await this.hideFloatingOverlay();
+    } catch (_) {
+    }
+    let animDone = false;
+    let orientDone = false;
+    const finishShrink = (): void => {
+      if (!animDone || !orientDone) {
+        return;
+      }
+      this.ensureFloatPos();
+      this.transitioning = false;
+      manager.setFloatingLayoutAnimating(false);
+      this.libraryChromeReady = true;
+      this.launcherVisible = true;
+    };
+    this.animateLauncherVisible(true, (): void => {
+      animDone = true;
+      finishShrink();
+    }, true);
+    setTimeout((): void => {
+      if (!animDone) {
+        animDone = true;
+        finishShrink();
+      }
+    }, 800);
+    try {
+      await this.restoreLibraryOrientation();
+    } catch (_) {
+    }
+    orientDone = true;
+    finishShrink();
+  }
+
+  private async prepareFloatingFullscreen(): Promise<void> {
+    const win = this.resolveMainWindow();
+    if (!win) {
+      return;
+    }
+    // 库页 status-only 壳会把状态栏/系统标题留在窗口上。放大前先换成
+    // 桌面全屏壳；转屏后再刷一次，避免方向事务把系统栏拉回来。
+    await applyDesktopFullscreenShell(win);
+    if (DeviceCapabilityPolicy.isPhoneDevice()) {
+      const setting = this.settings.desktopOrientation ?? ScreenOrientationSetting.SENSOR_LANDSCAPE;
+      await DeviceCapabilityPolicy.applyDesktopOrientation(win, setting, 'Index-float');
+      await DeviceCapabilityPolicy.waitForRequestedOrientation(win, setting, 'Index-float');
+      await applyDesktopFullscreenShell(win);
+      WineWindowManager.getInstance().prepareOutputForOrientation(setting);
+    }
+  }
+
+  private async restoreLibraryOrientation(): Promise<void> {
+    const win = this.resolveMainWindow();
+    if (!win) {
+      return;
+    }
+    if (DeviceCapabilityPolicy.isPhoneDevice()) {
+      await DeviceCapabilityPolicy.applyPortraitOrientation(win, 'Index-float');
+      await DeviceCapabilityPolicy.waitForRequestedOrientation(win, ScreenOrientationSetting.PORTRAIT,
+        'Index-float');
+      DeviceCapabilityPolicy.enableSensorRotation(win, 'Index-float');
+    }
+    await this.restoreLibraryWindowShell(win);
+  }
+
+  private async restoreLibraryWindowShell(win: window.Window): Promise<void> {
+    try {
+      await win.setWindowDecorVisible(false);
+    } catch (_) {
+    }
+    await applyStatusOnlyImmersiveShell(win);
+    if (DeviceCapabilityPolicy.usesManagedWineWindows()) {
+      try {
+        win.setWindowDecorHeight(48);
+        win.setWindowTitleMoveEnabled(true);
+      } catch (_) {
+      }
+    }
+    this.startWindowInsetObserver(win);
+    this.refreshPageInsets(win);
+  }
+
+  private onLauncherVisibleChange(): void {
     AppStorage.setOrCreate('desktopFloatingFullscreen', !this.launcherVisible);
   }
 
@@ -210,33 +453,31 @@ struct Index {
     AppStorage.setOrCreate('desktopEnterFullscreen', false);
   }
 
-  private attachFloatingOverlay(): void {
-    const stage = WineWindowManager.getInstance().getMainWindowStage();
-    if (!stage) return;
-    const rootId = WineWindowManager.getInstance().getDesktopRootId();
-    if (rootId <= 0) return;
-    window.getLastWindow(this.context).then((win: window.Window) => {
-      InputOverlayWindowCoordinator.getInstance().attach(
-        stage, win, 'desktop-' + rootId, DisplayMode.DESKTOP, rootId,
-        this.settings.desktopInputProfileId || 'default', this.settings.showVirtualControls,
-        this.settings.controlOpacity, this.settings.virtualInputEnabled, true).catch(() => {});
-    }).catch(() => {});
+  private async hideFloatingOverlay(): Promise<void> {
+    AppStorage.setOrCreate('desktopFloatingFullscreen', false);
+    await InputOverlayWindowCoordinator.getInstance().setVisible(false);
   }
 
-  private initFloatPos(): void {
-    // 用屏幕尺寸 (aboutToAppear 时 viewport 可能为 0)
-    try {
-      const d = display.getDefaultDisplaySync();
-      this.screenW = px2vp(d.width);
-      this.screenH = px2vp(d.height);
-    } catch (_) {
-      this.screenW = 640;
-      this.screenH = 400;
+  private async showFloatingOverlay(): Promise<void> {
+    AppStorage.setOrCreate('desktopFloatingFullscreen', true);
+    await this.attachFloatingOverlay();
+  }
+
+  private async attachFloatingOverlay(): Promise<void> {
+    const manager = WineWindowManager.getInstance();
+    const stage = manager.getMainWindowStage();
+    const win = manager.getMainWindow();
+    if (!stage || !win) {
+      return;
     }
-    // 悬浮窗高度随屏幕比例折算: 与桌面帧比例一致, 消除 letterbox 黑边
-    this.floatH = Math.round(FLOATING_W * this.screenH / this.screenW);
-    this.floatPosX = this.screenW - FLOATING_W - 12;
-    this.floatPosY = 80;
+    const rootId = manager.getDesktopRootId();
+    if (rootId <= 0) {
+      return;
+    }
+    await InputOverlayWindowCoordinator.getInstance().attach(
+      stage, win, 'desktop-' + rootId, DisplayMode.DESKTOP, rootId,
+      this.settings.desktopInputProfileId || 'default', this.settings.showVirtualControls,
+      this.settings.controlOpacity, this.settings.virtualInputEnabled, true);
   }
 
   private usesDarkAppearance(): boolean {
@@ -383,7 +624,6 @@ struct Index {
     };
     WineEngineService.getInstance().subscribe(this.engineCallback);
     this.refreshTimer = setInterval(() => this.refreshRunningState(), 1500);
-    this.initFloatPos();
   }
 
   aboutToDisappear(): void {
@@ -405,7 +645,9 @@ struct Index {
     } else {
       this.refreshRunningState();
     }
-    void this.applyPageWindowShell();
+    if (!(this.showDesktopLayer() && !this.launcherVisible)) {
+      void this.applyPageWindowShell();
+    }
   }
 
   onPageHide(): void {
@@ -440,7 +682,10 @@ struct Index {
 
   private async applyPageWindowShell(): Promise<void> {
     try {
-      const pageWindow = await window.getLastWindow(this.context);
+      const pageWindow = this.resolveMainWindow();
+      if (!pageWindow) {
+        return;
+      }
       await applyStatusOnlyImmersiveShell(pageWindow);
       this.startWindowInsetObserver(pageWindow);
     } catch (_) {
@@ -454,6 +699,9 @@ struct Index {
     const insets = getStatusOnlyWindowInsets(pageWindow);
     this.statusBarHeightVp = insets.top;
     this.navBarInsetVp = insets.bottom;
+    if (this.launcherVisible && !this.transitioning) {
+      this.ensureFloatPos();
+    }
   }
 
   private startWindowInsetObserver(pageWindow: window.Window): void {
@@ -712,8 +960,12 @@ struct Index {
     }
   }
 
+  private catalogCardViewMode(): ViewMode {
+    return this.settings.viewMode === ViewMode.FILES ? ViewMode.GRID : this.settings.viewMode;
+  }
+
   private gridColumns(): string {
-    if (this.settings.viewMode === ViewMode.COMPACT) return '1fr';
+    if (this.catalogCardViewMode() === ViewMode.COMPACT) return '1fr';
     // VintagePomelo keeps cover cards in two columns on phones. A single
     // flexible column makes one icon fill almost the entire compact window.
     if (this.isPhoneLandscape()) return '1fr 1fr';
@@ -755,8 +1007,8 @@ struct Index {
     // Grid can under-measure an auto-height card while a narrow two-column
     // layout is settling. Reserve the cover, fixed title row and shadow inset
     // explicitly so the following row can never paint over this card.
-    if (this.settings.viewMode === ViewMode.COMPACT) return 120;
-    const coverHeight = this.settings.viewMode === ViewMode.LARGE ? 196 : 120;
+    if (this.catalogCardViewMode() === ViewMode.COMPACT) return 120;
+    const coverHeight = this.catalogCardViewMode() === ViewMode.LARGE ? 196 : 120;
     return coverHeight + 71 + 16;
   }
 
@@ -907,18 +1159,21 @@ struct Index {
       buttons: [
         { text: (this.settings.viewMode === ViewMode.GRID ? '✓ ' : '') + '网格封面', color: $r('sys.color.ohos_id_color_text_primary') },
         { text: (this.settings.viewMode === ViewMode.COMPACT ? '✓ ' : '') + '紧凑列表', color: $r('sys.color.ohos_id_color_text_primary') },
-        { text: (this.settings.viewMode === ViewMode.LARGE ? '✓ ' : '') + '大封面', color: $r('sys.color.ohos_id_color_text_primary') }
+        { text: (this.settings.viewMode === ViewMode.LARGE ? '✓ ' : '') + '大封面', color: $r('sys.color.ohos_id_color_text_primary') },
+        { text: (this.settings.viewMode === ViewMode.FILES ? '✓ ' : '') + '文件浏览', color: $r('sys.color.ohos_id_color_text_primary') }
       ]
     }).then((result) => {
       if (result.index === 0) this.setViewMode(ViewMode.GRID);
       else if (result.index === 1) this.setViewMode(ViewMode.COMPACT);
       else if (result.index === 2) this.setViewMode(ViewMode.LARGE);
+      else if (result.index === 3) this.setViewMode(ViewMode.FILES);
     }).catch(() => {});
   }
 
   private phoneViewModeIcon(): Resource {
     if (this.settings.viewMode === ViewMode.COMPACT) return $r('sys.symbol.list_bullet');
     if (this.settings.viewMode === ViewMode.LARGE) return $r('sys.symbol.rectangle_grid_1x2');
+    if (this.settings.viewMode === ViewMode.FILES) return $r('sys.symbol.folder');
     return $r('sys.symbol.square_grid_2x2');
   }
 
@@ -1077,6 +1332,8 @@ struct Index {
               .width(48).height(48).backgroundColor(this.settings.viewMode === ViewMode.COMPACT ? $r('app.color.selected_background') : $r('app.color.search_background')).onClick(() => this.setViewMode(ViewMode.COMPACT))
             Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.rectangle_grid_1x2')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
               .width(48).height(48).backgroundColor(this.settings.viewMode === ViewMode.LARGE ? $r('app.color.selected_background') : $r('app.color.search_background')).onClick(() => this.setViewMode(ViewMode.LARGE))
+            Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.folder')).fontSize(17).fontColor([$r('app.color.text_primary')]) }
+              .width(48).height(48).backgroundColor(this.settings.viewMode === ViewMode.FILES ? $r('app.color.selected_background') : $r('app.color.search_background')).onClick(() => this.setViewMode(ViewMode.FILES))
           }
           .id('library-view-modes')
           // Keep the complete system-reported title-button area. PC window
@@ -1136,8 +1393,8 @@ struct Index {
         .constraintSize({ minHeight: this.isPhone() ? this.phoneGridItemMinHeight() : 0 })
       }, (app: AppDescriptor): string => app.id)
     }
-    .columnsTemplate(this.settings.viewMode === ViewMode.COMPACT ? this.compactGridColumns() :
-      (this.settings.viewMode === ViewMode.LARGE ? this.largeGridColumns() : this.gridColumns()))
+    .columnsTemplate(this.catalogCardViewMode() === ViewMode.COMPACT ? this.compactGridColumns() :
+      (this.catalogCardViewMode() === ViewMode.LARGE ? this.largeGridColumns() : this.gridColumns()))
     .columnsGap(8)
     .rowsGap(this.isPhone() ? 8 : 4)
     .width('100%')
@@ -1147,7 +1404,7 @@ struct Index {
   private CatalogCard(app: AppDescriptor) {
     AppCard({
       app: app,
-      viewMode: this.settings.viewMode,
+      viewMode: this.catalogCardViewMode(),
       running: this.runningAppIds.has(app.id),
       useGlassEffect: this.settings.useGlassEffect,
       narrowPhone: this.isPhone(),
@@ -1227,7 +1484,12 @@ struct Index {
   @Builder
   private WindowsRefreshContent() {
     Refresh({ refreshing: $$this.refreshing }) {
-      if (this.scanning) {
+      if (this.settings.viewMode === ViewMode.FILES) {
+        FileBrowserView({
+          topInsetVp: this.isPhone() ? this.phoneTitleBarScrollInset() : 0,
+          bottomInsetVp: this.isPhone() ? this.phoneBottomInset() : 0
+        })
+      } else if (this.scanning) {
         Row({ space: 10 }) {
           LoadingProgress().width(20).height(20)
           Text('正在扫描应用目录…').fontColor($r('app.color.text_secondary'))
@@ -1349,6 +1611,7 @@ struct Index {
     .width('100%')
     .height(this.isPhoneLandscape() ? 72 : 80)
     .id('library-bottom-bar')
+    .visibility(this.libraryChromeVisible() ? Visibility.Visible : Visibility.None)
   }
 
   @Builder
@@ -1445,7 +1708,7 @@ struct Index {
           .opacity(0.72)
           .hitTestBehavior(HitTestMode.None)
           // 浮窗模式全屏态: 桌面铺满, 隐藏启动器背景
-          .visibility(this.showDesktopLayer() && !this.launcherVisible ? Visibility.Hidden : Visibility.Visible)
+          .visibility(this.libraryChromeVisible() ? Visibility.Visible : Visibility.None)
           .id('library-page-background')
       }
       Row() {
@@ -1461,8 +1724,7 @@ struct Index {
       .width('100%')
       .height('100%')
       .padding({ top: this.isPhone() ? 0 : this.statusBarHeightVp + 16 })
-      // 浮窗模式全屏态: 隐藏启动器 (main_ui 语义), 桌面铺满当前画面不叠加
-      .visibility(this.showDesktopLayer() && !this.launcherVisible ? Visibility.Hidden : Visibility.Visible)
+      .visibility(this.libraryChromeVisible() ? Visibility.Visible : Visibility.None)
       if (this.isPhone()) {
         this.PhoneNavigation()
       }
@@ -1479,7 +1741,7 @@ struct Index {
               .width('100%').justifyContent(FlexAlign.Center)
               .padding({ top: 3, bottom: 3 })
               .backgroundColor('#66000000')
-              .position({ x: 0, y: this.floatH - 26 })
+              .position({ x: 0, y: this.floatingHeight() - 26 })
               .hitTestBehavior(HitTestMode.None)
             }
             .width('100%').height('100%')
@@ -1492,17 +1754,17 @@ struct Index {
                 })
                 .onActionUpdate((ev: GestureEvent) => {
                   if (this.transitioning) return;
-                  const maxX = Math.max(this.screenW - FLOATING_W, 0);
-                  const maxY = Math.max(this.screenH - this.floatH, 0);
-                  this.floatPosX = Math.min(Math.max(this.floatPanStartX + ev.offsetX, 0), maxX);
-                  this.floatPosY = Math.min(Math.max(this.floatPanStartY + ev.offsetY, 0), maxY);
+                  this.floatPosX = Math.min(Math.max(this.floatPanStartX + ev.offsetX, this.floatMinX()),
+                    this.floatMaxX());
+                  this.floatPosY = Math.min(Math.max(this.floatPanStartY + ev.offsetY, this.floatMinY()),
+                    this.floatMaxY());
                 })
             )
             .hitTestBehavior(HitTestMode.Block)
           }
         }
-        .width(this.launcherVisible ? FLOATING_W : '100%')
-        .height(this.launcherVisible ? this.floatH : '100%')
+        .width(this.launcherVisible ? this.floatingWidth() : '100%')
+        .height(this.launcherVisible ? this.floatingHeight() : '100%')
         .position(this.launcherVisible ? { x: this.floatPosX, y: this.floatPosY } : { x: 0, y: 0 })
         .borderRadius(this.launcherVisible ? 12 : 0)
         .clip(true)
@@ -1517,6 +1779,13 @@ struct Index {
     .onAreaChange((_oldValue: Area, area: Area): void => {
       this.viewportWidth = area.width as number;
       this.viewportHeight = area.height as number;
+      if (this.viewportWidth > 0 && this.viewportHeight > 0) {
+        this.screenW = this.viewportWidth;
+        this.screenH = this.viewportHeight;
+        if (this.launcherVisible && !this.transitioning) {
+          this.ensureFloatPos();
+        }
+      }
       BreakpointSystem.updateFromWidth(this.viewportWidth);
     })
   }

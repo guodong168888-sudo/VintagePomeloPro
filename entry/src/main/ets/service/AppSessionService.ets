@@ -27,6 +27,7 @@ import { WineEngineService } from './WineEngineService';
 import { WineWindowManager } from './WineWindowManager';
 import { InputOverlayWindowCoordinator } from './InputOverlayWindowCoordinator';
 import { AppSettingsStore } from './AppSettingsStore';
+import { AppCatalogService } from './AppCatalogService';
 
 const DOMAIN = 0x0000;
 
@@ -510,7 +511,9 @@ export class AppSessionService {
     this.sessions.clear();
     this.pendingToplevels = [];
     await InputOverlayWindowCoordinator.getInstance().setVisible(false);
-    await WineEngineService.getInstance().resetPrefix();
+    const preserve = AppSettingsStore.getInstance().getGlobalSettings().preserveUserDataOnReset;
+    const home = AppCatalogService.getInstance().getWineHomeDirectory();
+    await WineEngineService.getInstance().resetPrefix(preserve, home);
   }
 
   getSessions(): RuntimeSession[] {
