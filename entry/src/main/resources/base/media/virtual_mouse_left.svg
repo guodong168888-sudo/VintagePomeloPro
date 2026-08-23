@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- Winlator-style top-down mouse, left button highlighted -->
+  <path d="M16 4.5 C10.8 4.5 7 8.2 7 13.2 V18.2 C7 22.2 10.2 26 16 26 C21.8 26 25 22.2 25 18.2 V13.2 C25 8.2 21.2 4.5 16 4.5 Z"
+        fill="none" stroke="#FFFFFF" stroke-width="1.35" stroke-linejoin="round"/>
+  <path d="M16 8.5 V21.5" stroke="#FFFFFF" stroke-width="1.1" stroke-linecap="round"/>
+  <path d="M16 8.5 C12.6 8.5 10.2 10.4 10.2 13.2 V16.2 C10.2 18.2 11.8 19.8 16 19.8 V8.5 Z"
+        fill="#FFFFFF"/>
+</svg>
