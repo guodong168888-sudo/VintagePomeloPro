@@ -45,6 +45,17 @@ export class WineWindowManager {
   isDesktopMode: boolean = true;
   // 公开: 由 applyModePolicy 统一判定 (PC 按 DesktopModeService 设置)
   presentationMode: WinePresentationMode = WinePresentationMode.DESKTOP;
+  // -- 光标隐藏门禁 (dinput 相对模式驱动, 见 applyPointerVisibility) --
+  // pointerLocked: wine 最近的真实"相对模式锁定"请求 (不受展示形态门禁过滤,
+  // 只是原始事实); effectiveHidden: 我们实际对系统光标做的显隐。两者分离,
+  // 以便"悬浮窗 ↔ 完整桌面"切换时按 pointerLocked × 是否允许隐藏重算 — 否则
+  // 悬浮态被抑制的隐藏, 切到完整桌面后没有新事件通知 → 光标残留显示 (游戏里
+  // 光标浮出)。default=false, 与融合模式"只拦桌面"的判据兼容。
+  private pointerLocked: boolean = false;
+  private effectiveHidden: boolean = false;
+  // 触发相对模式的约束 surface 的 toplevelId (解锁时=0)。用于区分"桌面 shell
+  // 自身藏光标 (启动瞬时 toplevelId==desktopRootId)"与"游戏子窗口真相对模式"。
+  private pointerLockToplevel: number = 0;
   private desktopRootId: number = 0;
   // 桌面启动器/悬浮窗可见性 (浮窗模式): Index 悬浮窗态=true → DesktopLayer
   // 跳过 root resize (桌面分辨率保持全屏, 缩略显示靠 letterbox); 全屏态=false
@@ -194,11 +205,14 @@ export class WineWindowManager {
     if (this.mainWindow) {
       testNapi.registerHostWindow(this.mainWindow.getWindowProperties().id);
     }
-    testNapi.setPointerLockCallback((locked: boolean) => {
-      hilog.info(DOMAIN, TAG, '[MW] pointer lock → setPointerVisible(%{public}s)', String(!locked));
-      pointer.setPointerVisible(!locked).catch((e: BusinessError) => {
-        hilog.warn(DOMAIN, TAG, '[MW] setPointerVisible failed: %{public}s', JSON.stringify(e));
-      });
+    testNapi.setPointerLockCallback((locked: boolean, fromToplevel: number) => {
+      // 记录 wine 真实锁定请求与来源 toplevel (不受门禁过滤), 再由
+      // applyPointerVisibility 按展示形态 + 来源决定是否 setPointerVisible —
+      // 悬浮窗态抑制; 完整桌面态: 桌面 root surface (shell 自身) 也抑制, 仅
+      // 子窗口 (真游戏) 跟随。解锁 (locked=false) 必然走 SHOW 分支。
+      this.pointerLocked = locked;
+      this.pointerLockToplevel = fromToplevel;
+      this.applyPointerVisibility();
     });
 
     // A launcher resume recreates EntryAbility while the Wine desktop root can
@@ -1237,12 +1251,16 @@ export class WineWindowManager {
     this.desktopAbilityRunning = true;
     this.desktopAbilityForeground = true;
     hilog.info(DOMAIN, TAG, '[MW] DesktopAbility foreground for root #%{public}d', rootId);
+    // 完整桌面窗口前台: 若 wine 已相对模式, 从悬浮禁止隐藏重算为允许隐藏
+    this.applyPointerVisibility();
   }
 
   markDesktopAbilityBackground(rootId: number): void {
     if (this.desktopAbilityRootId !== rootId) return;
     this.desktopAbilityForeground = false;
     hilog.info(DOMAIN, TAG, '[MW] DesktopAbility background for root #%{public}d', rootId);
+    // 回到悬浮/后台: 即使 wine 相对模式仍存活也禁止隐藏 → 恢复系统光标
+    this.applyPointerVisibility();
   }
 
   markDesktopAbilityStopped(rootId: number): void {
@@ -1252,6 +1270,7 @@ export class WineWindowManager {
     // 浮窗模式: 桌面窗口关闭/缩小 → Index 小浮窗重现 (AppStorage 驱动 @StorageProp)
     AppStorage.setOrCreate('desktopWindowActive', false);
     hilog.info(DOMAIN, TAG, '[MW] DesktopAbility stopped for root #%{public}d', rootId);
+    this.applyPointerVisibility();
   }
 
   getDesktopRootId(): number { return this.desktopRootId; }
@@ -1261,6 +1280,8 @@ export class WineWindowManager {
     this.desktopLauncherVisible = visible;
     hilog.info(DOMAIN, TAG, '[MW] setDesktopLauncherVisible=%{public}s',
       visible ? 'true' : 'false');
+    // Pad 悬浮↔完整桌面切换: 光标隐藏意图可能因形态翻转而改变
+    this.applyPointerVisibility();
   }
 
   setFloatingLayoutAnimating(animating: boolean): void {
@@ -1276,6 +1297,38 @@ export class WineWindowManager {
       return true;
     }
     return false;
+  }
+
+  // 光标隐藏门禁判据 (fromToplevel = 触发相对模式的约束 surface 所属 toplevel):
+  //   融合模式   → 允许 (每个 app 独立窗口, setPointerVisible 按"当前窗口"
+  //                作用, 只有发起相对模式的应用窗口隐藏, 天然满足"其它窗口
+  //                不隐藏") — 不拦。
+  //   桌面模式   → 悬浮窗形态禁止; 完整桌面形态仅"非桌面 root surface"允许。
+  //                Pad: 悬浮 = launcherVisible; 完整 = !launcherVisible
+  //               完整桌面下 fromToplevel == desktopRootId → 桌面 shell 自身藏
+  //               光标 (启动瞬时) → 禁止; 子窗口 (真实游戏/程序) → 允许。
+  private canHideCursor(fromToplevel: number): boolean {
+    if (!this.isDesktopMode) return true;
+    if (this.desktopLauncherVisible) return false;
+    if (this.desktopAbilityRunning && !this.desktopAbilityForeground) return false;
+    return fromToplevel !== this.desktopRootId;
+  }
+
+  // 统一重算并应用光标显隐: shouldHide = pointerLocked × canHideCursor()。
+  private applyPointerVisibility(): void {
+    const canHide = this.canHideCursor(this.pointerLockToplevel);
+    const shouldHide = this.pointerLocked && canHide;
+    hilog.info(DOMAIN, TAG,
+      '[MW]PtrVis → %{public}s (locked=%{public}s canHide=%{public}s tl=%{public}d mode=%{public}s launcher=%{public}s fg=%{public}s)',
+      shouldHide ? 'HIDE' : 'SHOW',
+      String(this.pointerLocked), String(canHide), this.pointerLockToplevel,
+      String(this.isDesktopMode), String(this.desktopLauncherVisible),
+      String(this.desktopAbilityForeground));
+    if (shouldHide === this.effectiveHidden) return;
+    this.effectiveHidden = shouldHide;
+    pointer.setPointerVisible(!shouldHide).catch((e: BusinessError) => {
+      hilog.warn(DOMAIN, TAG, '[MW] setPointerVisible failed: %{public}s', JSON.stringify(e));
+    });
   }
 
   registerDesktopAbility(ctx: common.UIAbilityContext): void {
