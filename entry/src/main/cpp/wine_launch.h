@@ -14,6 +14,9 @@ struct LaunchParams {
     std::string winehuaBin;
     std::string prefixDir;
     std::string d3dBackend = "dxvk_legacy";
+    // Box64 dynarec 全局档位 ("K=V;K=V;..."), 来自设置页兼容预设; 空 = 出厂基线。
+    // native 只放行 BOX64_DYNAREC_* 行, 经 wineboot/wineserver __env= 与会话 env 注入。
+    std::string compatEnvStr;
     bool automationMode = false;
     std::vector<std::string> envStrs;
     std::vector<char*> envp;

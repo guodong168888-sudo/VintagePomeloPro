@@ -4,7 +4,27 @@
 
 基线：WineHua `VintagePomeloMaster` @ `ba7218a`
 
-> **同步基线标记**：最新核对到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `e16d79b`，本地镜像 `mirror_master`）。下次同步先 `git fetch winehua && git branch -f mirror_master winehua/master && git log e16d79b..mirror_master --oneline`，避免重复合并。
+> **同步基线标记**：最新核对到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `90edaae`，本地镜像 `mirror_master`）。下次同步先 `git fetch winehua && git branch -f mirror_master winehua/master && git log 90edaae..mirror_master --oneline`，避免重复合并。
+
+### 2026-08-25 WineHua master 增量（e16d79b..90edaae）
+
+- 分支：`feature/sync-winehua-90edaae`（基于当前产品线 HEAD，含 PC 虚拟桌面光标隐藏门禁）。
+- 镜像：`mirror_master` 跟踪 `winehua/master` @ `90edaae`。
+- 原则：只吸收 Box64 兼容档位 native 通道；不引入上游 `Box64Dynarec.ets` / `WineEnvService` / 品牌 / 版本号 / CI / `dxvkBackend`+`wineLang` 第 9–10 参。
+- 已移植（上游 SHA → 本地适配，非整 commit cherry-pick）：
+
+  | 上游 SHA | 说明 |
+  | --- | --- |
+  | `7cff882` | `compatEnvStr` 通道：wineboot / wineserver / explorer 三路注入 |
+  | `dcf3906` | `FilterCompatLines`、automation 跳过、wineserver 二次只重放 `BOX64_DYNAREC_*`、napi 返回码校验 |
+  | `90edaae` | 注入调用点 `__aarch64__` 守卫 |
+
+- 私有适配：
+  - `launchClient` 本仓仍为 8 参 + 新增第 9 参 `compatEnvStr`（不上游 11 参）
+  - 档位表继续用 `resolveBox64PresetEnv`（不含 WEAKBARRIER / VOLATILE_METADATA）
+  - `WineEngineService.ensureReady` 把全局 `box64Preset` 编成分号串下发
+- 跳过：WineHua `Box64Dynarec.ets`（当时尚未接到设置页，且引用上游 service 名）；`rc-1.0.15` / `rc-1.0.16` 标签；`winehua/main-ui`。
+- 子模块 gitlink：未跟随上游。
 
 ### 2026-08-24 WineHua master 增量（10a9e6c..e16d79b）
 

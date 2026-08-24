@@ -272,8 +272,8 @@ static napi_value SetHostShadowProfile(napi_env env, napi_callback_info info) {
 }
 
 static napi_value LaunchClient(napi_env env, napi_callback_info info) {
-    size_t argc = 8;
-    napi_value args[8] = {};
+    size_t argc = 9;
+    napi_value args[9] = {};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
     auto* p = new LaunchParams();
@@ -302,6 +302,16 @@ static napi_value LaunchClient(napi_env env, napi_callback_info info) {
         if (!strcmp(d3dBackend, "wined3d") || !strncmp(d3dBackend, "dxvk_", 5))
             p->d3dBackend = d3dBackend;
     }
+    if (argc >= 9) {
+        char compatEnv[2048] = {};
+        napi_status compatStatus =
+            napi_get_value_string_utf8(env, args[8], compatEnv, sizeof(compatEnv), nullptr);
+        if (compatStatus != napi_ok) {
+            OH_LOG_WARN(LOG_APP, "[Launch] compatEnvStr arg is not a string, ignored");
+        } else {
+            p->compatEnvStr = compatEnv;
+        }
+    }
     // 向后兼容: 旧调用未传 homeDir 时使用默认路径
     if (p->homeDir.empty()) {
         p->homeDir = "/storage/Users/currentUser/Download";
@@ -311,7 +321,8 @@ static napi_value LaunchClient(napi_env env, napi_callback_info info) {
                 "[Launch] exe=%{public}s sock=%{public}s lib=%{public}s home=%{public}s prefix=%{public}s automation=%{public}s (async)",
                 p->exePath.c_str(), p->sockPath.c_str(), p->libPath.c_str(), p->homeDir.c_str(),
                 p->prefixDir.c_str(), p->automationMode ? "true" : "false");
-    OH_LOG_INFO(LOG_APP, "[Launch] desktop D3D backend=%{public}s", p->d3dBackend.c_str());
+    OH_LOG_INFO(LOG_APP, "[Launch] desktop D3D backend=%{public}s compat=%{public}s",
+                p->d3dBackend.c_str(), p->compatEnvStr.empty() ? "baseline" : "preset");
 
     // 保证可执行
     if (access(p->exePath.c_str(), X_OK) != 0) chmod(p->exePath.c_str(), 0755);

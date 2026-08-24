@@ -240,6 +240,11 @@ export function resolveBox64PresetEnv(presetId: string): string[] {
   }
 }
 
+/** 全局预设 → native launchClient compatEnvStr (分号串); 默认档为空。 */
+export function box64PresetEnvString(presetId: string): string {
+  return resolveBox64PresetEnv(presetId).join(';');
+}
+
 /**
  * Unity 兼容档额外追加的启动参数。参考 Winlator：Unity 引擎游戏在
  * Stability 预设之外还需要 -force-gfx-direct，让 Unity 跳过 GDI 间接

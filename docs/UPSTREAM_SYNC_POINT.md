@@ -3,17 +3,23 @@
 > 用途：标明本地产品线已合并到 WineHua 上游的哪个提交，避免重复合并/漏合并。
 > 本地镜像分支：`mirror_master`（跟踪 `winehua/master`，只读对照，不 push）。
 > 维护命令：`git fetch winehua && git branch -f mirror_master winehua/master`
-> 下次同步前先执行：`git log e16d79b..mirror_master --oneline`
+> 下次同步前先执行：`git log 90edaae..mirror_master --oneline`
 
 | 项 | 值 |
 | --- | --- |
 | 上游仓库 | `https://github.com/winehua/WineHua` |
 | 上游分支 | `master` |
-| **最后核对的上游 SHA** | `e16d79b`（2026-08-24，`mirror_master` 尖端） |
+| **最后核对的上游 SHA** | `90edaae`（2026-08-25，`mirror_master` 尖端） |
 | 功能同步起点（用户指定） | `10a9e6caf33e0147363793947461417dd60a8372`（master 线等价 `189c27c`） |
 | 合并方式 | 选择性 cherry-pick -x：只吸收输入/渲染功能，不上游品牌/版本号/CI/README |
 | 本地对应分支 | `feature/sync-winehua-10a9e6c`（合入 `main` 后以 main 为准） |
-| 核对日期 | 2026-08-24 |
+| 核对日期 | 2026-08-25 |
+
+## 已核对的上游增量（e16d79b..90edaae）
+
+从上一基线 `e16d79b` 到 `winehua/master` 尖端 `90edaae`。采纳 Box64 兼容档位 native 通道（`7cff882` `dcf3906` `90edaae`），跳过上游 `Box64Dynarec.ets` 与版本标签。
+
+明细见 `docs/private-upstream-sync.md`「2026-08-25 WineHua master 增量（e16d79b..90edaae）」。
 
 ## 已核对的上游增量（10a9e6c..e16d79b）
 
