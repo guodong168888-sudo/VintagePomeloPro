@@ -1303,14 +1303,21 @@ export class WineWindowManager {
   //   融合模式   → 允许 (每个 app 独立窗口, setPointerVisible 按"当前窗口"
   //                作用, 只有发起相对模式的应用窗口隐藏, 天然满足"其它窗口
   //                不隐藏") — 不拦。
-  //   桌面模式   → 悬浮窗形态禁止; 完整桌面形态仅"非桌面 root surface"允许。
-  //                Pad: 悬浮 = launcherVisible; 完整 = !launcherVisible
-  //               完整桌面下 fromToplevel == desktopRootId → 桌面 shell 自身藏
-  //               光标 (启动瞬时) → 禁止; 子窗口 (真实游戏/程序) → 允许。
+  //   PC 虚拟桌面 → 对齐 WineHua desktopSeparateWindow + desktopWindowActive:
+  //                DesktopAbility 前台才允许; 不看 Pad 浮窗标志
+  //                (desktopLauncherVisible 默认 true, PC 从不走 Index 放大清位)。
+  //   Pad/手机    → 悬浮窗形态禁止; 完整桌面形态仅非桌面 root 允许。
+  //                悬浮 = launcherVisible; 完整 = !launcherVisible
+  //   完整桌面下 fromToplevel == desktopRootId → 桌面 shell 自身藏
+  //   光标 (启动瞬时) → 禁止; 子窗口 (真实游戏/程序) → 允许。
   private canHideCursor(fromToplevel: number): boolean {
     if (!this.isDesktopMode) return true;
-    if (this.desktopLauncherVisible) return false;
-    if (this.desktopAbilityRunning && !this.desktopAbilityForeground) return false;
+    if (DeviceCapabilityPolicy.usesManagedWineWindows()) {
+      if (!this.desktopAbilityForeground) return false;
+    } else {
+      if (this.desktopLauncherVisible) return false;
+      if (this.desktopAbilityRunning && !this.desktopAbilityForeground) return false;
+    }
     return fromToplevel !== this.desktopRootId;
   }
 
@@ -1319,11 +1326,13 @@ export class WineWindowManager {
     const canHide = this.canHideCursor(this.pointerLockToplevel);
     const shouldHide = this.pointerLocked && canHide;
     hilog.info(DOMAIN, TAG,
-      '[MW]PtrVis → %{public}s (locked=%{public}s canHide=%{public}s tl=%{public}d mode=%{public}s launcher=%{public}s fg=%{public}s)',
+      '[MW]PtrVis → %{public}s (locked=%{public}s canHide=%{public}s tl=%{public}d desktop=%{public}s pcManaged=%{public}s launcher=%{public}s fg=%{public}s root=%{public}d)',
       shouldHide ? 'HIDE' : 'SHOW',
       String(this.pointerLocked), String(canHide), this.pointerLockToplevel,
-      String(this.isDesktopMode), String(this.desktopLauncherVisible),
-      String(this.desktopAbilityForeground));
+      String(this.isDesktopMode),
+      String(DeviceCapabilityPolicy.usesManagedWineWindows()),
+      String(this.desktopLauncherVisible),
+      String(this.desktopAbilityForeground), this.desktopRootId);
     if (shouldHide === this.effectiveHidden) return;
     this.effectiveHidden = shouldHide;
     pointer.setPointerVisible(!shouldHide).catch((e: BusinessError) => {
