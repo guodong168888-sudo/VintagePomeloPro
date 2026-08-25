@@ -430,6 +430,56 @@ static void EmitEngineFail(const char* reason)
     EmitEngineEvent(event.c_str());
 }
 
+// -- 兼容模式全局档位 (设置页 → launchClient 第 9 参 compatEnvStr 分号串) --
+// 对齐 WineHua 7cff882/dcf3906/90edaae: ArkTS 拼 "K=V;K=V;...", native 零表
+// 只放行 BOX64_DYNAREC_* (防注入其它 key)。空串 = 出厂基线不注入。
+// 仅 __aarch64__ (Box64) 有意义; x86_64 原生空转。
+#ifdef __aarch64__
+static std::vector<std::string> FilterCompatLines(const std::string& compatEnvStr)
+{
+    std::vector<std::string> raw;
+    std::string cur;
+    for (const char c : compatEnvStr) {
+        if (c == ';') {
+            if (!cur.empty()) raw.push_back(cur);
+            cur.clear();
+        } else {
+            cur += c;
+        }
+    }
+    if (!cur.empty()) raw.push_back(cur);
+    std::vector<std::string> filtered;
+    for (const std::string& line : raw) {
+        if (line.rfind("BOX64_DYNAREC_", 0) != 0)
+            continue;
+        if (line.find('|') != std::string::npos || line.find('\n') != std::string::npos)
+            continue;
+        if (line.find('=') == std::string::npos)
+            continue;
+        filtered.push_back(line);
+    }
+    return filtered;
+}
+
+static void AppendCompatEnvLines(std::vector<std::string>& envStrs, const LaunchParams& p)
+{
+    if (p.automationMode)
+        return;
+    for (const std::string& line : FilterCompatLines(p.compatEnvStr))
+        UpsertEnvLine(envStrs, line);
+}
+
+static void AppendCompatEnvToEntryParams(std::string& entryParams, const LaunchParams& p)
+{
+    if (p.automationMode)
+        return;
+    for (const std::string& line : FilterCompatLines(p.compatEnvStr)) {
+        entryParams += "|__env=";
+        entryParams += line;
+    }
+}
+#endif // __aarch64__
+
 static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
                           const std::string& serializedEnv) {
     // 通过 fdList 传递 audio bootstrap fd (仅 explorer 需要音频)
@@ -470,6 +520,9 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
     int32_t wsChildPid = -1;
     {
         std::string wsEntryParams = p->homeDir + "|" + p->winehuaBin + "|wineserver|-f|-p";
+#ifdef __aarch64__
+        AppendCompatEnvToEntryParams(wsEntryParams, *p);
+#endif
         OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver args=%{public}s", wsEntryParams.c_str());
         NativeChildProcess_Args wsArgs = {};
         wsArgs.entryParams = const_cast<char*>(wsEntryParams.c_str());
@@ -542,6 +595,9 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
 #else
             std::string entryParams = p->homeDir + "|" + p->winehuaBin + "|" + desktopTag +
                 "wine|wineboot|--init|__env=WINEPREFIX=" + p->prefixDir;
+#endif
+#ifdef __aarch64__
+            AppendCompatEnvToEntryParams(entryParams, *p);
 #endif
             NativeChildProcess_Args childArgs = {};
             childArgs.entryParams = const_cast<char*>(entryParams.c_str());
@@ -671,6 +727,9 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
         OH_LOG_INFO(LOG_APP, "[Launch-Async] prefix ready; seeding wineboot boot event (--init)...");
         std::string entryParams = p->homeDir + "|" + p->winehuaBin + "|" +
             "wine|wineboot|--init|__env=WINEPREFIX=" + p->prefixDir;
+#ifdef __aarch64__
+        AppendCompatEnvToEntryParams(entryParams, *p);
+#endif
         NativeChildProcess_Args childArgs = {};
         childArgs.entryParams = const_cast<char*>(entryParams.c_str());
         NativeChildProcess_Options options = {};
@@ -841,6 +900,9 @@ void LaunchThreadFunc(LaunchParams* p) {
     p->envStrs = BuildWineEnv(p->sockDir, p->sockName, p->libPath, p->winehuaBin,
                                audioBootstrapFd, p->homeDir, p->prefixDir);
     AppendD3dBackendEnv(p->envStrs, p->d3dBackend, p->winehuaBin);
+#ifdef __aarch64__
+    AppendCompatEnvLines(p->envStrs, *p);
+#endif
     const std::string serializedEnv = SerializeEnvToEntryParams(p->envStrs);
 
     mkdir(p->prefixDir.c_str(), 0755);

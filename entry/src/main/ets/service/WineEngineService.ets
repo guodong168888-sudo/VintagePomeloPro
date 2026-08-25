@@ -13,7 +13,8 @@ import {
   WinePresentationMode,
   canTransitionEngineState,
   LaunchKind,
-  resolveWinePresentationMode
+  resolveWinePresentationMode,
+  box64PresetEnvString
 } from '../model/AppModels';
 import { AppSettingsStore } from './AppSettingsStore';
 import { syncManagedSmoke } from './SmokeRunner';
@@ -453,7 +454,8 @@ export class WineEngineService {
       // Native runs wineboot --init only for a new prefix. Existing prefixes
       // are migrated above before any wineserver process starts.
       testNapi.launchClient(BOX64, [], SOCK, WINE_BIN + ':' + WINE_LIB,
-        homeDirectory, false, '', this.d3dBackend);
+        homeDirectory, false, '', this.d3dBackend,
+        box64PresetEnvString(AppSettingsStore.getInstance().getGlobalSettings().box64Preset));
       return this.waitForReady();
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'ensureReady failed: %{public}s', JSON.stringify(error));
