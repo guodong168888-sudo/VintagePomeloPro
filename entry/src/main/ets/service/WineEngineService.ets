@@ -503,13 +503,11 @@ export class WineEngineService {
   private selectedD3DBackend(): string {
     const stored = AppSettingsStore.getInstance().getRenderMode();
     const mode = stored.length > 0 ? stored :
-      (AppStorage.get<string>('winehua.render.mode') ?? 'auto');
+      (AppStorage.get<string>('winehua.render.mode') ?? 'dxvk_1_10');
     let backend = 'dxvk_legacy';
     if (mode === 'virgl') {
       backend = 'wined3d';
-    } else if (mode === 'dxvk_1_10') {
-      backend = 'dxvk_legacy';
-    } else if (this.gpuSupportsDxvk26()) {
+    } else if (mode === 'dxvk_2_6' && this.gpuSupportsDxvk26()) {
       backend = 'dxvk_modern_2_6';
     }
     AppStorage.setOrCreate<string>('winehua.render.resolved', backend);

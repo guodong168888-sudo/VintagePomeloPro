@@ -251,8 +251,8 @@ struct SystemSettingsPage {
   // host GPU 名称 + DXVK2.6 支持判定 (马良 920 以下不支持, 经 testNapi.getHostGpuName)
   @State private gpuName: string = '';
   @State private gpuSupportDxvk26: boolean = true;
-  // 渲染模式 (auto/dxvk_2_6/dxvk_1_10/virgl): @State 保证按钮选中态即时刷新
-  @State private renderMode: string = 'auto';
+  // 渲染模式 (dxvk_1_10/dxvk_2_6/virgl): @State 保证按钮选中态即时刷新
+  @State private renderMode: string = 'dxvk_1_10';
   @State private fontImporting: boolean = false;
   @State private fontImportStage: string = '';
   @State private fontImportProgress: number = 0;
@@ -346,7 +346,7 @@ struct SystemSettingsPage {
     this.loadGpuInfo();
     this.renderMode = AppSettingsStore.getInstance().getRenderMode()
       || AppStorage.get<string>('winehua.render.mode')
-      || 'auto';
+      || 'dxvk_1_10';
   }
 
   onPageShow(): void {
@@ -970,14 +970,12 @@ struct SystemSettingsPage {
     }
   }
 
-  /** 渲染模式: auto / dxvk_2_6 / dxvk_1_10 / virgl。
-   *  自动: DX11→DXVK 2.6 (GPU 不适配自动 1.10), D3D12→VKD3D。
-   *  写入 Preferences 后再重启引擎，避免下次冷启动回退 auto。 */
+  /** 渲染模式: dxvk_1_10 / dxvk_2_6 / virgl。默认 1.10；2.6 仅 920+ 可选（实验）。 */
   private updateRenderMode(mode: string): void {
-    const selected = mode === 'dxvk_2_6' || mode === 'dxvk_1_10' || mode === 'virgl' ? mode : 'auto';
+    const selected = mode === 'dxvk_2_6' || mode === 'dxvk_1_10' || mode === 'virgl' ? mode : 'dxvk_1_10';
     const current = AppSettingsStore.getInstance().getRenderMode()
       || AppStorage.get<string>('winehua.render.mode')
-      || 'auto';
+      || 'dxvk_1_10';
     if (current === selected) return;
     this.renderMode = selected;
     promptAction.showToast({ message: '渲染模式已切换，正在重启引擎…' });
@@ -1413,7 +1411,9 @@ struct SystemSettingsPage {
   }
 
   private renderModeActive(mode: string): boolean {
-    return this.renderMode === mode;
+    const effective = (this.renderMode === 'dxvk_2_6' && !this.gpuSupportDxvk26)
+      ? 'dxvk_1_10' : this.renderMode;
+    return effective === mode;
   }
 
   @Builder
@@ -1421,12 +1421,12 @@ struct SystemSettingsPage {
     Button() {
       if (this.isNarrowPhone() && (mode === 'dxvk_2_6' || mode === 'dxvk_1_10')) {
         Column({ space: 0 }) {
-          Text('DXVK')
+          Text(mode === 'dxvk_2_6' ? 'DXVK 2.6' : 'DXVK')
             .fontSize(10)
             .fontWeight(FontWeight.Medium)
             .fontColor(!enabled ? '#666' : (this.renderModeActive(mode) ? '#FFFFFFFF' : $r('app.color.text_primary')))
             .maxLines(1)
-          Text(mode === 'dxvk_2_6' ? '2.6' : '1.10')
+          Text(mode === 'dxvk_2_6' ? '实验' : '1.10')
             .fontSize(13)
             .fontWeight(FontWeight.Bold)
             .fontColor(!enabled ? '#666' : (this.renderModeActive(mode) ? '#FFFFFFFF' : $r('app.color.text_primary')))
@@ -1930,21 +1930,15 @@ struct SystemSettingsPage {
           Text('渲染模式').fontSize(12).fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_secondary')).width('100%')
           Row({ space: 6 }) {
-            this.RenderModeChip('自动', 'auto')
-            this.RenderModeChip('DXVK 2.6', 'dxvk_2_6', this.gpuSupportDxvk26)
             this.RenderModeChip('DXVK 1.10', 'dxvk_1_10')
+            if (this.gpuSupportDxvk26) {
+              this.RenderModeChip('DXVK 2.6（实验）', 'dxvk_2_6')
+            }
             this.RenderModeChip('VirGL', 'virgl')
           }.width('100%')
-          if (this.renderMode === 'auto') {
-            Text(this.gpuSupportDxvk26
-              ? `当前适配：DXVK 2.6 + VKD3D（${this.gpuName || '探测中'}）`
-              : `当前适配：DXVK 1.10（${this.gpuName || '探测中'} 不支持 2.6）`)
-              .fontSize(11).fontColor($r('app.color.accent')).width('100%')
-          } else if (!this.gpuSupportDxvk26) {
-            Text(`GPU (${this.gpuName}) 不支持 DXVK 2.6，已自动用 1.10。`)
-              .fontSize(11).fontColor('#C47A20').width('100%')
-          }
-          Text('自动按设备 GPU 选择 DXVK；920+ 用 2.6 + VKD3D，否则回退 1.10。')
+          Text(this.gpuSupportDxvk26
+            ? '默认使用 DXVK 1.10。当前 GPU 支持开启 DXVK 2.6（实验）。'
+            : `默认使用 DXVK 1.10。当前 GPU（${this.gpuName || '未知'}）低于 920，不提供 DXVK 2.6。`)
             .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
           Text('更改后需要重启 Wine 引擎；运行中的游戏不会被立即中断。')
             .fontSize(11).fontColor('#C47A20').width('100%')
