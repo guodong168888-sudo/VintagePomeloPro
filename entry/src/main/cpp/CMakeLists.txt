@@ -31,6 +31,7 @@ add_library(entry SHARED
     experiment_payload.cpp
     wine_process.cpp
     wine_env.cpp
+    env_spec.cpp
     wine_launch.cpp
     wine_exe.cpp
     font_zip.cpp

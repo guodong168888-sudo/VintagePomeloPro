@@ -1,4 +1,5 @@
 #include "wine_env.h"
+#include "env_spec.h"
 #include "wine_constants.h"
 #include "audio_broker.h"
 #include "audio_ipc_protocol.h"
@@ -389,13 +390,6 @@ void AppendProductDxvkEnv(std::vector<std::string>& env,
     }
 }
 
-static bool ShouldSerializeEntryParamEnv(const std::string& envLine) {
-    return envLine.rfind("WINE_OHOS_AUDIO_ENABLE=", 0) != 0 &&
-           envLine.rfind("WINE_OHOS_AUDIO_BOOTSTRAP_FD=", 0) != 0 &&
-           envLine.rfind("WINE_OHOS_AUDIO_PROTOCOL_VERSION=", 0) != 0 &&
-           envLine.rfind("WINESERVERSOCKET=", 0) != 0;
-}
-
 static std::string EnvKey(const std::string& envLine) {
     size_t sep = envLine.find('=');
     return sep == std::string::npos ? envLine : envLine.substr(0, sep);
@@ -425,19 +419,12 @@ size_t AppendMissingEntryParamsEnvOverrides(std::string& entryParams,
 
     size_t appended = 0;
     for (const std::string& envLine : env) {
-        if (!ShouldSerializeEntryParamEnv(envLine) ||
-            envLine.find('|') != std::string::npos ||
-            envLine.find('\n') != std::string::npos)
-            continue;
-        // 过滤 per-process fd 变量: 子进程会从 fdList 拿到自己的值
-        if (envLine.rfind("WINESERVERSOCKET=", 0) == 0 ||
-            envLine.rfind("WINE_OHOS_AUDIO_ENABLE=", 0) == 0 ||
-            envLine.rfind("WINE_OHOS_AUDIO_BOOTSTRAP_FD=", 0) == 0 ||
-            envLine.rfind("WINE_OHOS_AUDIO_PROTOCOL_VERSION=", 0) == 0)
+        if (!winehua::IsEntryParamsEncodable(envLine))
             continue;
         const std::string key = EnvKey(envLine);
-        if (key.empty() ||
-            (existingKeys.count(key) && !IsBrokerSessionAuthoritativeKey(key)))
+        if (key.empty() || winehua::IsPerProcessFdEnvKey(key))
+            continue;
+        if (existingKeys.count(key) && !IsBrokerSessionAuthoritativeKey(key))
             continue;
         entryParams += "|__env=";
         entryParams += envLine;
@@ -448,19 +435,7 @@ size_t AppendMissingEntryParamsEnvOverrides(std::string& entryParams,
 }
 
 std::string SerializeEnvToEntryParams(const std::vector<std::string>& env) {
-    std::string result;
-    for (const std::string& e : env) {
-        if (e.find('|') != std::string::npos || e.find('\n') != std::string::npos)
-            continue;
-        if (e.rfind("WINESERVERSOCKET=", 0) == 0 ||
-            e.rfind("WINE_OHOS_AUDIO_ENABLE=", 0) == 0 ||
-            e.rfind("WINE_OHOS_AUDIO_BOOTSTRAP_FD=", 0) == 0 ||
-            e.rfind("WINE_OHOS_AUDIO_PROTOCOL_VERSION=", 0) == 0)
-            continue;
-        result += "|__env=";
-        result += e;
-    }
-    return result;
+    return winehua::EnvSpec::fromLines(env).serializeEntryParams();
 }
 
 void LogGraphicsBackendStateForLaunch(const char* tag) {

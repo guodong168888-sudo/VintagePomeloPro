@@ -166,7 +166,7 @@ void UpsertEnvLine(std::vector<std::string>& env, const std::string& line);
 // -- Audio bootstrap --
 int CreateAudioBootstrapFd(const std::string& runtimeDir);
 
-// -- entryParams 序列化 --
+// -- entryParams 序列化 (实现收口到 EnvSpec; AppendMissing 仍服务 explorer NCP 补键) --
 size_t AppendMissingEntryParamsEnvOverrides(std::string& entryParams,
                                             const std::vector<std::string>& env);
 std::string SerializeEnvToEntryParams(const std::vector<std::string>& env);
