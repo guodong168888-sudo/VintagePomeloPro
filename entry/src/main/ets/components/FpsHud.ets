@@ -10,15 +10,15 @@ export struct FpsHud {
   @Prop toplevelId: number = 0;
   /** 浮窗缩略等场景隐藏，避免小窗挤数字。 */
   @Prop @Watch('onHideChanged') hide: boolean = false;
-  @State private enabled: boolean = false;
+  @State private hudEnabled: boolean = false;
   @State private fpsText: string = '0';
   private timerId: number = -1;
   private settingsListener: ThemeSettingsListener | null = null;
 
   aboutToAppear(): void {
-    this.enabled = ThemeSettingsService.getInstance().getSettings().showFpsHud;
+    this.hudEnabled = ThemeSettingsService.getInstance().getSettings().showFpsHud;
     this.settingsListener = (settings: GlobalSettings): void => {
-      this.enabled = settings.showFpsHud;
+      this.hudEnabled = settings.showFpsHud;
       this.syncTimer();
     };
     ThemeSettingsService.getInstance().subscribe(this.settingsListener);
@@ -38,7 +38,7 @@ export struct FpsHud {
   }
 
   private active(): boolean {
-    return this.enabled && !this.hide;
+    return this.hudEnabled && !this.hide;
   }
 
   private syncTimer(): void {
