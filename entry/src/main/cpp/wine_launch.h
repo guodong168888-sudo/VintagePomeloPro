@@ -1,7 +1,6 @@
 #pragma once
 
 #include <string>
-#include <vector>
 #include <napi/native_api.h>
 
 struct LaunchParams {
@@ -18,8 +17,6 @@ struct LaunchParams {
     // native 只放行 BOX64_DYNAREC_* 行, 经 wineboot/wineserver __env= 与会话 env 注入。
     std::string compatEnvStr;
     bool automationMode = false;
-    std::vector<std::string> envStrs;
-    std::vector<char*> envp;
 };
 
 void LaunchThreadFunc(LaunchParams* p);

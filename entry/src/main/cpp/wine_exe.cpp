@@ -1,6 +1,7 @@
 #include "wine_exe.h"
 
 #include "broker.h"
+#include "env_profiles.h"
 #include "graphics_broker.h"
 #include "wayland_server.h"
 #include "wine_constants.h"
@@ -299,23 +300,27 @@ static int SpawnWineProgramImpl(const ProgramOptions& options)
         options.presentBackend == "venus_broker_present" ||
         options.presentBackend == "venus_direct_present");
 
-    std::vector<std::string> envStrs = BuildWineEnv(
-        sockDir, sockName, libPath, binDir, -1, homeDir, prefixDir);
-    /* Product defaults first, then per-run settings. Smoke and game launches
-     * must be able to select their own log directory and diagnostics. */
-    AppendD3dBackendEnv(envStrs, options.d3dBackend, binDir);
-    for (const std::string& line : options.environment) UpsertEnv(&envStrs, line);
-    UpsertEnv(&envStrs, "WINEHUA_D3D_BACKEND=" + options.d3dBackend);
-    UpsertEnv(&envStrs, "WINEHUA_PRESENT_BACKEND=" + options.presentBackend);
+    winehua::SessionEnvPolicy policy;
+    policy.sockDir = sockDir;
+    policy.sockName = sockName;
+    policy.libPath = libPath;
+    policy.binDir = binDir;
+    policy.homeDir = homeDir;
+    policy.prefixDir = prefixDir;
+    policy.d3dBackend = options.d3dBackend;
+    policy.desktopShellFlag = WaylandServer::GetInstance()->IsDesktopMode();
+    policy.extraEnv = options.environment;
+    policy.extraEnv.push_back("WINEHUA_D3D_BACKEND=" + options.d3dBackend);
+    policy.extraEnv.push_back("WINEHUA_PRESENT_BACKEND=" + options.presentBackend);
     if (IsVkd3dSmokeDemo(options.windowsExePath))
-        AppendVkd3dDemoPresentEnv(envStrs, options.d3dBackend, binDir);
-    UpsertEnv(&envStrs, std::string("WINEHUA_AUTOMATION=") + (options.automationMode ? "1" : "0"));
-    /* DXVK is a managed WineHua runtime overlay, never a game-provided DLL. */
+        AppendVkd3dDemoPresentEnv(policy.extraEnv, options.d3dBackend, binDir);
+    policy.extraEnv.push_back(std::string("WINEHUA_AUTOMATION=") +
+                              (options.automationMode ? "1" : "0"));
     if (options.d3dBackend.rfind("dxvk_", 0) == 0)
         OH_LOG_INFO(LOG_APP, "[WineProgram] managed D3D backend=%{public}s",
                     options.d3dBackend.c_str());
-    UpsertEnv(&envStrs, "WINEHUA_WINE_UNIX_ARCH=x86_64");
-    UpsertEnv(&envStrs, "WINEHUA_HOST_ARCH=" + std::string(
+    policy.extraEnv.push_back("WINEHUA_WINE_UNIX_ARCH=x86_64");
+    policy.extraEnv.push_back("WINEHUA_HOST_ARCH=" + std::string(
 #ifdef __aarch64__
         "aarch64"
 #else
@@ -323,7 +328,8 @@ static int SpawnWineProgramImpl(const ProgramOptions& options)
 #endif
     ));
     if (!options.workingDirectory.empty())
-        UpsertEnv(&envStrs, "WINEHUA_WORKING_DIRECTORY=" + options.workingDirectory);
+        policy.extraEnv.push_back("WINEHUA_WORKING_DIRECTORY=" + options.workingDirectory);
+    std::vector<std::string> envStrs = winehua::BuildSessionEnv(policy);
 
 #ifdef __aarch64__
     std::string entryParams = binDir + "|" + exePath;
@@ -749,21 +755,18 @@ napi_value RunWineExe(napi_env env, napi_callback_info info)
     std::string sockDir = (pos == std::string::npos) ? "/tmp" : sockStr.substr(0, pos);
     std::string sockName = (pos == std::string::npos) ? sockStr : sockStr.substr(pos + 1);
 
-    int audioBootstrapFd = -1;  // broker 会为每个子进程创建 audio fd, 此处无需传递
-
-    std::vector<std::string> wineEnv = BuildWineEnv(sockDir, sockName, libPath, binDir, audioBootstrapFd, homeDir);
-    // App cards, scanned games and Explorer descendants must resolve the same
-    // qualified DXVK/Venus/Box64 product stack. Previously only the initial
-    // desktop and automation runWineProgram path received this overlay.
-    AppendD3dBackendEnv(wineEnv, d3dBackend, binDir);
-    AppendProductDxvkEnv(wineEnv, d3dBackend);
+    winehua::SessionEnvPolicy policy;
+    policy.sockDir = sockDir;
+    policy.sockName = sockName;
+    policy.libPath = libPath;
+    policy.binDir = binDir;
+    policy.homeDir = homeDir;
+    policy.d3dBackend = d3dBackend;
+    policy.stableDesktopOverlay = true;
+    policy.desktopShellFlag = WaylandServer::GetInstance()->IsDesktopMode();
     if (workingDirectoryPath[0])
-        UpsertEnv(&wineEnv, "WINEHUA_WORKING_DIRECTORY=" +
-                  std::string(workingDirectoryPath));
-    // Per-launch Box64/VirGL compatibility overrides.  The child applies
-    // these after the hardcoded defaults, so they win without touching the
-    // production defaults.  VOLATILE_METADATA stays locked to the private
-    // safe value (DOS MZ executables crash box64's PE metadata parser).
+        policy.extraEnv.push_back("WINEHUA_WORKING_DIRECTORY=" +
+                                  std::string(workingDirectoryPath));
     for (const std::string& overrideLine : envOverrides)
     {
         if (overrideLine.rfind("BOX64_DYNAREC_VOLATILE_METADATA=", 0) == 0) {
@@ -771,19 +774,15 @@ napi_value RunWineExe(napi_env env, napi_callback_info info)
                         "[Wine] ignoring protected BOX64_DYNAREC_VOLATILE_METADATA override");
             continue;
         }
-        UpsertEnv(&wineEnv, overrideLine);
+        policy.extraEnv.push_back(overrideLine);
     }
     if (IsVkd3dSmokeDemo(exePath) || IsVkd3dSmokeDemo(wineExe))
-        AppendVkd3dDemoPresentEnv(wineEnv, d3dBackend, binDir);
+        AppendVkd3dDemoPresentEnv(policy.extraEnv, d3dBackend, binDir);
+    std::vector<std::string> wineEnv = winehua::BuildSessionEnv(policy);
     OH_LOG_INFO(LOG_APP,
                 "[Wine] product D3D backend=%{public}s cwd=%{public}s",
                 d3dBackend,
                 workingDirectoryPath[0] ? workingDirectoryPath : "(derived)");
-
-    // desktop 模式: 将进程接入 explorer 创建的 shell desktop,
-    // 使其窗口出现在任务栏, 且能与其他 shell 进程互相访问
-    if (WaylandServer::GetInstance()->IsDesktopMode())
-        wineEnv.push_back("WINEHUA_DESKTOP=shell");
 
     {
 #ifdef __aarch64__
