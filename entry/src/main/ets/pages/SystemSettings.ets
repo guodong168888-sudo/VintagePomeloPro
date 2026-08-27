@@ -566,7 +566,8 @@ struct SystemSettingsPage {
       d3dRendererPreference: D3DRendererPreference = this.settings.d3dRendererPreference,
       desktopWindowMode: DesktopWindowMode = this.settings.desktopWindowMode,
       keepScreenOn: boolean = this.settings.keepScreenOn,
-      preserveUserDataOnReset: boolean = this.settings.preserveUserDataOnReset): void {
+      preserveUserDataOnReset: boolean = this.settings.preserveUserDataOnReset,
+      showFpsHud: boolean = this.settings.showFpsHud): void {
     const virtualInputChanged = this.settings.virtualInputEnabled !== virtualInputEnabled;
     this.settings = {
       defaultDisplayMode: mode,
@@ -591,7 +592,8 @@ struct SystemSettingsPage {
       gamepadDeadzone: deadzone,
       outputScale: scale,
       d3dRendererPreference: d3dRendererPreference,
-      preserveUserDataOnReset: preserveUserDataOnReset
+      preserveUserDataOnReset: preserveUserDataOnReset,
+      showFpsHud: showFpsHud
     };
     GamepadManager.getInstance().setDeadzone(deadzone);
     WineWindowManager.getInstance().setOutputScalePercent(scale);
@@ -646,6 +648,20 @@ struct SystemSettingsPage {
       this.settings.controlBarPositionX, this.settings.controlBarPositionY,
       this.settings.d3dRendererPreference, this.settings.desktopWindowMode,
       enabled);
+  }
+
+  private updateShowFpsHud(enabled: boolean): void {
+    this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
+      this.settings.useGlassEffect, this.settings.usePageBackground,
+      this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
+      this.settings.controlOpacity, this.settings.gamepadDeadzone,
+      this.settings.outputScale, this.settings.themeMode,
+      this.settings.controlBarDirection, this.settings.virtualMouseConfig,
+      this.settings.desktopInputProfileId, this.settings.pageBackgroundUri,
+      this.settings.virtualInputEnabled, this.settings.desktopOrientation,
+      this.settings.controlBarPositionX, this.settings.controlBarPositionY,
+      this.settings.d3dRendererPreference, this.settings.desktopWindowMode,
+      this.settings.keepScreenOn, this.settings.preserveUserDataOnReset, enabled);
   }
 
   /**
@@ -1014,7 +1030,8 @@ struct SystemSettingsPage {
       gamepadDeadzone: this.settings.gamepadDeadzone,
       outputScale: this.settings.outputScale,
       d3dRendererPreference: this.settings.d3dRendererPreference,
-      preserveUserDataOnReset: this.settings.preserveUserDataOnReset
+      preserveUserDataOnReset: this.settings.preserveUserDataOnReset,
+      showFpsHud: this.settings.showFpsHud
     };
     void ThemeSettingsService.getInstance().update(this.settings);
     promptAction.showToast({ message: '兼容性预设已保存，新启动的程序生效' });
@@ -1931,6 +1948,10 @@ struct SystemSettingsPage {
             .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
           Text('更改后需要重启 Wine 引擎；运行中的游戏不会被立即中断。')
             .fontSize(11).fontColor('#C47A20').width('100%')
+          this.SwitchRow('显示 FPS',
+            '在 Wine 画面左上角显示宿主合成帧率，DXVK 与 VirGL 均可看到',
+            this.settings.showFpsHud, (value: boolean): void => this.updateShowFpsHud(value),
+            'engine-show-fps-hud')
 
           Text('Box64 兼容性预设').fontSize(12).fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_secondary')).width('100%')

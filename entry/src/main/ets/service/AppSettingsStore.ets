@@ -132,7 +132,8 @@ export class AppSettingsStore {
       gamepadDeadzone: current.gamepadDeadzone,
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
-      preserveUserDataOnReset: current.preserveUserDataOnReset
+      preserveUserDataOnReset: current.preserveUserDataOnReset,
+      showFpsHud: current.showFpsHud
     };
     await this.store.put(GLOBAL_KEY, JSON.stringify(this.globalSettings));
     await this.store.put(PLATFORM_DEFAULTS_KEY, '1');
@@ -193,7 +194,8 @@ export class AppSettingsStore {
         gamepadDeadzone: stored.gamepadDeadzone ?? defaults.gamepadDeadzone,
         outputScale: stored.outputScale ?? defaults.outputScale,
         d3dRendererPreference: stored.d3dRendererPreference ?? D3DRendererPreference.DXVK,
-        preserveUserDataOnReset: stored.preserveUserDataOnReset ?? defaults.preserveUserDataOnReset
+        preserveUserDataOnReset: stored.preserveUserDataOnReset ?? defaults.preserveUserDataOnReset,
+        showFpsHud: stored.showFpsHud ?? false
       };
     } catch (_) {
       this.globalSettings = createDefaultGlobalSettings();
@@ -271,7 +273,8 @@ export class AppSettingsStore {
       gamepadDeadzone: current.gamepadDeadzone,
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
-      preserveUserDataOnReset: current.preserveUserDataOnReset
+      preserveUserDataOnReset: current.preserveUserDataOnReset,
+      showFpsHud: current.showFpsHud
     });
   }
 
@@ -300,7 +303,8 @@ export class AppSettingsStore {
       gamepadDeadzone: current.gamepadDeadzone,
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
-      preserveUserDataOnReset: current.preserveUserDataOnReset
+      preserveUserDataOnReset: current.preserveUserDataOnReset,
+      showFpsHud: current.showFpsHud
     });
   }
 
@@ -329,7 +333,8 @@ export class AppSettingsStore {
       gamepadDeadzone: current.gamepadDeadzone,
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
-      preserveUserDataOnReset: current.preserveUserDataOnReset
+      preserveUserDataOnReset: current.preserveUserDataOnReset,
+      showFpsHud: current.showFpsHud
     });
   }
 
@@ -359,7 +364,8 @@ export class AppSettingsStore {
       gamepadDeadzone: current.gamepadDeadzone,
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
-      preserveUserDataOnReset: current.preserveUserDataOnReset
+      preserveUserDataOnReset: current.preserveUserDataOnReset,
+      showFpsHud: current.showFpsHud
     });
   }
 
@@ -388,7 +394,8 @@ export class AppSettingsStore {
       gamepadDeadzone: current.gamepadDeadzone,
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
-      preserveUserDataOnReset: current.preserveUserDataOnReset
+      preserveUserDataOnReset: current.preserveUserDataOnReset,
+      showFpsHud: current.showFpsHud
     });
   }
 

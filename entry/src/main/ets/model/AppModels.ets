@@ -343,6 +343,8 @@ export interface GlobalSettings {
   d3dRendererPreference: D3DRendererPreference;
   /** 重置 Wine prefix 时默认保留文档目录与注册表，只重建沙盒。 */
   preserveUserDataOnReset: boolean;
+  /** 在 Wine 画面上显示宿主 compositor FPS。 */
+  showFpsHud: boolean;
 }
 
 export interface RuntimeSession {
@@ -952,7 +954,8 @@ export function createDefaultGlobalSettings(): GlobalSettings {
     gamepadDeadzone: 18,
     outputScale: 100,
     d3dRendererPreference: D3DRendererPreference.DXVK,
-    preserveUserDataOnReset: true
+    preserveUserDataOnReset: true,
+    showFpsHud: false
   };
 }
 

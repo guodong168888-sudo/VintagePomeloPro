@@ -1,6 +1,7 @@
 import { hilog } from '../service/LogService';
 import testNapi from 'libentry.so';
 import { mapMouseButton } from '../common/MouseMap';
+import { FpsHud } from '../components/FpsHud';
 
 const DOMAIN = 0x0000;
 
@@ -278,6 +279,9 @@ struct WinePopup {
             testNapi.sendScrollEvent(this.popupId, 1, horiz, step, px, py);
           }
         })
+      FpsHud({ toplevelId: this.popupId })
+        .position({ x: 10, y: 10 })
+        .hitTestBehavior(HitTestMode.None)
     }
     .width('100%')
     .height('100%')

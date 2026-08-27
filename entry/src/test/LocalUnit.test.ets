@@ -177,6 +177,7 @@ export default function localUnitTest() {
       expect(settings.viewMode).assertEqual(ViewMode.GRID);
       expect(ViewMode.FILES).assertEqual('files');
       expect(settings.preserveUserDataOnReset).assertTrue();
+      expect(settings.showFpsHud).assertFalse();
     });
 
     it('clonesVirtualMouseSettingsWithoutSharingMutableState', 0, () => {

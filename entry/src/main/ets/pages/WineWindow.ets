@@ -4,6 +4,7 @@ import { EVDEV_KEY_ENTER, OH2EVDEV } from '../common/KeyMap';
 import { mapMouseButton } from '../common/MouseMap';
 import { WineWindowManager } from '../service/WineWindowManager';
 import { InputDeviceMapper } from '../service/InputDeviceMapper';
+import { FpsHud } from '../components/FpsHud';
 
 const DOMAIN = 0x0000;
 
@@ -310,6 +311,9 @@ struct WineWindow {
             testNapi.sendScrollEvent(this.toplevelId, 1, horiz, step, px, py);
           }
         })
+      FpsHud({ toplevelId: this.toplevelId })
+        .position({ x: 10, y: 10 })
+        .hitTestBehavior(HitTestMode.None)
     }
     .width('100%')
     .height('100%')
