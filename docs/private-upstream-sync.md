@@ -6,6 +6,25 @@
 
 > **同步基线标记**：最新核对到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `d256317e`，本地镜像 `mirror_master`）。下次同步先 `git fetch winehua && git branch -f mirror_master winehua/master && git log d256317e..mirror_master --oneline`，避免重复合并。
 
+### 2026-08-27 对齐 WineHua master 启动/环境栈第 1–4 步
+
+- 分支：`feature/align-env-spawn-1-4`（从 `feature/host-fps-hud` 切出，含 broker connect 探测、wineserver `Main` 截获、35s drain）。
+- 镜像：`winehua/master` @ `d256317e`。
+- 原则：按上游 `b04e3410` / `18b6f5a5` / `f3370b05` / `fed07ecf` 落地 EnvSpec / 基线单源 / Profile 管线 / Spawner，行为保持；**不跟第 5 步** `f9aaaaed`（wineserver/wineboot 全部改走 broker、删 NCP `WineserverMain` 直启）。ArkTS 仍是 `WineEngineService` + `launchClient` 9 参；不上游 `WineEnvService` / `Box64Dynarec.ets` / `dxvkBackend`/`wineLang`。
+- 已落地（对照上游 SHA，本地适配而非整 commit cherry-pick）：
+
+  | 上游 SHA | 本仓提交 | 说明 |
+  | --- | --- | --- |
+  | `b04e3410` | `175ed930` | EnvSpec 收口 entryParams 序列化；`ohos_broker.c` 只互指、不改 wine gitlink |
+  | `18b6f5a5` | `af871191` | `wine_env_baseline.h` 公共键；Box64 出厂表仍用本仓 `SetBox64PerfEnv` |
+  | `f3370b05` | `3725dfb5` | `BuildSessionEnv` 单一策略点；私有 host-shadow / `WINEHUA_PERF_PROFILE` overlay 迁入 Profile |
+  | `fed07ecf` | `d00df45b` | Spawner：Wineserver/Wineboot → NCP；DesktopShell/WineExe/GuestElf/HostElf → broker |
+
+- **第 5 步待独立 PR**：不把 wineserver/wineboot 改成只走 broker，不删 `WineserverMain` NCP 入口（会动冷启动时序：wineboot 进任务列表等）。下次 cherry-pick `wine_launch`/`wine_exe`/`wine_child` 应是结构冲突而不是架构冲突。
+- 私有不变量：`@engine/wineserver` 登记仍在 `wine_launch` 拿到 pid 之后；virgl host / 手机 fork 不进 Spawner；Box64 policy 仍在 `AppModels.resolveBox64PresetEnv`。
+- 验证：`make test`（geometry/blit/env_spec/env_baseline）；`make hap`（winehua-dev / vp-build，arm64-v8a，API 23）。**未做真机冷启动回归**（桌面 + 开一个 exe）。
+- 子模块 gitlink：未跟随上游。
+
 ### 2026-08-27 WineHua master 增量（90edaae..d256317e）
 
 - 分支：`feature/host-fps-hud`（基于 VintagePomeloPro `origin/main` `d73f299f` + 宿主 FPS overlay）。
