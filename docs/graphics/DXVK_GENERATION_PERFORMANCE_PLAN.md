@@ -29,9 +29,10 @@ VirGLRenderer、NativeWindow 与系统合成路径，但会产生不同的命令
 - Modern 2.6 的 WineHua compatibility layer 在 41 个文件中增加约 2267 行，覆盖 D3D11、
   DXBC、DXGI 和 DXVK hot path。它包含按需诊断、BC/custom-border/dual-source 兼容和 mapped
   flush 逻辑；必须逐项用运行时证据判断，不能整体删除或整体归罪。
-- 参考分支与当前 `thirdparty/dxvk-modern` 都固定在同一个 `977a3d78`（DXVK 2.6.2 + WineHua
-  compatibility + VKD3D 2.6 swapchain factory）提交。2.6 性能差距不是漏合参考分支的 Modern
-  子模块提交；比较重点应放在该兼容层的实际动作和当前 Host/Present 反压。
+- 参考分支与本轮优化起点的 `thirdparty/dxvk-modern` 都固定在同一个 `977a3d78`（DXVK 2.6.2 +
+  WineHua compatibility + VKD3D 2.6 swapchain factory）提交；当前工作分支在其上增加 mapped-flush
+  合并与 trace 热路径收敛提交 `ff2d6a2c`。2.6 性能差距不是漏合参考分支的 Modern 子模块提交；
+  比较重点应放在该兼容层的实际动作和当前 Host/Present 反压。
 - 当前 Legacy `f3436e1` 只比参考分支 Legacy `5058927` 多一个进程内 fake-shared-resource
   提交；两者 merge-base 就是 `5058927`。该路径要求显式 `DXVK_WINEHUA_FAKE_SHARED=1`，当前产品
   resolver没有设置它，因此正常 Heaven 性能差距也不是由两套 Legacy 基线漂移造成。

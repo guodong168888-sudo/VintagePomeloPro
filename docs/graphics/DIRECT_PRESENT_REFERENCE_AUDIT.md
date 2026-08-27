@@ -51,13 +51,14 @@
    RequestBuffer queue-full/导入失败早退不会泄漏 Host queue mutex，成功路径则在
    `vkQueueSignalReleaseImageOHOS` 返回后立即释放。
 
-DXVK 2.6 方面，参考与当前 `thirdparty/dxvk-modern` 基线都是 `977a3d78`。因此 Direct Present
-合并与 2.6/1.10 性能差距是两个相交但独立的项目：前者减少共同尾端成本，后者仍需定位 Modern
-compatibility、mapped update、Host upload 或 Guest CPU 差异。
+DXVK 2.6 方面，参考分支与本轮优化起点的 `thirdparty/dxvk-modern` 基线都是 `977a3d78`；当前
+工作分支在该基线上增加 WineHua mapped-flush 合并与 trace 热路径收敛提交 `ff2d6a2c`。因此
+Direct Present 合并与 2.6/1.10 性能差距是两个相交但独立的项目：前者减少共同尾端成本，后者
+仍需定位 Modern compatibility、mapped update、Host upload 或 Guest CPU 差异。
 
 ## 当前私有 main 的对应状态
 
-当前 `d73f299` 已有：
+本轮优化起点 `d73f299` 已有：
 
 - `virgl_surface_presenter.cpp`：VirGL 纹理直接提交到 NativeWindow EGL surface。
 - `venus_surface_presenter.cpp`：Venus source image 经 Host Vulkan copy/blit 提交到 NativeWindow swapchain。
