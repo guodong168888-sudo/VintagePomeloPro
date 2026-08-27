@@ -17,6 +17,7 @@
 #include "wine_process.h"
 // 由 LaunchPadMode 在启动 Broker 前设置
 std::string gBrokerHomeDir;
+std::string gBrokerPrefixDir;
 
 // -- 从 entryParams 解析进程名 (登记到任务列表用) --
 // entryParams 形如 "homeDir|binDir|[wine]|argv0|argv1|...|__env=K=V|..."
@@ -66,7 +67,6 @@ static std::string ParseProcessName(const char* entryParams) {
 #include <atomic>
 #include <utility>
 #include <vector>
-#include <memory>
 #include <AbilityKit/native_child_process.h>
 
 #undef LOG_DOMAIN
@@ -79,38 +79,6 @@ static const char* kBrokerSocketPath = WINE_BROKER_SOCKET;
 
 static std::atomic<bool> gBrokerRunning{false};
 static std::atomic<bool> gBrokerListening{false};
-
-static bool IsBrokerWineserverRequest(const char* entryParamsRaw)
-{
-    if (!entryParamsRaw || !entryParamsRaw[0]) return false;
-
-    std::unique_ptr<char, decltype(&free)> entryCopy(strdup(entryParamsRaw), &free);
-    if (!entryCopy) return false;
-
-    // homeDir|binDir 都以 '/' 开头；只跳过这两段后再看 argv。
-    // 旧实现只跳过第一段，homeDir 前缀会把 binDir 当成 argv[0]，
-    // loader 自启 "homeDir|binDir|wineserver|-f|-p" 被错送到 Main / wine PE 解析。
-    char* saveptr = nullptr;
-    int slashSegsLeft = 2;
-    for (char* token = strtok_r(entryCopy.get(), "|", &saveptr); token;
-         token = strtok_r(nullptr, "|", &saveptr)) {
-        if (!strncmp(token, "__env=", 6) || !strncmp(token, "__env__=", 8) ||
-            !strcmp(token, "__winehua_desktop__")) {
-            continue;
-        }
-        if (slashSegsLeft > 0 && token[0] == '/') {
-            slashSegsLeft--;
-            continue;
-        }
-        if (!strcasecmp(token, "wine")) {
-            char* next = strtok_r(nullptr, "|", &saveptr);
-            return next && !strcasecmp(next, "wineserver");
-        }
-        return !strcasecmp(token, "wineserver");
-    }
-
-    return false;
-}
 
 static bool BrokerSocketConnectable()
 {
@@ -256,10 +224,16 @@ static void HandleRequest(int conn_fd)
         }
     }
 
-    // 5) 构造 NativeChildProcess 参数
-    // 复制 entryParams 并加上 homeDir 前缀 (与 LaunchPadMode 新格式一致)
+    // 5) 构造 NativeChildProcess 参数。
+    // Wine 服务进程会把创建者的环境重新序列化给 broker，但 NCP 不会继承
+    // LaunchPad 的环境。把会话 prefix 放在最后，使 clean smoke 的
+    // .wine-smoke 覆盖可能残留的默认 .wine 值。
     std::string fullParams = gBrokerHomeDir.empty() ? entryParamsRaw
                             : (gBrokerHomeDir + "|" + entryParamsRaw);
+    if (!gBrokerPrefixDir.empty())
+        fullParams += "|__env=WINEPREFIX=" + gBrokerPrefixDir;
+    OH_LOG_INFO(LOG_APP, "[Broker] dispatch prefix=%{public}s",
+                gBrokerPrefixDir.empty() ? "(inherited)" : gBrokerPrefixDir.c_str());
     char* entryParamsCopy = strdup(fullParams.c_str());
 
     // 建 fd 链表: 名字取自 FDS 行; 无 FDS 行且恰好 1 个 fd 时回退旧命名 wineserver_sock
@@ -304,14 +278,12 @@ static void HandleRequest(int conn_fd)
     NativeChildProcess_Options options = {};
     options.isolationMode = NCP_ISOLATION_MODE_NORMAL;
 
-    // 5) 调用 StartNativeChildProcess (在主进程上下文，可以调用多次)
-    const char* childEntry = IsBrokerWineserverRequest(entryParamsRaw)
-        ? "libwine_child.so:WineserverMain"
-        : "libwine_child.so:Main";
-    OH_LOG_INFO(LOG_APP, "[Broker] child entry=%{public}s", childEntry);
+    // 5) 调用 StartNativeChildProcess (在主进程上下文，可以调用多次)。
+    // 全部走 Main: wineserver 由 wine_child Main 截获 argv[0] 转入本体
+    // (纯 Unix ELF 不能走 wine loader 的 PE 解析)。
     int32_t childPid = -1;
     int32_t ret = OH_Ability_StartNativeChildProcess(
-        childEntry, args, options, &childPid);
+        "libwine_child.so:Main", args, options, &childPid);
 
     OH_LOG_INFO(LOG_APP, "[Broker] StartNativeChildProcess ret=%{public}d childPid=%{public}d",
                 ret, childPid);

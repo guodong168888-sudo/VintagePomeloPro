@@ -34,8 +34,8 @@
 #include "broker.h"
 #include "wait_utils.h"
 
-// NCP 直启细节已收口到 spawner.cpp (重构第 4 步), 本文件不再直接触碰
-// AbilityKit NCP 接口。
+// 进程启动统一走 winehua::Spawner (重构第 4-5 步): kind 推导 token 布局,
+// 全部 kind 经 broker 单一通道 spawn, 本文件只声明意图。
 
 // -- prefix 初始化检测辅助函数 --
 static bool FileHasData(const char* path) {
@@ -377,7 +377,19 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd) {
         }
     }
 
-    // -- wineserver via NCP (Spawner kind 推导入口符号与 token) --
+    // -- broker 先于 wineserver 启动 (重构第 5 步) --
+    // broker 是主进程内的线程, 启动不依赖 wineserver; 自此所有进程
+    // (wineserver/wineboot/explorer/exe) 统一经 broker 单一通道 spawn,
+    // homeDir 前缀 / WINEPREFIX 权威 / audio fd 由 broker 服务端补齐。
+    gBrokerHomeDir = p->homeDir;
+    gBrokerPrefixDir = p->prefixDir;
+    StartBrokerServer();
+    setenv("PROCESSBROKER", WINE_BROKER_SOCKET, 1);
+
+    // -- wineserver via broker --
+    // broker → wine_child Main → 截获 argv[0]=="wineserver" 转入本体
+    // (wineserver 是纯 Unix ELF, 不能走 wine loader 的 PE 解析)。
+    // smoke prefix 的退出遥测由 Spawner 自动附加。
     pid_t wsChildPid = -1;
     {
         winehua::SpawnRequest wsReq{winehua::SpawnKind::Wineserver};
@@ -390,7 +402,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd) {
             EmitEngineFail("wineserver-spawn");
             return false;
         }
-        OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver pid=%{public}d (via NCP)", (int)wsChildPid);
+        OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver pid=%{public}d (via broker)", (int)wsChildPid);
         // 登记引擎核心进程: 用户应用全部退出/被杀后注册表仍非空,
         // 避免 handleNativeState('exited') 误判引擎 STOPPED 而拆掉桌面连接。
         AddProcess(wsChildPid, "@engine/wineserver", -1, "@engine/wineserver");
@@ -401,10 +413,6 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd) {
     }
 
     EmitEnginePhase("wineboot");
-
-    gBrokerHomeDir = p->homeDir;
-    StartBrokerServer();
-    setenv("PROCESSBROKER", WINE_BROKER_SOCKET, 1);
 
     // -- wineboot --init --
     const std::string initMarker = p->prefixDir + "/.winehua-init-in-progress";
@@ -461,11 +469,9 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd) {
             }
             OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot started, pid=%{public}d (attempt %{public}d)",
                         childPid, attempt);
-            // 登记 wineboot 到进程注册表: NCP 模式下存活判定依赖注册表
-            // (IsProcessRegisteredRunning)。未登记会使下方 wineboot 等待循环
-            // 0ms 立即结束 (done 0 ms) → ready 提前发出 → PC 首启时 Wine 服务
-            // 栈尚未就绪, 应用作为首个 GUI 进程 attach VirGL surface 失败 → 白屏。
-            // wineboot 退出时 NCP 退出回调 RemoveProcess 置 running=false, 等待自然结束。
+            // 登记 wineboot 为引擎核心: broker 会先以 basename 入任务列表
+            // (已知短暂可见), 随后同 pid 覆盖为 @engine/wineboot, 避免用户
+            // 杀光应用时误判引擎 STOPPED。等待循环走 /proc 存活, 不依赖登记。
             AddProcess(childPid, "@engine/wineboot", -1, "@engine/wineboot");
         /* 首次初始化 (wine.inf 的 PreInstall/DefaultInstall/Wow64Install + 可选 Mono)
          * 耗时与设备性能强相关, 模拟器上可超过 30s — 固定死线会把仍在正常初始化的
@@ -562,7 +568,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd) {
          * 环境 (LD_PRELOAD=libappspawn_helper.z.so 等), 实测 wineboot 卡死
          * (注册表已写但 .update-timestamp 不更新), SetEvent 永不执行, 之后
          * 所有 Wine 进程都卡在 boot 事件等待, 窗口全部出不来。这里用与首启
-         * 相同的 NCP 干净环境显式跑一次 wineboot: 正常完成后事件 signaled,
+         * 相同的干净环境显式跑一次 wineboot: 正常完成后事件 signaled,
          * explorer 的 run_wineboot 检查事件已存在, 立即放行。
          * 参数必须用 --init: wineboot.c 的 wWinMain 传 update_wineprefix(update),
          * 而 update_wineprefix 的参数名就是 force——--update 会让 force=true,
@@ -578,8 +584,6 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd) {
             OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineboot --init spawn FAILED");
         } else {
             OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot --init pid=%{public}d", childPid);
-            // 登记 wineboot: NCP 模式存活判定依赖注册表, 未登记会 0ms 放行
-            // (done 0 ms) → ready 提前 → PC 首启白屏 (与首启登记同理)。
             AddProcess(childPid, "@engine/wineboot", -1, "@engine/wineboot");
             /* 与首启相同的等待纪律: wineboot 活着就继续等, 大超时仅作挂死
              * 安全网。wineboot 退出即 SetEvent, explorer 即可放行。 */
