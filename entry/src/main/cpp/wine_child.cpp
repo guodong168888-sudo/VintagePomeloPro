@@ -253,7 +253,6 @@ static const char *select_winedebug_profile(int argc, char *argv[])
 
 static void setup_wine_env(const char* binDir, const char* homeDir, const char *winedebug)
 {
-    std::string shareDir = std::string(binDir) + "/../share";
     std::string libDir = std::string(binDir) + "/x86_64-unix";
 
 #ifdef __aarch64__
@@ -270,11 +269,12 @@ static void setup_wine_env(const char* binDir, const char* homeDir, const char *
            (libDir + ":/data/storage/el1/bundle/libs/x86_64").c_str(), 1);
 #endif
 
-    if (homeDir && homeDir[0])
-        setenv("HOME", homeDir, 1);
+    // 公共键 (HOME/WINEPREFIX/WINEDLL*/PATH/TMPDIR/MIDI/XKB) 与主进程同源。
+    winehua::ApplyEnvLinesToEnviron(winehua::BuildWineBaselineLines({
+        binDir, homeDir ? homeDir : "", ""}));
+
     setenv("XDG_RUNTIME_DIR", WINE_PREFIX, 1);
     setenv("WAYLAND_DISPLAY", "wine-wayland", 1);
-    setenv("WINEPREFIX", WINE_PREFIX, 1);
     // PROCESSBROKER: appspawn 子进程不继承父 env，从 WINEPREFIX 推导 broker socket 路径，
     // 保证 wineserver / wineboot 等所有子进程都能拿到，与主进程 napi_init.cpp 中的值一致。
     {
@@ -283,36 +283,17 @@ static void setup_wine_env(const char* binDir, const char* homeDir, const char *
                  getenv("WINEPREFIX"));
         setenv("PROCESSBROKER", brokerPath, 1);
     }
-    setenv("WINEDATADIR", (shareDir + "/wine").c_str(), 1);
-    setenv("XKB_CONFIG_ROOT", (shareDir + "/X11/xkb").c_str(), 1);
     // WINEBINDIR/WINEUNIXDIR 覆盖 init_paths() 中基于 dladdr(ntdll.so) 推算的错误路径
     // ntdll.so 在 bundle libs 目录，而 PE DLL / Unix SO 数据都在 wine/bin/ 下
     setenv("WINEBINDIR", binDir, 1);   // wine/bin/
     setenv("WINEUNIXDIR", binDir, 1);  // wine/bin/ (含 x86_64-unix/x86_64-windows)
-    setenv("WINEDLLDIR", libDir.c_str(), 1);
-    setenv("WINEDLLDIR0", (std::string(binDir) + "/x86_64-windows").c_str(), 1);
-    setenv("WINEDLLDIR1", (std::string(binDir) + "/i386-windows").c_str(), 1);
-    setenv("WINEDLLDIR2", binDir, 1);
-    {
-        std::string dllPath = std::string(binDir) + "/x86_64-windows:" + binDir + "/i386-windows:" + binDir;
-#ifndef __aarch64__
-        dllPath += ":/data/storage/el1/bundle/libs/x86_64";
-#endif
-        setenv("WINEDLLPATH", dllPath.c_str(), 1);
-    }
-    // Box64 日志: 0=关闭 (3=DEBUG 会产生海量 I/O)
     SetBox64PerfEnv();
 #ifdef __aarch64__
     // 标记 Box64 in-process 模式，供 x86_64 wine 代码 (process.c) 运行时判断
     setenv("USE_LIBBOX64", "1", 1);
 #endif
-    setenv("PATH", (std::string("/usr/local/bin:/data/app/bin:/usr/bin:/vendor/bin:")
-                    + binDir + "/x86_64-windows:" + binDir + "/i386-windows:" + binDir).c_str(), 1);
-    setenv("TMPDIR", WINE_TMPDIR, 1);
-    setenv("XDG_RUNTIME_DIR", WINE_PREFIX, 1);
-    std::string midiSoundfontPath = std::string(binDir) + "/../audio/winehua-gm.sf2";
-    setenv("MIDI_SOUNDFONT_PATH", midiSoundfontPath.c_str(), 1);
     setenv("WINEDEBUG", winedebug && winedebug[0] ? winedebug : default_winedebug_profile(), 1);
+    // wineboot NCP 只传 __env=WINEPREFIX=...；LANG 必须留在子进程基线。
     setenv("LANG", "zh_CN.UTF-8", 1);
 }
 

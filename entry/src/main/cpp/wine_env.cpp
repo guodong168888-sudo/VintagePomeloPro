@@ -47,9 +47,6 @@ std::vector<std::string> BuildWineEnv(const std::string& sockDir,
                                       int audioBootstrapFd,
                                       const std::string& homeDir,
                                       const std::string& prefixDir) {
-    std::string shareDir = binDir + "/../share";
-    std::string xkbDir = shareDir + "/X11/xkb";
-    std::string midiSoundfontPath = binDir + "/../audio/winehua-gm.sf2";
     std::string runtimeLibPath = binDir + ":" + binDir + "/x86_64-unix:" + binDir + "/../lib/x86_64";
     winehua::GraphicsBackendState graphicsState = winehua::GraphicsBroker::GetInstance().GetState();
     std::string guestReceiverLibDir;
@@ -72,34 +69,17 @@ std::vector<std::string> BuildWineEnv(const std::string& sockDir,
         }
     }
 
-    std::string dllPath = binDir + "/x86_64-windows:" + binDir + "/i386-windows:" + binDir;
-#ifndef __aarch64__
-    // x86_64: bundled libs 加入 WINEDLLPATH, load_unixlib_by_name() 从此搜索 .so
-    dllPath += ":/data/storage/el1/bundle/libs/x86_64";
-#endif
-
-    std::vector<std::string> env = {
+    const std::string prefix = prefixDir.empty() ? std::string(WINE_PREFIX) : prefixDir;
+    std::vector<std::string> env = winehua::BuildWineBaselineLines({binDir, homeDir, prefix});
+    env.insert(env.begin(), {
         "XDG_RUNTIME_DIR=" + sockDir,
         "WAYLAND_DISPLAY=" + sockName,
-        "HOME=" + homeDir,
-        "WINEPREFIX=" + (prefixDir.empty() ? std::string(WINE_PREFIX) : prefixDir),
-        "WINEDATADIR=" + shareDir + "/wine",
-        "WINEDLLDIR=" + binDir + "/x86_64-unix",
-        "WINEDLLDIR0=" + binDir + "/x86_64-windows",
-        "WINEDLLDIR1=" + binDir + "/i386-windows",
-        "WINEDLLDIR2=" + binDir,
-        "WINEDLLPATH=" + dllPath,
-        "WINEDEBUG=-all",
-        "LANG=zh_CN.UTF-8",
-        "XKB_CONFIG_ROOT=" + xkbDir,
-        "PATH=/usr/local/bin:/data/app/bin:/usr/bin:/vendor/bin:" + binDir + "/x86_64-windows:" + binDir + "/i386-windows:" + binDir,
-        "TMPDIR=" WINE_TMPDIR,
-        "MIDI_SOUNDFONT_PATH=" + midiSoundfontPath,
-        // winegstreamer 运行时加载 GStreamer 插件 (gst-plugins-base/good/libav)
-        "GST_PLUGIN_PATH=" + binDir + "/x86_64-unix/gstreamer-1.0",
-        "GST_PLUGIN_SYSTEM_PATH=" + binDir + "/x86_64-unix/gstreamer-1.0",
-    };
-    AppendBox64PerfStrings(env);
+    });
+    env.push_back("WINEDEBUG=-all");
+    env.push_back("LANG=zh_CN.UTF-8");
+    env.push_back("GST_PLUGIN_PATH=" + binDir + "/x86_64-unix/gstreamer-1.0");
+    env.push_back("GST_PLUGIN_SYSTEM_PATH=" + binDir + "/x86_64-unix/gstreamer-1.0");
+    winehua::AppendBox64PerfStrings(env);
 #ifdef __aarch64__
     env.push_back("LD_LIBRARY_PATH=" + libPath);
     env.push_back("BOX64_LD_LIBRARY_PATH=" + runtimeLibPath);
