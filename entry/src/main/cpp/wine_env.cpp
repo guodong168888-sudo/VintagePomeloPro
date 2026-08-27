@@ -12,7 +12,6 @@
 #include <cstring>
 #include <string>
 #include <vector>
-#include <unordered_set>
 
 #undef LOG_TAG
 #undef LOG_DOMAIN
@@ -368,50 +367,6 @@ void AppendProductDxvkEnv(std::vector<std::string>& env,
         };
         for (const std::string& line : precise) UpsertEnvLine(env, line);
     }
-}
-
-static std::string EnvKey(const std::string& envLine) {
-    size_t sep = envLine.find('=');
-    return sep == std::string::npos ? envLine : envLine.substr(0, sep);
-}
-
-static bool IsBrokerSessionAuthoritativeKey(const std::string& key) {
-    // Explorer may start before VirGL is ready. Replace its early Box64 path
-    // with the finalized path, where guest graphics libraries are a fallback.
-    return key == "BOX64_LD_LIBRARY_PATH";
-}
-
-size_t AppendMissingEntryParamsEnvOverrides(std::string& entryParams,
-                                            const std::vector<std::string>& env) {
-    std::unordered_set<std::string> existingKeys;
-    size_t pos = 0;
-
-    while ((pos = entryParams.find("|__env=", pos)) != std::string::npos) {
-        pos += strlen("|__env=");
-        size_t end = entryParams.find('|', pos);
-        std::string key = EnvKey(entryParams.substr(pos, end == std::string::npos
-                                                          ? std::string::npos
-                                                          : end - pos));
-        if (!key.empty()) existingKeys.insert(std::move(key));
-        if (end == std::string::npos) break;
-        pos = end;
-    }
-
-    size_t appended = 0;
-    for (const std::string& envLine : env) {
-        if (!winehua::IsEntryParamsEncodable(envLine))
-            continue;
-        const std::string key = EnvKey(envLine);
-        if (key.empty() || winehua::IsPerProcessFdEnvKey(key))
-            continue;
-        if (existingKeys.count(key) && !IsBrokerSessionAuthoritativeKey(key))
-            continue;
-        entryParams += "|__env=";
-        entryParams += envLine;
-        existingKeys.insert(key);
-        ++appended;
-    }
-    return appended;
 }
 
 std::string SerializeEnvToEntryParams(const std::vector<std::string>& env) {

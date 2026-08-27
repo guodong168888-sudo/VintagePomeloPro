@@ -31,11 +31,6 @@ std::vector<std::string> FilterCompatLines(const std::string& compatEnvStr);
 
 void AppendCompatEnvLines(std::vector<std::string>& env,
                           const std::string& compatEnvStr, bool automationMode);
-
-// wineboot/wineserver 走 NCP entryParams (不继承 app env)。第 4 步 Spawner
-// 收口后此函数随 NCP 手拼一起删除。
-void AppendCompatEnvToEntryParams(std::string& entryParams,
-                                  const std::string& compatEnvStr, bool automationMode);
 #endif // __aarch64__
 
 // -- 桌面会话 DXVK 稳定化 overlay (含本仓 host-shadow) --

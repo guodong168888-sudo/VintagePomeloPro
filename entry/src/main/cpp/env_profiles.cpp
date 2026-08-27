@@ -41,17 +41,6 @@ void AppendCompatEnvLines(std::vector<std::string>& env,
     for (const std::string& line : FilterCompatLines(compatEnvStr))
         UpsertEnvLine(env, line);
 }
-
-void AppendCompatEnvToEntryParams(std::string& entryParams,
-                                  const std::string& compatEnvStr, bool automationMode)
-{
-    if (automationMode)
-        return;
-    for (const std::string& line : FilterCompatLines(compatEnvStr)) {
-        entryParams += "|__env=";
-        entryParams += line;
-    }
-}
 #endif // __aarch64__
 
 static std::string FindEnvValue(const std::vector<std::string>& probeBase, const char* key)

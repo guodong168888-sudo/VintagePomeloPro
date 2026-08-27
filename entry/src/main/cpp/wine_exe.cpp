@@ -2,6 +2,7 @@
 
 #include "broker.h"
 #include "env_profiles.h"
+#include "spawner.h"
 #include "graphics_broker.h"
 #include "wayland_server.h"
 #include "wine_constants.h"
@@ -184,34 +185,38 @@ static std::string NativePathToWindows(const std::string& path, const std::strin
     return result;
 }
 
-static pid_t SpawnViaBroker(const std::string& entryParams,
-                            const std::vector<std::string>& environment)
+} // namespace
+
+pid_t SpawnViaBroker(const std::string& entryParams,
+                     const std::vector<std::string>& environment)
 {
     const char* brokerPath = getenv("PROCESSBROKER");
     if (!brokerPath || !brokerPath[0]) brokerPath = WINE_BROKER_SOCKET;
-    int brokerFd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (brokerFd < 0) return -1;
-
     sockaddr_un address = {};
     address.sun_family = AF_UNIX;
     if (strlen(brokerPath) >= sizeof(address.sun_path))
-    {
-        close(brokerFd);
         return -1;
-    }
     strcpy(address.sun_path, brokerPath);
-    if (connect(brokerFd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0)
-    {
-        OH_LOG_ERROR(LOG_APP, "[Program] broker connect failed: %{public}s", strerror(errno));
-        close(brokerFd);
+
+    int brokerFd = -1;
+    int connectError = 0;
+    for (int attempt = 0; attempt < 10; attempt++) {
+        brokerFd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (brokerFd >= 0 &&
+            connect(brokerFd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0)
+            break;
+        connectError = errno;
+        if (brokerFd >= 0) close(brokerFd);
+        brokerFd = -1;
+        usleep(50000);
+    }
+    if (brokerFd < 0) {
+        OH_LOG_ERROR(LOG_APP, "[Program] broker connect failed: %{public}s", strerror(connectError));
         return -1;
     }
 
     /* The broker protocol has one authoritative environment channel:
-     * |__env=KEY=VALUE segments embedded in entryParams.  The old ENV blob
-     * trailer was removed with the broker-global session environment; leaving
-     * it here makes children silently inherit only Wine's baseline and causes
-     * DXVK/Venus smoke to resolve the builtin d3d11.dll. */
+     * |__env=KEY=VALUE segments embedded in entryParams. */
     const std::string requestParams = entryParams + SerializeEnvToEntryParams(environment);
     static constexpr char header[] = "SPAWN\n";
     std::string requestTail = requestParams + "\n";
@@ -234,6 +239,8 @@ static pid_t SpawnViaBroker(const std::string& entryParams,
     if (received != sizeof(response) || response[1] != 0 || response[0] <= 0) return -1;
     return response[0];
 }
+
+namespace {
 
 static napi_value MakeProcessObject(napi_env env, const WineProcessEntry* entry, bool found)
 {
@@ -331,14 +338,12 @@ static int SpawnWineProgramImpl(const ProgramOptions& options)
         policy.extraEnv.push_back("WINEHUA_WORKING_DIRECTORY=" + options.workingDirectory);
     std::vector<std::string> envStrs = winehua::BuildSessionEnv(policy);
 
-#ifdef __aarch64__
-    std::string entryParams = binDir + "|" + exePath;
-#else
-    std::string entryParams = binDir + "|wine|" + exePath;
-#endif
-    for (const std::string& arg : options.argv) entryParams += "|" + arg;
+    winehua::SpawnRequest req{winehua::SpawnKind::WineExe};
+    req.argv.push_back(exePath);
+    req.argv.insert(req.argv.end(), options.argv.begin(), options.argv.end());
+    req.env = std::move(envStrs);
 
-    const pid_t pid = SpawnViaBroker(entryParams, envStrs);
+    const pid_t pid = winehua::Spawner::Spawn(req);
     if (pid <= 0) return -1;
     AddProcess(pid, options.windowsExePath, -1);
     OH_LOG_INFO(LOG_APP,
@@ -412,10 +417,12 @@ static pid_t SpawnGuestProgram(const GuestProgramOptions& options)
         UpsertEnv(&envStrs, "WINEHUA_WORKING_DIRECTORY=" + options.workingDirectory);
     for (const std::string& line : options.environment) UpsertEnv(&envStrs, line);
 
-    std::string entryParams = binDir + "|__winehua_guest_elf__|" + options.executablePath;
-    for (const std::string& arg : options.argv) entryParams += "|" + arg;
+    winehua::SpawnRequest req{winehua::SpawnKind::GuestElf};
+    req.argv.push_back(options.executablePath);
+    req.argv.insert(req.argv.end(), options.argv.begin(), options.argv.end());
+    req.env = std::move(envStrs);
 
-    const pid_t pid = SpawnViaBroker(entryParams, envStrs);
+    const pid_t pid = winehua::Spawner::Spawn(req);
     if (pid <= 0) return -1;
     AddProcess(pid, options.executablePath, -1);
     OH_LOG_INFO(LOG_APP, "[GuestProgram] pid=%{public}d elf=%{public}s icd=%{public}s",
@@ -466,11 +473,12 @@ static pid_t SpawnHostProgram(const HostProgramOptions& options)
     if (!options.workingDirectory.empty())
         UpsertEnv(&envStrs, "WINEHUA_WORKING_DIRECTORY=" + options.workingDirectory);
 
-    std::string entryParams = std::string(WINE_RUNTIME_BIN) +
-        "|__winehua_host_elf__|" + executablePath;
-    for (const std::string& arg : options.argv) entryParams += "|" + arg;
+    winehua::SpawnRequest req{winehua::SpawnKind::HostElf};
+    req.argv.push_back(executablePath);
+    req.argv.insert(req.argv.end(), options.argv.begin(), options.argv.end());
+    req.env = std::move(envStrs);
 
-    const pid_t pid = SpawnViaBroker(entryParams, envStrs);
+    const pid_t pid = winehua::Spawner::Spawn(req);
     if (pid <= 0) return -1;
     AddProcess(pid, executablePath, -1);
     OH_LOG_INFO(LOG_APP, "[HostProgram] pid=%{public}d elf=%{public}s",
@@ -785,97 +793,27 @@ napi_value RunWineExe(napi_env env, napi_callback_info info)
                 workingDirectoryPath[0] ? workingDirectoryPath : "(derived)");
 
     {
-#ifdef __aarch64__
-        std::string entryParams = std::string(binDir) + "|" + exePath;
-#else
-        std::string entryParams = std::string(binDir) + "|wine|" + exePath;
-#endif
-        for (const auto& argument : launchArguments) entryParams += "|" + argument;
-        entryParams += SerializeEnvToEntryParams(wineEnv);
-        OH_LOG_INFO(LOG_APP, "[Wine] runWineExe via broker: %{public}s", entryParams.c_str());
+        winehua::SpawnRequest req{winehua::SpawnKind::WineExe};
+        req.binDir = binDir;
+        req.argv.push_back(exePath);
+        req.argv.insert(req.argv.end(), launchArguments.begin(), launchArguments.end());
+        req.env = std::move(wineEnv);
+        OH_LOG_INFO(LOG_APP, "[Wine] runWineExe via broker: %{public}s", exePath.c_str());
 
-        const char* brokerPath = getenv("PROCESSBROKER");
-        if (!brokerPath || !brokerPath[0]) {
-            OH_LOG_ERROR(LOG_APP, "[Wine] PROCESSBROKER is not configured");
-            if (gStateTsfn) napi_call_threadsafe_function(gStateTsfn, strdup("-1:wine-failed"), napi_tsfn_blocking);
-            return MakeLaunchResult(env, -1, "", false);
+        pid_t pid = -1;
+        for (int launchAttempt = 0; launchAttempt < 2 && pid <= 0; launchAttempt++) {
+            if (launchAttempt > 0) usleep(1000000);
+            pid = winehua::Spawner::Spawn(req);
+            if (pid <= 0)
+                OH_LOG_WARN(LOG_APP, "[Wine] broker spawn failed (attempt %{public}d)",
+                            launchAttempt + 1);
         }
-        struct sockaddr_un addr;
-        memset(&addr, 0, sizeof(addr));
-        addr.sun_family = AF_UNIX;
-        strncpy(addr.sun_path, brokerPath, sizeof(addr.sun_path) - 1);
-
-        char req_hdr[32];
-        int hdr_len = snprintf(req_hdr, sizeof(req_hdr), "SPAWN\n");
-        size_t ep_len = entryParams.size();
-        struct iovec iov[3] = {
-            {req_hdr, (size_t)hdr_len},
-            {(void*)entryParams.c_str(), ep_len},
-            {(void*)"\n", 1}
-        };
-        struct msghdr msg = {};
-        msg.msg_iov = iov;
-        msg.msg_iovlen = 3;
-
-        int connectError = 0;
-        auto connectBroker = [&]() -> int {
-            int fd = -1;
-            int err = 0;
-            for (int attempt = 0; attempt < 10; attempt++) {
-                fd = socket(AF_UNIX, SOCK_STREAM, 0);
-                if (fd >= 0 && connect(fd,
-                    reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) return fd;
-                err = errno;
-                if (fd >= 0) close(fd);
-                usleep(50000);
-            }
-            connectError = err;
-            return -1;
-        };
-
-        // 瞬时 appspawn/broker 抖动: 整个 SPAWN 交换自动重试一次 (1s 退避),
-        // 避免一次瞬态失败就把用户点击的启动打回。
-        int broker_fd = -1;
-        int32_t response[2] = {-1, -1};
-        bool spawnOk = false;
-        for (int launchAttempt = 0; launchAttempt < 2 && !spawnOk; launchAttempt++) {
-            broker_fd = connectBroker();
-            if (broker_fd < 0) {
-                OH_LOG_ERROR(LOG_APP, "[Wine] broker connect failed after retry: %{public}s",
-                             strerror(connectError));
-                break;
-            }
-            if (sendmsg(broker_fd, &msg, MSG_NOSIGNAL) < 0) {
-                OH_LOG_ERROR(LOG_APP, "[Wine] broker sendmsg failed: %{public}s", strerror(errno));
-                close(broker_fd);
-                broker_fd = -1;
-                if (launchAttempt == 0) {
-                    usleep(1000000);
-                    continue;
-                }
-                break;
-            }
-            ssize_t n = recv(broker_fd, response, sizeof(response), MSG_WAITALL);
-            close(broker_fd);
-            broker_fd = -1;
-            if (n == sizeof(response) && response[1] == 0 && response[0] > 0) {
-                spawnOk = true;
-                break;
-            }
-            OH_LOG_WARN(LOG_APP, "[Wine] broker spawn failed pid=%{public}d status=%{public}d (attempt %{public}d)",
-                        response[0], response[1], launchAttempt + 1);
-            response[0] = -1;
-            response[1] = -1;
-            if (launchAttempt == 0) usleep(1000000);
-        }
-        if (!spawnOk) {
-            OH_LOG_ERROR(LOG_APP, "[Wine] broker spawn failed pid=%{public}d status=%{public}d",
-                         response[0], response[1]);
+        if (pid <= 0) {
+            OH_LOG_ERROR(LOG_APP, "[Wine] broker spawn failed");
             if (gStateTsfn) napi_call_threadsafe_function(gStateTsfn, strdup("-1:wine-failed"), napi_tsfn_blocking);
             return MakeLaunchResult(env, -1, "", false);
         }
 
-        pid_t pid = response[0];
         const std::string sessionId = "wine-" + std::to_string(pid);
         AddProcess(pid, wineExe, -1, sessionId);
         OH_LOG_INFO(LOG_APP, "[Wine] wine pid=%{public}d exe=%{public}s (via broker)", pid, wineExe);
