@@ -87,12 +87,19 @@ static bool IsBrokerWineserverRequest(const char* entryParamsRaw)
     std::unique_ptr<char, decltype(&free)> entryCopy(strdup(entryParamsRaw), &free);
     if (!entryCopy) return false;
 
+    // homeDir|binDir 都以 '/' 开头；只跳过这两段后再看 argv。
+    // 旧实现只跳过第一段，homeDir 前缀会把 binDir 当成 argv[0]，
+    // loader 自启 "homeDir|binDir|wineserver|-f|-p" 被错送到 Main / wine PE 解析。
     char* saveptr = nullptr;
-    char* token = strtok_r(entryCopy.get(), "|", &saveptr);  // skip binDir
-    if (!token) return false;
-
-    while ((token = strtok_r(nullptr, "|", &saveptr)) != nullptr) {
-        if (!strncmp(token, "__env__=", 8) || !strcmp(token, "__winehua_desktop__")) {
+    int slashSegsLeft = 2;
+    for (char* token = strtok_r(entryCopy.get(), "|", &saveptr); token;
+         token = strtok_r(nullptr, "|", &saveptr)) {
+        if (!strncmp(token, "__env=", 6) || !strncmp(token, "__env__=", 8) ||
+            !strcmp(token, "__winehua_desktop__")) {
+            continue;
+        }
+        if (slashSegsLeft > 0 && token[0] == '/') {
+            slashSegsLeft--;
             continue;
         }
         if (!strcasecmp(token, "wine")) {
@@ -103,6 +110,19 @@ static bool IsBrokerWineserverRequest(const char* entryParamsRaw)
     }
 
     return false;
+}
+
+static bool BrokerSocketConnectable()
+{
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strcpy(addr.sun_path, kBrokerSocketPath);
+    const bool ok = connect(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0;
+    close(fd);
+    return ok;
 }
 
 /**
@@ -158,7 +178,11 @@ static void HandleRequest(int conn_fd)
 
     ssize_t n = recvmsg(conn_fd, &msg, 0);
     if (n <= 0) {
-        OH_LOG_ERROR(LOG_APP, "[Broker] recvmsg failed: %{public}s", strerror(errno));
+        // n==0: 对端 connect 后立即 close (StartBrokerServer 就绪探测), 非错误
+        if (n == 0)
+            OH_LOG_INFO(LOG_APP, "[Broker] probe connection (readiness check), ignoring");
+        else
+            OH_LOG_ERROR(LOG_APP, "[Broker] recvmsg failed: %{public}s", strerror(errno));
         close(conn_fd);
         return;
     }
@@ -392,7 +416,8 @@ int StartBrokerServer()
 {
     if (gBrokerRunning.load(std::memory_order_acquire)) {
         const bool ready = WaitFor("broker listening", []() {
-            return gBrokerListening.load(std::memory_order_acquire);
+            return gBrokerListening.load(std::memory_order_acquire) &&
+                   BrokerSocketConnectable();
         }, 2000, 20);
         OH_LOG_WARN(LOG_APP, "[Broker] already running, listening=%{public}s",
                     ready ? "yes" : "no");
@@ -407,10 +432,11 @@ int StartBrokerServer()
     gBrokerRunning.store(true, std::memory_order_release);
     std::thread(BrokerThreadFunc).detach();
 
-    // Readiness means listen() completed, not merely that a socket pathname
-    // exists. This makes the WineEngine READY callback safe to act on.
+    // listen() 完成仍不够: bind 成功后 socket 文件已存在, listen 未完成时
+    // connect 会 ECONNREFUSED。再加真实 connect, 与 winehua f9aaaaed 对齐。
     if (!WaitFor("broker listening", []() {
-        return gBrokerListening.load(std::memory_order_acquire);
+        return gBrokerListening.load(std::memory_order_acquire) &&
+               BrokerSocketConnectable();
     }, 2000, 20)) {
         OH_LOG_ERROR(LOG_APP, "[Broker] failed to become ready");
         return -1;

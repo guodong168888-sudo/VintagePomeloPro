@@ -412,6 +412,8 @@ static void prepare_host_elf_environment(const char *homeDir)
     if (homeDir && homeDir[0]) setenv("HOME", homeDir, 1);
 }
 
+extern "C" void WineserverMain(NativeChildProcess_Args args);
+
 extern "C" void Main(NativeChildProcess_Args args)
 {
     OH_LOG_INFO(LOG_APP, "[WineChild] Main() ENTER pid=%{public}d entryParams=%{public}s",
@@ -462,6 +464,16 @@ extern "C" void Main(NativeChildProcess_Args args)
                 break;
             }
         }
+    }
+
+    // loader 经 broker 自启 wineserver 时走 Main (wine 无法把 Unix ELF 当 PE 解析)。
+    // 交给 WineserverMain (box64 / libwineserver.so)，对齐 winehua f9aaaaed。
+    if (!guestElfMode && !hostElfMode && argc > 0 && !strcasecmp(argv[0], "wineserver")) {
+        OH_LOG_INFO(LOG_APP, "[WineChild] Main intercepted wineserver, handing off to WineserverMain");
+        for (auto* node = args.fdList.head; node; node = node->next) close(node->fd);
+        WineserverMain(args);
+        free(buf);
+        return;
     }
 
     OH_LOG_INFO(LOG_APP, "[WineChild] homeDir=%{public}s binDir=%{public}s argc=%{public}d argv[0]=%{public}s",
@@ -694,6 +706,11 @@ extern "C" void WineserverMain(NativeChildProcess_Args args)
     OH_LOG_INFO(LOG_APP, "[WineChild] ws step1: setting env...");
     setenv("WINEPREFIX", WINE_PREFIX, 1);
     setenv("WINEDEBUG", "-all", 1);
+#ifdef __aarch64__
+    // Box64 基线先于 __env apply，后写胜出；不再二次重放 BOX64_DYNAREC_*。
+    setenv("BOX64_LD_LIBRARY_PATH", (std::string(binDir) + "/x86_64-unix").c_str(), 1);
+    SetBox64PerfEnv();
+#endif
     apply_entry_param_env_overrides(envOverrides);
     OH_LOG_INFO(LOG_APP, "[WineChild] ws step2: mkdir prefix=%{public}s...", active_wine_prefix());
     mkdir(active_wine_prefix(), 0755);
@@ -748,21 +765,6 @@ extern "C" void WineserverMain(NativeChildProcess_Args args)
         dlclose(box64_lib);
         free(buf);
         return;
-    }
-
-    // Box64 env for wineserver (x86_64 wineserver ELF inside Box64).
-    std::string libDir = std::string(binDir) + "/x86_64-unix";
-    setenv("BOX64_LD_LIBRARY_PATH", libDir.c_str(), 1);
-    SetBox64PerfEnv();
-    // __env= 段在此前已 apply 一次 (WINEPREFIX 等依赖 mkdir 前覆盖)。
-    // SetBox64PerfEnv 会把 BOX64_DYNAREC_* 盖回硬基线, 此处只重放 dynarec 行。
-    for (const std::string& envLine : envOverrides) {
-        if (envLine.rfind("BOX64_DYNAREC_", 0) != 0)
-            continue;
-        size_t sep = envLine.find('=');
-        if (sep == std::string::npos || sep == 0)
-            continue;
-        setenv(envLine.substr(0, sep).c_str(), envLine.substr(sep + 1).c_str(), 1);
     }
 
     // Build argv: ["box64", "/path/to/wineserver", "wineserver", "-f", "-p"]

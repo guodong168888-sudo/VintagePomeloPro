@@ -3,17 +3,23 @@
 > 用途：标明本地产品线已合并到 WineHua 上游的哪个提交，避免重复合并/漏合并。
 > 本地镜像分支：`mirror_master`（跟踪 `winehua/master`，只读对照，不 push）。
 > 维护命令：`git fetch winehua && git branch -f mirror_master winehua/master`
-> 下次同步前先执行：`git log 90edaae..mirror_master --oneline`
+> 下次同步前先执行：`git log d256317e..mirror_master --oneline`
 
 | 项 | 值 |
 | --- | --- |
 | 上游仓库 | `https://github.com/winehua/WineHua` |
 | 上游分支 | `master` |
-| **最后核对的上游 SHA** | `90edaae`（2026-08-25，`mirror_master` 尖端） |
+| **最后核对的上游 SHA** | `d256317e`（2026-08-27，`winehua/master` 尖端） |
 | 功能同步起点（用户指定） | `10a9e6caf33e0147363793947461417dd60a8372`（master 线等价 `189c27c`） |
-| 合并方式 | 选择性 cherry-pick -x：只吸收输入/渲染功能，不上游品牌/版本号/CI/README |
-| 本地对应分支 | `feature/sync-winehua-10a9e6c`（合入 `main` 后以 main 为准） |
-| 核对日期 | 2026-08-25 |
+| 合并方式 | 选择性 cherry-pick / 手工移植：只吸收行为修复，不上游品牌/版本号/CI/README，不整包 EnvSpec/Spawner 架构 |
+| 本地对应分支 | `feature/host-fps-hud`（叠在 FPS overlay 上） |
+| 核对日期 | 2026-08-27 |
+
+## 已核对的上游增量（90edaae..d256317e）
+
+从上一基线 `90edaae` 到 `winehua/master` 尖端 `d256317e`。上游是 EnvSpec / Profile / SpawnRequest / 会话三原语整包重构；本仓只移植其中有独立行为价值的修复，不合并架构。
+
+明细见 `docs/private-upstream-sync.md`「2026-08-27 WineHua master 增量（90edaae..d256317e）」。
 
 ## 已核对的上游增量（e16d79b..90edaae）
 

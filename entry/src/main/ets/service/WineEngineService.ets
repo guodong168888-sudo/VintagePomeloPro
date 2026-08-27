@@ -38,6 +38,10 @@ const PREFIX_SYSTEM_REG = FILES_BASE + '/.wine/system.reg';
 // ArkTS 不再用固定阶段死线: native 协调者会发 phase:/fail:/wine-ready 事件,
 // 等待只由事件结束。下面的安全网仅在"长时间完全无事件"时兜底, 正常不会触发。
 const ENGINE_NO_EVENT_SAFETY_MS = 30 * 60 * 1000;
+// 对齐 native drain 上限 (约 30s) + tsfn 余量。NCP 退出靠 appspawn 回调,
+// 回调丢失时提前放行会让新会话与旧 drain 抢跑 (winehua d256317e)。
+const NATIVE_SHUTDOWN_TIMEOUT_MS = 35000;
+const NATIVE_SHUTDOWN_POLL_MS = 100;
 const PREFIX_DIR = FILES_BASE + '/.wine';
 const RESET_KEEP_DIR = '/data/storage/el2/base/cache/wine-reset-keep';
 const PREFIX_USER_KEEP_FOLDERS: string[] = [
@@ -599,11 +603,12 @@ export class WineEngineService {
   }
 
   private async waitForNativeShutdown(): Promise<void> {
-    for (let attempt = 0; attempt < 50; attempt++) {
+    const deadline = Date.now() + NATIVE_SHUTDOWN_TIMEOUT_MS;
+    while (Date.now() < deadline) {
       let processes: NativeProcessInfo[] = [];
       try { processes = testNapi.getProcessList() as NativeProcessInfo[]; } catch (_) {}
       if (processes.length === 0) return;
-      await new Promise<void>((resolve: () => void) => setTimeout(resolve, 100));
+      await new Promise<void>((resolve: () => void) => setTimeout(resolve, NATIVE_SHUTDOWN_POLL_MS));
     }
     hilog.warn(DOMAIN, TAG, 'native process list did not settle before restart timeout');
   }

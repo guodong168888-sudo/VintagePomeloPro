@@ -4,7 +4,28 @@
 
 基线：WineHua `VintagePomeloMaster` @ `ba7218a`
 
-> **同步基线标记**：最新核对到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `90edaae`，本地镜像 `mirror_master`）。下次同步先 `git fetch winehua && git branch -f mirror_master winehua/master && git log 90edaae..mirror_master --oneline`，避免重复合并。
+> **同步基线标记**：最新核对到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `d256317e`，本地镜像 `mirror_master`）。下次同步先 `git fetch winehua && git branch -f mirror_master winehua/master && git log d256317e..mirror_master --oneline`，避免重复合并。
+
+### 2026-08-27 WineHua master 增量（90edaae..d256317e）
+
+- 分支：`feature/host-fps-hud`（基于 VintagePomeloPro `origin/main` `d73f299f` + 宿主 FPS overlay）。
+- 镜像：`winehua/master` @ `d256317e`。
+- 原则：不整包吸收 EnvSpec / Profile 管线 / SpawnRequest+Spawner / 会话三原语重命名；只移植有独立行为价值的修复。私有 `launchClient` 仍为 8 参 + `compatEnvStr`；不上游 `WineEnvService` / `Box64Dynarec.ets` / 品牌 / 版本号。
+- 已手工移植（上游 SHA → 本地适配）：
+
+  | 上游 SHA | 说明 |
+  | --- | --- |
+  | `f9aaaaed` 行为子集 | broker 就绪改真实 `connect` 探测 + probe EOF 降 INFO；`IsBrokerWineserverRequest` 跳过 homeDir+binDir 两段路径；`Main` 截获 `argv[0]==wineserver` 交给 `WineserverMain`（不删 NCP `WineserverMain` 入口） |
+  | `18b6f5a5` 行为子集 | `WineserverMain` Box64 基线先于 `__env` apply，删除 `BOX64_DYNAREC_*` 二次重放 |
+  | `d256317e` 行为子集 | `waitForNativeShutdown` 5s→35s，覆盖 native drain 30s + tsfn 余量 |
+
+- 跳过（架构/文档/已由私有路径覆盖）：
+  - `3b589770` `95d03f95` `ade24e0f`（docs）
+  - `b04e3410` `18b6f5a5` `f3370b05` `fed07ecf` `f9aaaaed` 的 EnvSpec/Spawner/「全部 wineserver 改走 broker、删除 NCP 直启」
+  - `3720e13a`（`Box64Dynarec.ets` 单源化；本仓 `FilterCompatLines` 已用 `BOX64_DYNAREC_` 前缀门）
+  - `d256317e` 的 `WineEnvService.startSession/stopSession/wipeEnvironment` 重命名（本仓已是 `WineEngineService.ensureReady/stopAll/resetPrefix`，重启/重置已无条件先停）
+- 子模块 gitlink：未跟随上游。
+- 验证：`make hap`（winehua-dev / vp-build，arm64-v8a，API 23）。
 
 ### 2026-08-25 WineHua master 增量（e16d79b..90edaae）
 
