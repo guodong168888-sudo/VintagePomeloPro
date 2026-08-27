@@ -20,6 +20,9 @@
   通过 `common/EvdevKeyNames.ets` 映射表转换。
 - 支持元素级透明度覆盖（Winlator 只有方案级）。
 - `RANGE_BUTTON` 使用本地键码列表 `keyList` 实现。
+- 绘制：按键用偏深半透明底托住白字；十字键只画四向臂，不加整块光晕以免
+  画出方框。视角触摸板不再画内圈黑框。方案/全局透明度作用在整控件
+  `.opacity()` 上。`PANEL` 键盘外框只画白描边。几何仍兼容 Winlator。
 
 ## v6 Profile 结构
 

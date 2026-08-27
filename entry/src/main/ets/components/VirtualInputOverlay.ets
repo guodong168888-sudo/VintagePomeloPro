@@ -46,21 +46,25 @@ interface StickVisualState {
   active: boolean;
 }
 
-/** Winlator ControlElement 配色：白描边、按下白填充、按下文字转黑。 */
-const WINLATOR_LIGHT = '#FFFFFFFF';
-const WINLATOR_DARK = '#FF000000';
-const WINLATOR_HIGHLIGHT = '#FF0277BD';
-const WINLATOR_CLEAR = '#00000000';
-/** 摇杆拇指填充：Winlator ColorUtils.setAlphaComponent(light, 50)。 */
-const WINLATOR_THUMB_FILL = '#32FFFFFF';
+/**
+ * 覆盖层几何仍按 Winlator（描边宽度 overlayW/400、形状半径）。
+ * 按键用偏深半透明底托住白字；十字键只画四向臂，不加整块光晕以免画出方框。
+ * 整体透明度由 elementOpacity() 作用在控件 .opacity() 上。
+ */
+const OVERLAY_WHITE = '#FFFFFF';
+const OVERLAY_BLACK = '#000000';
+const OVERLAY_KEYCAP = '#2C2C2C';
+const OVERLAY_HIGHLIGHT = '#0277BD';
+const OVERLAY_CLEAR = '#00000000';
 
 /** Toggle 按钮长按锁定阈值（毫秒）：短按=点按，长按=锁定保持。 */
 const LONG_PRESS_LOCK_MS = 400;
 
 /**
- * Winlator 风格的元素化虚拟输入覆盖层。控件由 profile.elements 驱动，
- * 每个元素使用归一化坐标任意排布，支持 BUTTON / D_PAD / STICK /
- * TRACKPAD / RANGE_BUTTON 五种类型，多指并行注入不串键。
+ * Winlator 几何 + 盖世双色对比的元素化虚拟输入覆盖层。
+ * 控件由 profile.elements 驱动，每个元素使用归一化坐标任意排布，
+ * 支持 BUTTON / D_PAD / STICK / TRACKPAD / RANGE_BUTTON 五种类型，
+ * 多指并行注入不串键。
  */
 @Component
 export struct VirtualInputOverlay {
@@ -284,20 +288,63 @@ export struct VirtualInputOverlay {
   }
 
   /** snappingSize = viewWidth / 100，strokeWidth = snappingSize × 0.25。 */
-  private winlatorStrokeWidth(): number {
+  private overlayStrokeWidth(): number {
     return Math.max(1.25, this.overlayW / 400);
   }
 
-  private winlatorStrokeColor(element: ControlElement): string {
-    return (this.editMode && this.selectedElementId === element.id) ? WINLATOR_HIGHLIGHT : WINLATOR_LIGHT;
+  /** Pack #AARRGGBB. `rgb` may be #RGB, #RRGGBB, or #AARRGGBB. */
+  private overlayArgb(rgb: string, alpha: number): string {
+    const trimmed = rgb.startsWith('#') ? rgb.substring(1) : rgb;
+    const body = trimmed.length > 6 ? trimmed.substring(trimmed.length - 6) : trimmed;
+    const clamped = Math.max(0, Math.min(1, alpha));
+    const value = Math.round(clamped * 255);
+    const hex = value.toString(16).toUpperCase();
+    const aHex = hex.length < 2 ? '0' + hex : hex;
+    return '#' + aHex + body.toUpperCase();
   }
 
-  private winlatorFill(pressed: boolean): string {
-    return pressed ? WINLATOR_LIGHT : WINLATOR_CLEAR;
+  /** Soft glow behind white strokes; not a hard second ring. */
+  private overlayGlowColor(): string {
+    return '#4D000000';
   }
 
-  private winlatorTextColor(pressed: boolean): string {
-    return pressed ? WINLATOR_DARK : WINLATOR_LIGHT;
+  private overlayStrokeColor(element: ControlElement): string {
+    if (this.editMode && this.selectedElementId === element.id) {
+      return this.overlayArgb(OVERLAY_HIGHLIGHT, 0.95);
+    }
+    return this.overlayArgb(OVERLAY_WHITE, 0.95);
+  }
+
+  private overlayFill(element: ControlElement, pressed: boolean): string {
+    if (pressed) {
+      return this.overlayArgb(OVERLAY_WHITE, 0.70);
+    }
+    if ((element.keyWidthRatio ?? 0) > 0) {
+      return this.overlayArgb(OVERLAY_KEYCAP, 0.42);
+    }
+    if (element.type === ControlElementType.D_PAD) {
+      return this.overlayArgb(OVERLAY_BLACK, 0.14);
+    }
+    if (element.type === ControlElementType.TRACKPAD) {
+      return this.overlayArgb(OVERLAY_BLACK, 0.12);
+    }
+    if (element.type === ControlElementType.RANGE_BUTTON) {
+      return this.overlayArgb(OVERLAY_BLACK, 0.32);
+    }
+    // Buttons: dark enough that white labels read on Notepad, still see-through.
+    return this.overlayArgb(OVERLAY_BLACK, 0.45);
+  }
+
+  private overlayThumbFill(element: ControlElement, active: boolean): string {
+    if (active) {
+      return this.overlayArgb(OVERLAY_WHITE, 0.45);
+    }
+    // Winlator ColorUtils.setAlphaComponent(light, 50).
+    return this.overlayArgb(OVERLAY_WHITE, 0.20);
+  }
+
+  private overlayTextColor(pressed: boolean): string {
+    return pressed ? '#FF000000' : '#FFFFFFFF';
   }
 
   /** 键盘键帽文字按实际键面尺寸放大, 保证平板/手机上清晰可读。 */
@@ -493,7 +540,7 @@ export struct VirtualInputOverlay {
 
   private stickRadius(element: ControlElement): number {
     return Math.min(this.elementWidth(element), this.elementHeight(element)) / 2 -
-      this.winlatorStrokeWidth();
+      this.overlayStrokeWidth();
   }
 
   private stickKnobSize(element: ControlElement): number {
@@ -1371,8 +1418,9 @@ export struct VirtualInputOverlay {
     Stack()
       .width(this.elementWidth(element)).height(this.elementHeight(element))
       .borderRadius(this.elementRadius(element))
-      .backgroundColor(WINLATOR_CLEAR)
-      .border({ width: this.winlatorStrokeWidth(), color: this.winlatorStrokeColor(element) })
+      .backgroundColor(OVERLAY_CLEAR)
+      .border({ width: this.overlayStrokeWidth(), color: this.overlayStrokeColor(element) })
+      .shadow({ radius: 3, color: this.overlayGlowColor(), offsetX: 0, offsetY: 0 })
       .opacity(this.elementOpacity(element))
       .hitTestBehavior(HitTestMode.None)
       .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2,
@@ -1393,7 +1441,7 @@ export struct VirtualInputOverlay {
       .width(Math.min(this.elementWidth(element), this.elementHeight(element)) * 0.58)
       .height(Math.min(this.elementWidth(element), this.elementHeight(element)) * 0.58)
       .objectFit(ImageFit.Contain)
-      .fillColor(this.winlatorTextColor(this.isElementPressed(element.id)))
+      .fillColor(this.overlayTextColor(this.isElementPressed(element.id)))
   }
 
   @Builder
@@ -1404,14 +1452,14 @@ export struct VirtualInputOverlay {
       } else {
         Text(element.text.length > 0 ? element.text : '键')
           .fontSize(this.buttonLabelFontSize(element)).fontWeight(FontWeight.Medium).maxLines(1)
-          .fontColor(this.winlatorTextColor(this.isElementPressed(element.id)))
+          .fontColor(this.overlayTextColor(this.isElementPressed(element.id)))
       }
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))
     .borderRadius(this.elementRadius(element))
-    .backgroundColor(this.winlatorFill(this.isElementPressed(element.id)))
-    .border({ width: this.winlatorStrokeWidth(), color: this.winlatorStrokeColor(element) })
-    .clip(true)
+    .backgroundColor(this.overlayFill(element, this.isElementPressed(element.id)))
+    .border({ width: this.overlayStrokeWidth(), color: this.overlayStrokeColor(element) })
+    .shadow({ radius: 3, color: this.overlayGlowColor(), offsetX: 0, offsetY: 0 })
     .opacity(this.elementOpacity(element))
     .hitTestBehavior(HitTestMode.None)
     .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
@@ -1424,7 +1472,7 @@ export struct VirtualInputOverlay {
     const cx = width / 2;
     const cy = height / 2;
     const arm = Math.min(width, height) * 0.30;
-    const pad = this.winlatorStrokeWidth();
+    const pad = this.overlayStrokeWidth();
     const gap = Math.min(width, height) * 0.07;
     const tip = arm * 0.42;
     if (direction === 'up') {
@@ -1473,9 +1521,9 @@ export struct VirtualInputOverlay {
       .width(this.elementWidth(element))
       .height(this.elementHeight(element))
       .points(this.dpadArmPoints(element, direction))
-      .fill(this.winlatorFill(this.isDpadDirectionPressed(element.id, direction)))
-      .stroke(this.winlatorStrokeColor(element))
-      .strokeWidth(this.winlatorStrokeWidth())
+      .fill(this.overlayFill(element, this.isDpadDirectionPressed(element.id, direction)))
+      .stroke(this.overlayStrokeColor(element))
+      .strokeWidth(this.overlayStrokeWidth())
   }
 
   @Builder
@@ -1487,6 +1535,7 @@ export struct VirtualInputOverlay {
       this.DPadArm(element, 'left')
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))
+    .backgroundColor(OVERLAY_CLEAR)
     .opacity(this.elementOpacity(element))
     .hitTestBehavior(HitTestMode.None)
     .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
@@ -1497,17 +1546,21 @@ export struct VirtualInputOverlay {
   private StickElement(element: ControlElement) {
     Stack({ alignContent: Alignment.Center }) {
       Circle().width(this.elementWidth(element)).height(this.elementHeight(element))
-        .fill(WINLATOR_CLEAR).stroke(this.winlatorStrokeColor(element)).strokeWidth(this.winlatorStrokeWidth())
+        .fill(OVERLAY_CLEAR)
+        .stroke(this.overlayStrokeColor(element))
+        .strokeWidth(this.overlayStrokeWidth())
+        .shadow({ radius: 3, color: this.overlayGlowColor(), offsetX: 0, offsetY: 0 })
       Stack({ alignContent: Alignment.Center }) {
         Circle().width(this.stickKnobSize(element)).height(this.stickKnobSize(element))
-          .fill(WINLATOR_THUMB_FILL)
-          .stroke(this.winlatorStrokeColor(element))
-          .strokeWidth(this.winlatorStrokeWidth())
+          .fill(this.overlayThumbFill(element, this.stickState(element.id).active))
+          .stroke(this.overlayStrokeColor(element))
+          .strokeWidth(this.overlayStrokeWidth())
+          .shadow({ radius: 3, color: this.overlayGlowColor(), offsetX: 0, offsetY: 0 })
       }
       .translate({ x: this.stickState(element.id).dx, y: this.stickState(element.id).dy })
       if (element.text.length > 0) {
         Text(element.text).fontSize(12 * (element.scale ?? 1)).fontWeight(FontWeight.Medium)
-          .fontColor(WINLATOR_LIGHT)
+          .fontColor(this.overlayTextColor(false))
           .translate({ x: 0, y: this.elementHeight(element) / 2 + 8 * (element.scale ?? 1) })
       }
     }
@@ -1524,30 +1577,25 @@ export struct VirtualInputOverlay {
       Stack()
         .width('100%').height('100%')
         .borderRadius(this.elementHeight(element) * 0.15)
-        .backgroundColor(this.winlatorFill(this.isElementPressed(element.id)))
-        .border({ width: this.winlatorStrokeWidth(), color: this.winlatorStrokeColor(element) })
-      Stack()
-        .width(Math.max(8, this.elementWidth(element) - this.winlatorStrokeWidth() * 5))
-        .height(Math.max(8, this.elementHeight(element) - this.winlatorStrokeWidth() * 5))
-        .borderRadius(Math.max(2, this.elementHeight(element) * 0.15 -
-          this.winlatorStrokeWidth() * 1.5))
-        .border({ width: this.winlatorStrokeWidth() * 2, color: this.winlatorStrokeColor(element) })
+        .backgroundColor(this.overlayFill(element, this.isElementPressed(element.id)))
+        .border({ width: this.overlayStrokeWidth(), color: this.overlayStrokeColor(element) })
+        .shadow({ radius: 3, color: this.overlayGlowColor(), offsetX: 0, offsetY: 0 })
       if (this.stickState(element.id).active) {
         Circle()
           .width(Math.min(this.elementWidth(element), this.elementHeight(element)) * 0.28)
           .height(Math.min(this.elementWidth(element), this.elementHeight(element)) * 0.28)
-          .fill(WINLATOR_THUMB_FILL)
-          .stroke(this.winlatorStrokeColor(element))
-          .strokeWidth(this.winlatorStrokeWidth())
+          .fill(this.overlayThumbFill(element, true))
+          .stroke(this.overlayStrokeColor(element))
+          .strokeWidth(this.overlayStrokeWidth())
           .translate({ x: this.stickState(element.id).dx, y: this.stickState(element.id).dy })
       }
       if (element.text.length > 0) {
-        Text(element.text).fontSize(12 * (element.scale ?? 1))
-          .fontColor(this.winlatorTextColor(this.isElementPressed(element.id)))
+        Text(element.text).fontSize(12 * (element.scale ?? 1)).fontWeight(FontWeight.Medium)
+          .fontColor(this.overlayTextColor(this.isElementPressed(element.id)))
       }
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))
-    .backgroundColor(WINLATOR_CLEAR)
+    .backgroundColor(OVERLAY_CLEAR)
     .opacity(this.elementOpacity(element))
     .hitTestBehavior(HitTestMode.None)
     .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
@@ -1556,37 +1604,43 @@ export struct VirtualInputOverlay {
 
   @Builder
   private RangeButtonElement(element: ControlElement) {
-    Stack({ alignContent: Alignment.Top }) {
-      if (element.text.length > 0 && element.orientation !== 'horizontal') {
-        Text(element.text).fontSize(10 * (element.scale ?? 1)).fontColor(WINLATOR_LIGHT)
-          .padding(3).width('100%').textAlign(TextAlign.Center)
-      }
-      ForEach(element.keyList ?? [], (code: number, index: number): void => {
-        Stack({ alignContent: Alignment.Center }) {
-          if (index > 0 && this.rangeSelection(element.id) !== index &&
-            this.rangeSelection(element.id) !== index - 1) {
-            Row()
-              .width(element.orientation === 'horizontal' ? this.winlatorStrokeWidth() : '100%')
-              .height(element.orientation === 'horizontal' ? '100%' : this.winlatorStrokeWidth())
-              .backgroundColor(this.winlatorStrokeColor(element))
-              .position(element.orientation === 'horizontal' ? { x: 0, y: 0 } : { x: 0, y: 0 })
-          }
-          Text(this.keyLabel(code)).fontSize((element.orientation === 'horizontal' ? 8 : 10) * (element.scale ?? 1))
-            .fontColor(this.winlatorTextColor(this.rangeSelection(element.id) === index))
+    Stack() {
+      Stack({ alignContent: Alignment.Top }) {
+        if (element.text.length > 0 && element.orientation !== 'horizontal') {
+          Text(element.text).fontSize(10 * (element.scale ?? 1))
+            .fontColor(this.overlayTextColor(false))
+            .padding(3).width('100%').textAlign(TextAlign.Center)
         }
-        .width(element.orientation === 'horizontal' ? this.rangeSlotHeight(element) : '100%')
-        .height(element.orientation === 'horizontal' ? '100%' : this.rangeSlotHeight(element))
-        .backgroundColor(this.winlatorFill(this.rangeSelection(element.id) === index))
-        .position(element.orientation === 'horizontal' ?
-          { x: this.rangeSlotTop(element) + index * this.rangeSlotHeight(element), y: 0 } :
-          { x: 0, y: this.rangeSlotTop(element) + index * this.rangeSlotHeight(element) })
-      }, (code: number, index: number): string => element.id + '-' + code.toString() + '-' + index.toString())
+        ForEach(element.keyList ?? [], (code: number, index: number): void => {
+          Stack({ alignContent: Alignment.Center }) {
+            if (index > 0 && this.rangeSelection(element.id) !== index &&
+              this.rangeSelection(element.id) !== index - 1) {
+              Row()
+                .width(element.orientation === 'horizontal' ? this.overlayStrokeWidth() : '100%')
+                .height(element.orientation === 'horizontal' ? '100%' : this.overlayStrokeWidth())
+                .backgroundColor(this.overlayStrokeColor(element))
+                .position(element.orientation === 'horizontal' ? { x: 0, y: 0 } : { x: 0, y: 0 })
+            }
+            Text(this.keyLabel(code)).fontSize((element.orientation === 'horizontal' ? 8 : 10) * (element.scale ?? 1))
+              .fontColor(this.overlayTextColor(this.rangeSelection(element.id) === index))
+          }
+          .width(element.orientation === 'horizontal' ? this.rangeSlotHeight(element) : '100%')
+          .height(element.orientation === 'horizontal' ? '100%' : this.rangeSlotHeight(element))
+          .backgroundColor(this.rangeSelection(element.id) === index ?
+            this.overlayFill(element, true) : OVERLAY_CLEAR)
+          .position(element.orientation === 'horizontal' ?
+            { x: this.rangeSlotTop(element) + index * this.rangeSlotHeight(element), y: 0 } :
+            { x: 0, y: this.rangeSlotTop(element) + index * this.rangeSlotHeight(element) })
+        }, (code: number, index: number): string => element.id + '-' + code.toString() + '-' + index.toString())
+      }
+      .width('100%').height('100%')
+      .borderRadius(Math.min(this.elementWidth(element), this.elementHeight(element)) * 0.15)
+      .backgroundColor(this.overlayFill(element, false))
+      .border({ width: this.overlayStrokeWidth(), color: this.overlayStrokeColor(element) })
+      .clip(true)
     }
     .width(this.elementWidth(element)).height(this.elementHeight(element))
-    .borderRadius(Math.min(this.elementWidth(element), this.elementHeight(element)) * 0.15)
-    .backgroundColor(WINLATOR_CLEAR)
-    .border({ width: this.winlatorStrokeWidth(), color: this.winlatorStrokeColor(element) })
-    .clip(true)
+    .shadow({ radius: 3, color: this.overlayGlowColor(), offsetX: 0, offsetY: 0 })
     .opacity(this.elementOpacity(element))
     .hitTestBehavior(HitTestMode.None)
     .position({ x: this.elementCenter(element).x - this.elementWidth(element) / 2, y: this.elementCenter(element).y - this.elementHeight(element) / 2 })
