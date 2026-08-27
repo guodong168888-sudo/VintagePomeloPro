@@ -1,15 +1,16 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('dxvk_legacy', 'wined3d')]
+    [ValidateSet('dxvk_legacy', 'dxvk_modern_2_6', 'wined3d')]
     [string]$D3DBackend = 'dxvk_legacy',
-    [ValidateSet('baseline', 'direct-fence-wait', 'no-remote-sync', 'no-dynamic-flush', 'fence-feedback', 'shadow-none', 'shadow-trace', 'shadow-to-host-explicit', 'shadow-precise', 'shadow-precise-single-ring', 'shadow-precise-sync-submit', 'shadow-precise-strong-ring', 'shadow-precise-legacy-host-sync', 'shadow-precise-strong-ring-trace', 'shadow-precise-strong-ring-perf', 'shadow-precise-strong-ring-async-present', 'shadow-precise-strong-ring-fence-poll', 'shadow-precise-strong-ring-mailbox', 'shadow-precise-direct-fence', 'shadow-precise-retain-shmem', 'shadow-precise-cpu-upload', 'shadow-precise-dirty-ring', 'shadow-precise-dirty-ring-perf', 'shadow-precise-dirty-ring-no-merge', 'shadow-precise-dirty-ring-no-upload', 'shadow-precise-dirty-ring-no-upload-fast', 'shadow-precise-dirty-ring-inline-upload', 'shadow-precise-dirty-ring-inline-upload-coverage-sort', 'shadow-precise-dirty-ring-inline-upload-serialized','shadow-precise-dirty-ring-inline-upload-descriptor-serialized', 'shadow-precise-dirty-ring-frame-assoc-trace', 'shadow-precise-dirty-ring-present-image-trace')]
-    [string]$PerfProfile = 'shadow-precise-dirty-ring-inline-upload',
+    [AllowEmptyString()]
+    [string]$GraphicsExperiment = '',
     [ValidateSet('', 'heaven-dx11')]
     [string]$GamePreset = '',
     [string]$GamePath = '',
     [string[]]$GameArguments = @(),
     [hashtable]$D3DEnvironment = @{},
-    [switch]$BatchMappedFlush,
+    [ValidateSet('product', 'on', 'off')]
+    [string]$BatchMappedFlushMode = 'product',
     [string]$ClickTitlePrefix = '',
     [string]$ClickButtonText = '',
     [ValidateRange(0, 30000)]
@@ -18,20 +19,32 @@ param(
     [int]$ClickClientXPermille = -1,
     [ValidateRange(-1, 1000)]
     [int]$ClickClientYPermille = -1,
-    [string]$DeviceId = '5KPBB25818203996'
+    [string]$DeviceId = '',
+    [string]$HdcPath = 'C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe'
 )
 
 $ErrorActionPreference = 'Stop'
-$hdc = 'C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe'
-$bundle = 'app.hackeris.winehua'
+$hdc = $HdcPath
+$bundle = 'com.vintage.pomelopro'
 if (-not (Test-Path -LiteralPath $hdc)) { throw "Windows HDC not found: $hdc" }
+if (-not $DeviceId) {
+    $targets = @(& $hdc list targets | Where-Object { $_ -and $_ -notmatch '^\[Empty\]' } |
+        ForEach-Object { ($_ -split '\s+')[0] })
+    if ($targets.Count -ne 1) {
+        throw "Expected one connected Windows HDC target, found $($targets.Count)"
+    }
+    $DeviceId = $targets[0]
+}
+
+& $hdc -t $DeviceId shell power-shell wakeup | Out-Null
+& $hdc -t $DeviceId shell power-shell timeout -o 600000 | Out-Null
 
 if ($GamePreset -eq 'heaven-dx11') {
     if ($GameArguments.Count -gt 0) {
         throw '-GamePreset heaven-dx11 supplies its own arguments'
     }
     if (-not $GamePath) {
-        $GamePath = 'Z:\home\Heaven Benchmark 4.0\Heaven Benchmark 4.0\bin\heaven.exe'
+        $GamePath = 'Z:\games\Heaven Benchmark 4.0\Heaven Benchmark 4.0\bin\heaven.exe'
     }
     $GameArguments = @(
         '-project_name', 'Heaven',
@@ -46,34 +59,20 @@ if ($GamePreset -eq 'heaven-dx11') {
         '-extern_define', ',RELEASE,LANGUAGE_EN,QUALITY_LOW,TESSELLATION_DISABLED',
         '-extern_plugin', ',GPUMonitor'
     )
-    # The direct executable opens Heaven's Win32 launcher first. Use the same
-    # managed driver as other game automation so the benchmark scene, rather
-    # than the black pre-run client area, is the workload under test.
-    if (-not $ClickTitlePrefix) {
-        $ClickTitlePrefix = 'Unigine Heaven Benchmark 4.0 Basic (Direct3D11)'
-    }
-    if (-not $ClickButtonText) {
-        $ClickButtonText = 'Benchmark'
-    }
-    # Heaven draws its launcher controls itself, so there is no Win32 BUTTON
-    # for BM_CLICK. Keep a deterministic client-coordinate fallback.
-    if ($ClickClientXPermille -lt 0) {
-        $ClickClientXPermille = 80
-    }
-    if ($ClickClientYPermille -lt 0) {
-        $ClickClientYPermille = 65
-    }
+    # The direct engine command starts the scene without the browser launcher.
+    # Remaining in the interactive fly-through is sufficient for the 300-frame
+    # correctness gate and avoids synthesizing input into the benchmark UI.
 }
 
 # Carry the DXVK half of the frame-association trace explicitly in the game
 # Want. The Host profile reaches the NCP through graphics-broker IPC, but it
 # does not itself guarantee that an arbitrary Wine child environment variable
 # survives Ability startup on every Harmony build.
-if ($PerfProfile -eq 'shadow-precise-dirty-ring-frame-assoc-trace' -and
+if ($GraphicsExperiment -eq 'trace-frame-association' -and
     -not $D3DEnvironment.ContainsKey('WINEHUA_DXVK_TRACE_CAMERA')) {
     $D3DEnvironment['WINEHUA_DXVK_TRACE_CAMERA'] = '1'
 }
-if ($PerfProfile -eq 'shadow-precise-dirty-ring-present-image-trace') {
+if ($GraphicsExperiment -eq 'trace-present-image') {
     if (-not $D3DEnvironment.ContainsKey('WINEHUA_DXVK_TRACE_PRESENT_IMAGE')) {
         $D3DEnvironment['WINEHUA_DXVK_TRACE_PRESENT_IMAGE'] = '1'
     }
@@ -81,15 +80,14 @@ if ($PerfProfile -eq 'shadow-precise-dirty-ring-present-image-trace') {
         $D3DEnvironment['DXVK_LOG_LEVEL'] = 'info'
     }
 }
-if ($BatchMappedFlush) {
+if ($BatchMappedFlushMode -eq 'on') {
     $D3DEnvironment['DXVK_WINEHUA_BATCH_MAPPED_FLUSH'] = '1'
     $D3DEnvironment['DXVK_WINEHUA_BATCH_MAPPED_FLUSH_STATS'] = '1'
     if (-not $D3DEnvironment.ContainsKey('DXVK_LOG_LEVEL')) {
         $D3DEnvironment['DXVK_LOG_LEVEL'] = 'info'
     }
-} elseif (-not $D3DEnvironment.ContainsKey('DXVK_WINEHUA_BATCH_MAPPED_FLUSH')) {
-    # The runtime enables the qualified product path. A missing switch in this
-    # A/B driver must still mean an explicit off-side run.
+} elseif ($BatchMappedFlushMode -eq 'off' -and
+    -not $D3DEnvironment.ContainsKey('DXVK_WINEHUA_BATCH_MAPPED_FLUSH')) {
     $D3DEnvironment['DXVK_WINEHUA_BATCH_MAPPED_FLUSH'] = '0'
 }
 
@@ -173,12 +171,14 @@ if ($GamePath) {
         '-a', 'EntryAbility', '-b', $bundle,
         '--ps', 'winehua.mode', 'game',
         '--ps', 'winehua.d3d_backend', $D3DBackend,
-        '--ps', 'winehua.perf_profile', $PerfProfile,
         '--ps', 'winehua.game_path', $wantGamePath,
         '--pi', 'winehua.game_argc', [string]$GameArguments.Count,
         # A single encoded JSON value avoids aa start's finite Want-parameter
         # count silently dropping one or more environment key/value pairs.
         '--ps', 'winehua.d3d_env_json', $encodedEnvironmentJson)
+    if ($GraphicsExperiment) {
+        $startArguments += @('--ps', 'winehua.graphics_experiment', $GraphicsExperiment)
+    }
     $startArguments += @(
         '--ps', 'winehua.game_args_json',
         [Uri]::EscapeDataString($gameArgumentsJson),
@@ -189,9 +189,13 @@ if ($GamePath) {
         '--pi', 'winehua.click_client_y_permille', [string]$ClickClientYPermille)
     $output = & $hdc @startArguments
 } else {
-    $output = & $hdc -t $DeviceId shell aa start -a EntryAbility -b $bundle `
-        --ps winehua.d3d_backend $D3DBackend `
-        --ps winehua.perf_profile $PerfProfile
+    $startArguments = @('-t', $DeviceId, 'shell', 'aa', 'start',
+        '-a', 'EntryAbility', '-b', $bundle,
+        '--ps', 'winehua.d3d_backend', $D3DBackend)
+    if ($GraphicsExperiment) {
+        $startArguments += @('--ps', 'winehua.graphics_experiment', $GraphicsExperiment)
+    }
+    $output = & $hdc @startArguments
 }
 $startExitCode = $LASTEXITCODE
 $outputText = ($output -join "`n").Trim()
@@ -213,8 +217,8 @@ if (-not $startedPid) {
 }
 
 Write-Host "WineHua desktop requested with D3D backend: $D3DBackend"
-Write-Host "Performance profile: $PerfProfile"
-Write-Host "Command-list mapped flush batching: $([bool]$BatchMappedFlush)"
+Write-Host "Graphics policy: $(if ($GraphicsExperiment) { "LAB $GraphicsExperiment" } else { 'product route' })"
+Write-Host "Command-list mapped flush batching: $BatchMappedFlushMode"
 if ($GamePath) {
     if ($GamePreset) {
         Write-Host "Game preset: $GamePreset"

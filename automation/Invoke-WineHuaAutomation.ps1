@@ -4,8 +4,8 @@ param(
     [string]$Suite = 'core',
     [ValidateSet('reuse', 'clean')]
     [string]$Prefix = 'reuse',
-    [ValidateSet('baseline', 'direct-fence-wait', 'no-remote-sync', 'no-dynamic-flush', 'fence-feedback', 'shadow-none', 'shadow-trace', 'shadow-to-host-explicit', 'shadow-precise', 'shadow-precise-single-ring', 'shadow-precise-sync-submit', 'shadow-precise-strong-ring', 'shadow-precise-legacy-host-sync', 'shadow-precise-strong-ring-trace', 'shadow-precise-strong-ring-perf', 'shadow-precise-dirty-ring', 'shadow-precise-dirty-ring-perf', 'shadow-precise-dirty-ring-no-merge', 'shadow-precise-dirty-ring-no-upload', 'shadow-precise-dirty-ring-no-upload-fast', 'shadow-precise-dirty-ring-inline-upload', 'shadow-precise-dirty-ring-inline-upload-coverage-sort', 'shadow-precise-dirty-ring-inline-upload-serialized', 'shadow-precise-dirty-ring-inline-upload-descriptor-serialized', 'shadow-precise-strong-ring-async-present', 'shadow-precise-strong-ring-fence-poll', 'shadow-precise-strong-ring-mailbox', 'shadow-precise-direct-fence', 'shadow-precise-retain-shmem', 'shadow-precise-cpu-upload')]
-    [string]$PerfProfile = 'shadow-precise-dirty-ring-inline-upload',
+    [ValidateNotNullOrEmpty()]
+    [string]$GraphicsExperiment = 'observe-product-summary',
     [int]$Runs = 1,
     [ValidateRange(60, 3600)]
     [int]$LongSeconds = 3600,
@@ -537,7 +537,7 @@ function Invoke-OneRun {
     Invoke-Hdc shell 'power-shell wakeup' | Out-Null
     Invoke-Hdc shell 'hilog -x' | Out-Null
     $batchMappedFlushValue = if ($BatchMappedFlush) { '1' } else { '0' }
-    $startCommand = "aa start -a $Ability -b $Bundle --ps winehua.mode smoke --ps winehua.run_id $RunId --ps winehua.suite $RunSuite --ps winehua.prefix $RunPrefix --ps winehua.perf_profile $PerfProfile --ps winehua.long_seconds $LongSeconds --ps winehua.batch_mapped_flush $batchMappedFlushValue"
+    $startCommand = "aa start -a $Ability -b $Bundle --ps winehua.mode smoke --ps winehua.run_id $RunId --ps winehua.suite $RunSuite --ps winehua.prefix $RunPrefix --ps winehua.graphics_experiment $GraphicsExperiment --ps winehua.long_seconds $LongSeconds --ps winehua.batch_mapped_flush $batchMappedFlushValue"
     $startOutput = Invoke-Hdc shell $startCommand
     if (($startOutput -join "`n") -match '10106102') {
         # Devices without a credential can be dismissed with one deterministic
@@ -680,7 +680,7 @@ function Invoke-OneRun {
         runId = $RunId
         suite = $RunSuite
         prefix = $RunPrefix
-        perfProfile = $PerfProfile
+        graphicsExperiment = $GraphicsExperiment
         batchMappedFlush = [bool]$BatchMappedFlush
         appStatus = $summary.status
         visualStatus = if ($visualPass) { 'PASS' } else { 'FAIL' }
@@ -820,7 +820,7 @@ if ($Suite -eq 'capabilities') {
     deviceId = $DeviceId
     hapSha256 = $artifact.hapSha256
     gate = [bool]$Gate
-    perfProfile = $PerfProfile
+    graphicsExperiment = $GraphicsExperiment
     batchMappedFlush = [bool]$BatchMappedFlush
     status = if ($allPassed) { 'PASS' } else { 'FAIL' }
     runs = $runRecords

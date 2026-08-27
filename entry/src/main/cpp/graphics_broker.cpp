@@ -241,7 +241,7 @@ bool GraphicsBroker::StartVirglInProcessHostLocked(const VirglHostConfig& config
             config.helperPath.c_str(), config.socketPath.c_str(),
             config.libraryPath.c_str(), config.syncMode.c_str(),
             config.logPath.c_str(), config.shadowMode.c_str(),
-            config.shadowTrace.c_str(), config.presentMode.c_str(),
+            config.shadowTrace.c_str(), config.perfSummary.c_str(),
             config.shadowMergeRanges.c_str(),
             config.descriptorUpdateSerialize.c_str(),
             config.gpuUploadWait.c_str());
@@ -318,7 +318,7 @@ bool GraphicsBroker::SendVirglConfigureLocked()
     if (writeResult == OH_IPC_SUCCESS)
         writeResult = OH_IPCParcel_WriteString(request, virglHostConfig_.shadowTrace.c_str());
     if (writeResult == OH_IPC_SUCCESS)
-        writeResult = OH_IPCParcel_WriteString(request, virglHostConfig_.presentMode.c_str());
+        writeResult = OH_IPCParcel_WriteString(request, virglHostConfig_.perfSummary.c_str());
     if (writeResult == OH_IPC_SUCCESS)
         writeResult = OH_IPCParcel_WriteString(
             request, virglHostConfig_.shadowMergeRanges.c_str());
@@ -1182,19 +1182,14 @@ void GraphicsBroker::StartVirglSocketServerLocked()
             getenv("WINEHUA_VIRGL_HOST_SHADOW_SELECTOR");
         if (!requestedShadowTrace || !requestedShadowTrace[0])
             requestedShadowTrace = getenv("VKR_WINEHUA_SHADOW_TRACE");
-        const char* requestedPresentMode =
-            getenv("WINEHUA_VIRGL_HOST_PRESENT_MODE");
-        if (!requestedPresentMode || !requestedPresentMode[0])
-            requestedPresentMode = getenv("WINEHUA_VENUS_PRESENT_MODE");
+        const char* requestedPerfSummary =
+            getenv("WINEHUA_VIRGL_HOST_PERF_SUMMARY");
         const std::string shadowMode = requestedShadowMode && requestedShadowMode[0]
             ? requestedShadowMode : "full";
         const std::string shadowTrace = requestedShadowTrace && requestedShadowTrace[0]
             ? requestedShadowTrace : "0";
-        const std::string presentMode = requestedPresentMode &&
-            (!strcmp(requestedPresentMode, "mailbox") ||
-             !strcmp(requestedPresentMode, "fifo-async") ||
-             !strcmp(requestedPresentMode, "fifo-poll"))
-            ? requestedPresentMode : "fifo";
+        const std::string perfSummary = requestedPerfSummary &&
+            !strcmp(requestedPerfSummary, "1") ? "1" : "0";
         const char* requestedMergeRanges =
             getenv("WINEHUA_VIRGL_HOST_SHADOW_MERGE_RANGES");
         if (!requestedMergeRanges || !requestedMergeRanges[0])
@@ -1210,7 +1205,7 @@ void GraphicsBroker::StartVirglSocketServerLocked()
             requestedGpuUploadWait = getenv("VKR_WINEHUA_GPU_UPLOAD_WAIT");
         VirglHostConfig desiredConfig = {
             virglVtestLibraryPath_, virglSocketPath_, ldLibraryPath, syncMode,
-            virglLogPath, shadowMode, shadowTrace, presentMode,
+            virglLogPath, shadowMode, shadowTrace, perfSummary,
             requestedMergeRanges && requestedMergeRanges[0]
                 ? requestedMergeRanges : "1",
             requestedDescriptorSerialize && requestedDescriptorSerialize[0]
@@ -1309,10 +1304,10 @@ void GraphicsBroker::StartVirglSocketServerLocked()
             OH_LOG_INFO(LOG_APP,
                         "[GraphicsBroker] IPC NCP virgl_child configured helper=%{public}s "
                         "socket=%{public}s hostLib=%{public}s sync=%{public}s log=%{public}s "
-                        "present=%{public}s config=0x%{public}llx",
+                        "perf_summary=%{public}s config=0x%{public}llx",
                         virglVtestLibraryPath_.c_str(), virglSocketPath_.c_str(),
                         ldLibraryPath.c_str(), syncMode.c_str(), virglLogPath.c_str(),
-                        presentMode.c_str(),
+                        perfSummary.c_str(),
                         static_cast<unsigned long long>(desiredConfigHash));
         }
     }

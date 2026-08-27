@@ -3,6 +3,7 @@
 #include "audio_broker.h"
 #include "audio_ipc_protocol.h"
 #include "graphics_broker.h"
+#include "graphics_profile.h"
 #include "wayland_server.h"
 
 #include <unistd.h>
@@ -148,11 +149,24 @@ void UpsertEnvLine(std::vector<std::string>& env, const std::string& line)
     env.push_back(line);
 }
 
+static bool EnvHasKey(const std::vector<std::string>& env, const char* key)
+{
+    if (!key || !key[0]) return false;
+    const size_t length = std::strlen(key);
+    for (const std::string& line : env) {
+        if (line.size() > length && line.compare(0, length, key) == 0 &&
+            line[length] == '=')
+            return true;
+    }
+    return false;
+}
+
 void AppendD3dBackendEnv(std::vector<std::string>& env,
                          const std::string& d3dBackend,
                          const std::string& binDir)
 {
-    if (d3dBackend == "wined3d") {
+    const winehua::D3dBackendKind backend = winehua::ParseD3dBackend(d3dBackend);
+    if (backend == winehua::D3dBackendKind::WineD3d) {
         const std::vector<std::string> managed = {
             "WINEHUA_D3D_BACKEND=wined3d",
             /* Compatibility mode must be deterministic even when a game
@@ -163,15 +177,11 @@ void AppendD3dBackendEnv(std::vector<std::string>& env,
         for (const std::string& line : managed) UpsertEnvLine(env, line);
         return;
     }
-    if (d3dBackend.rfind("dxvk_", 0) != 0) return;
+    if (!winehua::IsDxvkBackend(backend)) return;
 
-    std::string profile = d3dBackend.substr(strlen("dxvk_"));
-    if (profile.empty()) profile = "legacy";
-    const bool legacy = profile == "legacy";
-    const bool modern26 = profile == "modern_2_6";
-    if (!legacy && !modern26) return;
-    // dxvk_modern_2_6 → 运行时目录 dxvk/modern-2.6 (与打包目录一致)
-    const std::string runtimeProfile = modern26 ? "modern-2.6" : "legacy";
+    winehua::DxvkRuntimeProfile dxvkRuntime;
+    if (!winehua::ResolveDxvkRuntimeProfile(backend, &dxvkRuntime)) return;
+    const std::string runtimeProfile(dxvkRuntime.directory);
     const std::string overlayRoot = std::string(WINE_RUNTIME_ROOT) +
         "/dxvk/" + runtimeProfile;
     const std::string overlay64 = overlayRoot + "/x64";
@@ -190,7 +200,7 @@ void AppendD3dBackendEnv(std::vector<std::string>& env,
         "WINEHUA_D3D_BACKEND=" + d3dBackend,
         "WINEHUA_DXVK_ROOT=" + overlayRoot,
         "WINEHUA_DXVK_PROFILE=" + runtimeProfile,
-        "WINEHUA_DXVK_VERSION=" + std::string(modern26 ? "2.6.2" : "1.10.3"),
+        "WINEHUA_DXVK_VERSION=" + std::string(dxvkRuntime.version),
         "WINEHUA_VULKAN_RUNTIME=1",
         "WINEHUA_VULKAN_LOADER_ARCH=x86_64",
         "WINEHUA_VENUS_ICD_ARCH=x86_64",
@@ -204,24 +214,10 @@ void AppendD3dBackendEnv(std::vector<std::string>& env,
         "VK_DRIVER_FILES=" + guestVulkanIcd,
         "VK_ICD_FILENAMES=" + guestVulkanIcd,
         "VN_DEBUG=vtest",
-        /* Host GPU writes to Venus feedback buffers are not automatically
-         * visible through WineHua's explicit Guest/Host shadow mapping.
-         * Query the real Host objects instead of polling stale Guest words. */
-        /* The Guest Mesa / host virglrenderer transport uses one shared
-         * command ring. Multiple Venus rings can emit an invalid command
-         * length to the host decoder and leave a D3D11 process black. */
-        "VN_PERF=" + std::string(modern26
-            ? "no_fence_feedback,no_query_feedback,no_semaphore_feedback,no_multi_ring"
-            : "no_fence_feedback,no_query_feedback,no_multi_ring"),
         /* 与 master 方针一致: DXVK 只接管 D3D11。DX9/10/10.1 使用 Wine 内建
          * WineD3D → OpenGL → VirGL, 该路径在 Venus/Maleoon 栈上对老游戏更
          * 成熟稳定; 全 D3D 走 DXVK(Venus) 会破坏原本 VirGL 驱动的游戏。 */
         "WINEDLLOVERRIDES=d3d11=n;dxgi=n",
-        /* This path is qualified by the command-list ownership and continuous
-         * Heaven gates. Keep per-range statistics opt-in so production avoids
-         * diagnostic bookkeeping and log I/O. */
-        "DXVK_WINEHUA_BATCH_MAPPED_FLUSH=1",
-        "VN_WINEHUA_REMOTE_MEMORY_SYNC=1",
         "WINEDLLPATH=" + wineDllPath,
         "WINEDLLDIR0=" + overlay64,
         "WINEDLLDIR1=" + overlay86,
@@ -265,19 +261,15 @@ void AppendD3dBackendEnv(std::vector<std::string>& env,
         for (const std::string& line : vkd3dOverlay) UpsertEnvLine(env, line);
     }
 
-    if (!legacy) return;
-    // These compatibility relaxations are implemented only by the legacy
-    // 1.10 fork; keep the modern 2.6 environment clean and diagnosable.
-    const std::vector<std::string> legacyCompatibility = {
-        "WINEHUA_DXVK_RELAXED_FEATURES=1",
-        "DXVK_WINEHUA_COMMAND_QUERY_RESET=1",
-        "DXVK_WINEHUA_FLUSH_DYNAMIC_MAPPED=1",
+    if (dxvkRuntime.relaxedFeatureCompatibility) {
+        UpsertEnvLine(env, "WINEHUA_DXVK_RELAXED_FEATURES=1");
         /* Prefer the native RGBA8 SNORM render-target path. On devices such
          * as Maleoon where sampling is supported but color attachment usage
          * is not, DXVK may substitute its qualified RGBA16F backing image. */
-        "DXVK_WINEHUA_EMULATE_RGBA8_SNORM_RT=auto",
-    };
-    for (const std::string& line : legacyCompatibility) UpsertEnvLine(env, line);
+        UpsertEnvLine(env, "DXVK_WINEHUA_EMULATE_RGBA8_SNORM_RT=auto");
+    }
+    if (dxvkRuntime.commandQueryReset)
+        UpsertEnvLine(env, "DXVK_WINEHUA_COMMAND_QUERY_RESET=1");
 }
 
 bool IsVkd3dSmokeDemo(const std::string& exePath)
@@ -297,21 +289,42 @@ void AppendVkd3dDemoPresentEnv(std::vector<std::string>& env,
                                const std::string& d3dBackend,
                                const std::string& binDir)
 {
-    if (d3dBackend.rfind("dxvk_", 0) != 0) return;
-    std::string profile = d3dBackend.substr(strlen("dxvk_"));
-    if (profile.empty()) profile = "legacy";
-    const bool modern26 = profile == "modern_2_6";
-    const bool legacy = profile == "legacy";
-    if (!legacy && !modern26) return;
-    const std::string runtimeProfile = modern26 ? "modern-2.6" : "legacy";
-    const std::string dxvk64 = std::string(WINE_RUNTIME_ROOT) + "/dxvk/" +
-        runtimeProfile + "/x64";
-    const std::string dxvk86 = std::string(WINE_RUNTIME_ROOT) + "/dxvk/" +
-        runtimeProfile + "/x86";
+    const winehua::D3dBackendKind selectedBackend =
+        winehua::ParseD3dBackend(d3dBackend);
+    winehua::DxvkRuntimeProfile dxvkRuntime;
+    if (!winehua::ResolveDxvkRuntimeProfile(
+            winehua::D3dBackendKind::Vkd3dLimited500k, &dxvkRuntime))
+        return;
+    if (selectedBackend != winehua::D3dBackendKind::DxvkModern26) {
+        OH_LOG_WARN(LOG_APP,
+                    "[D3D] vkd3d_limited_500k requires DXVK %{public}s DXGI "
+                    "(selected=%{public}s); using %{public}s",
+                    dxvkRuntime.version.data(), d3dBackend.c_str(),
+                    dxvkRuntime.directory.data());
+    }
+
+    const std::string runtimeProfile(dxvkRuntime.directory);
     const std::string vkd3dRoot = std::string(WINE_RUNTIME_ROOT) +
         "/vkd3d/limited-500k";
     const std::string vkd3d64 = vkd3dRoot + "/x64";
     if (access((vkd3d64 + "/d3d12.dll").c_str(), R_OK) != 0) return;
+
+    // Reuse the qualified modern DXVK/Venus transport setup, then put VKD3D
+    // first for d3d12. This also makes VKD3D smoke deterministic when the
+    // user's normal session backend is WineD3D or DXVK 1.10.
+    AppendD3dBackendEnv(env, "dxvk_modern_2_6", binDir);
+    std::vector<std::string> productGuestEnvironment;
+    if (!winehua::BuildProductGuestGraphicsEnvironment(
+            winehua::D3dBackendKind::Vkd3dLimited500k,
+            &productGuestEnvironment)) {
+        OH_LOG_ERROR(LOG_APP,
+                     "[D3D] failed to resolve VKD3D product graphics route");
+        return;
+    }
+    const std::string dxvk64 = std::string(WINE_RUNTIME_ROOT) + "/dxvk/" +
+        runtimeProfile + "/x64";
+    const std::string dxvk86 = std::string(WINE_RUNTIME_ROOT) + "/dxvk/" +
+        runtimeProfile + "/x86";
 
     const std::string wineDllPath = vkd3d64 + ":" + dxvk64 + ":" + dxvk86 + ":" +
         binDir + "/x86_64-windows:" + binDir + "/i386-windows:" + binDir;
@@ -323,6 +336,13 @@ void AppendVkd3dDemoPresentEnv(std::vector<std::string>& env,
         return existing.rfind("VKD3D_WINEHUA_GPU_UPLOAD=", 0) == 0;
     }), env.end());
     const std::vector<std::string> demo = {
+        "WINEHUA_D3D_BACKEND=vkd3d_limited_500k",
+        "WINEHUA_VKD3D_ROOT=" + vkd3dRoot,
+        "WINEHUA_VKD3D_PROFILE=limited-500k",
+        "WINEHUA_VKD3D_VERSION=2.6",
+        "WINEHUA_DXVK_ROOT=" + std::string(WINE_RUNTIME_ROOT) + "/dxvk/" + runtimeProfile,
+        "WINEHUA_DXVK_PROFILE=" + runtimeProfile,
+        "WINEHUA_DXVK_VERSION=" + std::string(dxvkRuntime.version),
         "WINEDLLDIR0=" + vkd3d64,
         "WINEDLLDIR1=" + dxvk64,
         "WINEDLLDIR2=" + dxvk86,
@@ -331,62 +351,60 @@ void AppendVkd3dDemoPresentEnv(std::vector<std::string>& env,
         "WINEDLLDIR5=" + binDir,
         "WINEDLLPATH=" + wineDllPath,
         "WINEDLLOVERRIDES=d3d12=n;d3d11=n;dxgi=n",
-        "WINEHUA_PERF_PROFILE=shadow-precise",
-        "VN_WINEHUA_STRONG_RING_BARRIER=1",
-        "VN_WINEHUA_REMOTE_MEMORY_SYNC=1",
-        "VN_WINEHUA_PERSISTENT_MAP_SYNC=1",
-        "VN_WINEHUA_DIRECT_FENCE_WAIT=1",
         "VKR_WINEHUA_SHADOW_FROM_HOST=precise",
-        "VKD3D_WINEHUA_FORCE_COHERENT_MAP_SYNC=1",
     };
     for (const std::string& line : demo) UpsertEnvLine(env, line);
+    for (const std::string& line : productGuestEnvironment)
+        UpsertEnvLine(env, line);
+    if (!EnvHasKey(env, "VN_WINEHUA_PERSISTENT_MAP_SYNC"))
+        UpsertEnvLine(env, "VN_WINEHUA_PERSISTENT_MAP_SYNC=1");
+    if (!EnvHasKey(env, "VKD3D_WINEHUA_FORCE_COHERENT_MAP_SYNC"))
+        UpsertEnvLine(env, "VKD3D_WINEHUA_FORCE_COHERENT_MAP_SYNC=1");
     OH_LOG_INFO(LOG_APP,
-        "[D3D] vkd3d demo present DIR0=%{public}s profile=shadow-precise "
-        "persistent=1 coherent=1 backend=%{public}s",
-        vkd3d64.c_str(), d3dBackend.c_str());
+        "[D3D] vkd3d demo present DIR0=%{public}s route=product-vulkan "
+        "persistent=managed coherent=managed dxgi=%{public}s selected=%{public}s",
+        vkd3d64.c_str(), dxvkRuntime.version.data(), d3dBackend.c_str());
 }
 
 void AppendProductDxvkEnv(std::vector<std::string>& env,
                           const std::string& d3dBackend,
-                          const std::string& perfProfile)
+                          const std::string& graphicsExperiment)
 {
-    if (d3dBackend.rfind("dxvk_", 0) != 0) return;
+    const winehua::D3dBackendKind backend = winehua::ParseD3dBackend(d3dBackend);
+    if (!winehua::IsDxvkBackend(backend)) return;
 
-    const std::string selectedProfile = perfProfile.empty()
-        ? "shadow-precise-dirty-ring-inline-upload-coverage-sort"
-        : perfProfile;
+    std::vector<std::string> policyEnvironment;
+    const bool resolved = graphicsExperiment.empty()
+        ? winehua::BuildProductGuestGraphicsEnvironment(
+              backend, &policyEnvironment)
+        : winehua::BuildLabGuestGraphicsEnvironment(
+              graphicsExperiment, backend, &policyEnvironment);
+    if (!resolved) {
+        OH_LOG_ERROR(LOG_APP,
+                     "[D3D] rejected unresolved Guest graphics policy=%{public}s "
+                     "backend=%{public}s",
+                     graphicsExperiment.empty() ? "(product)" :
+                         graphicsExperiment.c_str(),
+                     d3dBackend.c_str());
+        return;
+    }
     const std::vector<std::string> managed = {
         // Retain actionable DXVK failures without filling a user's game
         // directory with the informational startup stream.
         "DXVK_LOG_LEVEL=warn",
         "DXVK_LOG_PATH=C:\\windows\\temp",
-        "WINEHUA_PERF_PROFILE=" + selectedProfile,
-        "DXVK_WINEHUA_PRECISE_SHADOW=1",
-        "VN_WINEHUA_STRONG_RING_BARRIER=1",
     };
     for (const std::string& line : managed) UpsertEnvLine(env, line);
+    if (dxvkRuntime.batchMappedFlush) {
+        /* This capability is qualified by command-list ownership and
+         * continuous Heaven gates. Per-range statistics remain LAB-only. */
+        UpsertEnvLine(env, "DXVK_WINEHUA_BATCH_MAPPED_FLUSH=1");
+    }
+    for (const std::string& line : policyEnvironment) UpsertEnvLine(env, line);
 #ifdef __aarch64__
     // BOX64 变量仅在 ARM64 生效; x86_64 主机设置它会破坏 broker entryParams。
     UpsertEnvLine(env, "BOX64_DYNAREC_WEAKBARRIER=0");
 #endif
-    if (selectedProfile ==
-        "shadow-precise-dirty-ring-inline-upload-descriptor-serialized")
-        UpsertEnvLine(env, "VKR_WINEHUA_DESCRIPTOR_UPDATE_SERIALIZE=1");
-    if (selectedProfile == "shadow-precise") {
-        /* Master 13236b5 vkd3d_limited_500k session contract. Explorer and
-         * gears must share these Guest Venus flags with the precise host. */
-        env.erase(std::remove_if(env.begin(), env.end(), [](const std::string& existing) {
-            return existing.rfind("VKD3D_WINEHUA_GPU_UPLOAD=", 0) == 0;
-        }), env.end());
-        const std::vector<std::string> precise = {
-            "VN_WINEHUA_REMOTE_MEMORY_SYNC=1",
-            "VN_WINEHUA_PERSISTENT_MAP_SYNC=1",
-            "VN_WINEHUA_DIRECT_FENCE_WAIT=1",
-            "VKR_WINEHUA_SHADOW_FROM_HOST=precise",
-            "VKD3D_WINEHUA_FORCE_COHERENT_MAP_SYNC=1",
-        };
-        for (const std::string& line : precise) UpsertEnvLine(env, line);
-    }
 }
 
 static bool ShouldSerializeEntryParamEnv(const std::string& envLine) {

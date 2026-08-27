@@ -9,6 +9,7 @@
 #include "audio_broker.h"
 #include "audio_ipc_protocol.h"
 #include "graphics_broker.h"
+#include "graphics_profile.h"
 #include "wine_constants.h"
 #include "wine_env.h"
 #include "wine_process.h"
@@ -37,6 +38,7 @@
 #include <thread>
 #include <atomic>
 #include <algorithm>
+#include <vector>
 #include <dlfcn.h>
 
 #undef LOG_TAG
@@ -120,154 +122,166 @@ static napi_value StartServer(napi_env env, napi_callback_info info) {
     return r;
 }
 
-static napi_value SetHostShadowProfile(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1] = {};
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    char profile[64] = "baseline";
-    if (argc >= 1)
-        napi_get_value_string_utf8(env, args[0], profile, sizeof(profile), nullptr);
+static napi_value BooleanResult(napi_env env, bool value) {
+    napi_value result;
+    napi_get_boolean(env, value, &result);
+    return result;
+}
 
-    const bool skip = !strcmp(profile, "shadow-none");
-    const bool preciseStrongTrace =
-        !strcmp(profile, "shadow-precise-strong-ring-trace");
-    const bool preciseStrongPerf =
-        !strcmp(profile, "shadow-precise-strong-ring-perf");
-    const bool legacyHostSync =
-        !strcmp(profile, "shadow-precise-legacy-host-sync");
-    const bool preciseDirtyPerf = !strcmp(profile, "shadow-precise-dirty-ring-perf");
-    const bool preciseDirtyGpuFrameProfile =
-        !strcmp(profile, "shadow-precise-dirty-ring-gpu-frame-profile");
-    const bool preciseDirtyFrameTimeline =
-        !strcmp(profile, "shadow-precise-dirty-ring-frame-timeline");
-    const bool preciseDirtyNoMerge = !strcmp(profile, "shadow-precise-dirty-ring-no-merge");
-    const bool preciseDirtyNoUpload = !strcmp(profile, "shadow-precise-dirty-ring-no-upload");
-    const bool preciseDirtyNoUploadFast =
-        !strcmp(profile, "shadow-precise-dirty-ring-no-upload-fast");
-    const bool preciseDirtyDescriptorSerialized =
-        !strcmp(profile, "shadow-precise-dirty-ring-inline-upload-descriptor-serialized");
-    const bool preciseDirtyCoverageSort =
-        !strcmp(profile, "shadow-precise-dirty-ring-inline-upload-coverage-sort");
-    const bool preciseDirtyCoverageSortSampled =
-        !strcmp(profile, "shadow-precise-dirty-ring-coverage-sort-sampled");
-    /* Keep the established precise-dirty/coverage upload path unchanged
-     * while measuring only the host-side completion-wait mechanism. */
-    const bool preciseDirtyCoveragePoll =
-        !strcmp(profile, "shadow-precise-dirty-ring-coverage-poll");
-    const bool preciseDirtyAliasCover =
-        !strcmp(profile,
-                "shadow-precise-dirty-ring-inline-upload-alias-cover");
-    const bool preciseDirtyFrameAssocTrace =
-        !strcmp(profile, "shadow-precise-dirty-ring-frame-assoc-trace");
-    const bool preciseDirtyPresentImageTrace =
-        !strcmp(profile, "shadow-precise-dirty-ring-present-image-trace");
-    const bool preciseDirtyInlineUpload =
-        !strcmp(profile, "shadow-precise-dirty-ring-inline-upload") ||
-        preciseDirtyCoverageSort || preciseDirtyCoverageSortSampled ||
-        preciseDirtyCoveragePoll ||
-        preciseDirtyDescriptorSerialized ||
-        preciseDirtyFrameAssocTrace || preciseDirtyAliasCover;
-    const bool preciseDirtyInlineUploadSerialized =
-        !strcmp(profile, "shadow-precise-dirty-ring-inline-upload-serialized");
-    const bool preciseDirtyRing =
-        !strcmp(profile, "shadow-precise-dirty-ring") ||
-        preciseDirtyPresentImageTrace;
-    const bool trace = !strcmp(profile, "shadow-trace") || preciseStrongTrace;
-    const bool explicitToHost = !strcmp(profile, "shadow-to-host-explicit");
-    const bool deferShmemUnref = !strcmp(profile, "shadow-precise-retain-shmem");
-    const bool cpuShadowUpload =
-        !strcmp(profile, "shadow-precise-cpu-upload");
-    const bool waitShadowUpload = !strcmp(profile, "shadow-precise-sync-submit");
-    const bool mailboxPresent = !strcmp(profile, "shadow-precise-strong-ring-mailbox");
-    const bool asyncPresent = !strcmp(
-        profile, "shadow-precise-strong-ring-async-present");
-    const bool pollPresent = !strcmp(
-        profile, "shadow-precise-strong-ring-fence-poll") ||
-        preciseDirtyCoveragePoll;
-    const bool precise = !strcmp(profile, "shadow-precise") ||
-        !strcmp(profile, "shadow-precise-single-ring") ||
-        !strcmp(profile, "shadow-precise-sync-submit") ||
-        (!strcmp(profile, "shadow-precise-strong-ring") || legacyHostSync || preciseStrongTrace ||
-         preciseStrongPerf || preciseDirtyRing || preciseDirtyPerf || preciseDirtyNoMerge || preciseDirtyNoUpload ||
-         preciseDirtyGpuFrameProfile ||
-         preciseDirtyFrameTimeline ||
-         preciseDirtyCoverageSortSampled ||
-         preciseDirtyNoUploadFast || preciseDirtyInlineUpload ||
-         preciseDirtyInlineUploadSerialized) ||
-        asyncPresent ||
-        pollPresent ||
-        mailboxPresent ||
-        !strcmp(profile, "shadow-precise-direct-fence") ||
-        deferShmemUnref ||
-        cpuShadowUpload;
-    const char* mode = (preciseDirtyRing || preciseDirtyPerf || preciseDirtyGpuFrameProfile ||
-                        preciseDirtyFrameTimeline ||
-                        preciseDirtyCoverageSortSampled || preciseDirtyNoUpload ||
-                        preciseDirtyNoUploadFast || preciseDirtyInlineUpload ||
-                        preciseDirtyInlineUploadSerialized ||
-                        preciseDirtyNoMerge) ? "precise-dirty" : precise ? "precise" : skip ? "none" :
-        (explicitToHost ? "to-host-explicit" : "full");
-    setenv("VKR_WINEHUA_SHADOW_FROM_HOST", mode, 1);
-    /* Preserve the precise shadow contract while carrying one diagnostic
-     * selector through the existing graphics-broker IPC. The child converts
-     * this selector to the concrete renderer flags before vtest starts. */
-    const char* shadowSelector =
-        legacyHostSync ? "legacy-host-sync" :
-        preciseDirtyAliasCover ? "inline-gpu-upload-alias-cover" :
-        preciseDirtyCoveragePoll ? "inline-gpu-upload-coverage-sort" :
-        preciseDirtyCoverageSortSampled ? "inline-gpu-upload-coverage-sort-sampled" :
-        preciseDirtyCoverageSort ? "inline-gpu-upload-coverage-sort" :
-        preciseDirtyDescriptorSerialized ? "inline-gpu-upload-descriptor-serialized" :
-        preciseDirtyFrameAssocTrace ? "inline-gpu-upload-frame-assoc-trace" :
-        preciseDirtyPresentImageTrace ? "present-image-trace" :
-        preciseDirtyFrameTimeline ? "frame-timeline" :
-        preciseDirtyGpuFrameProfile ? "gpu-frame-profile" :
-        cpuShadowUpload ? "cpu-upload" :
-        preciseDirtyInlineUploadSerialized ? "inline-gpu-upload-serialized" :
-        preciseDirtyInlineUpload ? "inline-gpu-upload" :
-        preciseDirtyNoUpload ? "no-gpu-upload" :
-        preciseDirtyNoUploadFast ? "no-gpu-upload-fast" :
-        (preciseStrongPerf || preciseDirtyPerf || preciseDirtyNoMerge) ? "perf" :
-        trace ? "1" : "0";
-    setenv("VKR_WINEHUA_SHADOW_TRACE", shadowSelector, 1);
-    setenv("VKR_WINEHUA_SHADOW_MERGE_RANGES", preciseDirtyNoMerge ? "0" : "1", 1);
-    setenv("VKR_WINEHUA_GPU_UPLOAD_WAIT", waitShadowUpload ? "1" : "0", 1);
-    setenv("VKR_WINEHUA_DESCRIPTOR_UPDATE_SERIALIZE",
-           preciseDirtyDescriptorSerialized ? "1" : "0", 1);
-    setenv("VN_WINEHUA_DEFER_SHMEM_UNREF", deferShmemUnref ? "1" : "0", 1);
-    const char* presentMode = mailboxPresent ? "mailbox" :
-        (asyncPresent ? "fifo-async" : (pollPresent ? "fifo-poll" : "fifo"));
-    setenv("WINEHUA_VENUS_PRESENT_MODE", presentMode, 1);
+static bool SetHostGraphicsEnv(const char* key, std::string_view value) {
+    // std::string_view does not guarantee a trailing NUL. Profiles currently
+    // come from literals, but copying here keeps this boundary correct if a
+    // generated or sliced profile is introduced later.
+    const std::string stableValue(value);
+    if (setenv(key, stableValue.c_str(), 1) == 0) return true;
+    OH_LOG_ERROR(LOG_APP,
+                 "[NAPI] graphics environment apply failed key=%{public}s errno=%{public}d",
+                 key, errno);
+    return false;
+}
+
+static bool ApplyHostGraphicsProfile(const winehua::HostGraphicsProfile& profile) {
+    bool applied = true;
+    applied &= SetHostGraphicsEnv("WINEHUA_GRAPHICS_PROFILE", profile.name);
+    applied &= SetHostGraphicsEnv("VKR_WINEHUA_SHADOW_FROM_HOST", profile.shadowMode);
+    applied &= SetHostGraphicsEnv("VKR_WINEHUA_SHADOW_TRACE", profile.shadowSelector);
+    applied &= SetHostGraphicsEnv("VKR_WINEHUA_SHADOW_MERGE_RANGES",
+                                  profile.mergeShadowRanges ? "1" : "0");
+    applied &= SetHostGraphicsEnv("VKR_WINEHUA_GPU_UPLOAD_WAIT",
+                                  profile.waitGpuUpload ? "1" : "0");
+    applied &= SetHostGraphicsEnv("VKR_WINEHUA_DESCRIPTOR_UPDATE_SERIALIZE",
+                                  profile.serializeDescriptorUpdates ? "1" : "0");
+    applied &= SetHostGraphicsEnv("VN_WINEHUA_DEFER_SHMEM_UNREF",
+                                  profile.deferSharedMemoryUnref ? "1" : "0");
     /* Keep the App-side control plane separate from renderer environment.
      * Phone hosts run in this process, so virgl_child's derived renderer
      * settings must not change the profile observed by a later EnsureStarted. */
-    setenv("WINEHUA_VIRGL_HOST_SHADOW_MODE", mode, 1);
-    setenv("WINEHUA_VIRGL_HOST_SHADOW_SELECTOR", shadowSelector, 1);
-    setenv("WINEHUA_VIRGL_HOST_SHADOW_MERGE_RANGES",
-           preciseDirtyNoMerge ? "0" : "1", 1);
-    setenv("WINEHUA_VIRGL_HOST_GPU_UPLOAD_WAIT",
-           waitShadowUpload ? "1" : "0", 1);
-    setenv("WINEHUA_VIRGL_HOST_DESCRIPTOR_UPDATE_SERIALIZE",
-           preciseDirtyDescriptorSerialized ? "1" : "0", 1);
-    setenv("WINEHUA_VIRGL_HOST_PRESENT_MODE", presentMode, 1);
+    applied &= SetHostGraphicsEnv("WINEHUA_VIRGL_HOST_SHADOW_MODE",
+                                  profile.shadowMode);
+    applied &= SetHostGraphicsEnv("WINEHUA_VIRGL_HOST_SHADOW_SELECTOR",
+                                  profile.shadowSelector);
+    applied &= SetHostGraphicsEnv("WINEHUA_VIRGL_HOST_SHADOW_MERGE_RANGES",
+                                  profile.mergeShadowRanges ? "1" : "0");
+    applied &= SetHostGraphicsEnv("WINEHUA_VIRGL_HOST_GPU_UPLOAD_WAIT",
+                                  profile.waitGpuUpload ? "1" : "0");
+    applied &= SetHostGraphicsEnv("WINEHUA_VIRGL_HOST_DESCRIPTOR_UPDATE_SERIALIZE",
+                                  profile.serializeDescriptorUpdates ? "1" : "0");
+    applied &= SetHostGraphicsEnv("WINEHUA_VIRGL_HOST_PERF_SUMMARY",
+                                  profile.perfSummary ? "1" : "0");
+
+    if (!applied) return false;
+
+    const char* gpuUpload = profile.gpuUpload == winehua::GpuUploadPolicy::Disabled
+        ? "0" : (profile.gpuUpload == winehua::GpuUploadPolicy::Cpu ? "cpu" : "auto");
     OH_LOG_INFO(LOG_APP,
-                "[NAPI] host shadow profile=%{public}s mode=%{public}s "
-                "trace=%{public}s selector=%{public}s perf_summary=%{public}s "
+                "[NAPI] graphics profile=%{public}s mode=%{public}s "
+                "selector=%{public}s perf_summary=%{public}s "
                 "gpu_upload=%{public}s upload_wait=%{public}s "
-                "descriptor_serialize=%{public}s defer_shmem_unref=%{public}s "
-                "present_mode=%{public}s",
-                profile, mode, trace ? "1" : "0", shadowSelector,
-                (preciseStrongPerf || preciseDirtyPerf || preciseDirtyNoMerge ||
-                 preciseDirtyNoUpload || preciseDirtyInlineUpload ||
-                 preciseDirtyInlineUploadSerialized) ? "1" : "0",
-                (legacyHostSync || preciseDirtyNoUpload || preciseDirtyNoUploadFast) ? "0" :
-                    (cpuShadowUpload ? "cpu" : "auto"),
-                waitShadowUpload ? "1" : "0",
-                preciseDirtyDescriptorSerialized ? "1" : "0",
-                deferShmemUnref ? "1" : "0", presentMode);
+                "descriptor_serialize=%{public}s defer_shmem_unref=%{public}s",
+                profile.name.data(), profile.shadowMode.data(),
+                profile.shadowSelector.data(), profile.perfSummary ? "1" : "0",
+                gpuUpload, profile.waitGpuUpload ? "1" : "0",
+                profile.serializeDescriptorUpdates ? "1" : "0",
+                profile.deferSharedMemoryUnref ? "1" : "0");
+    return true;
+}
+
+static napi_value SetHostGraphicsExperimentForLab(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2] = {};
+    if (napi_get_cb_info(env, info, &argc, args, nullptr, nullptr) != napi_ok ||
+        argc < 2) {
+        return BooleanResult(env, false);
+    }
+    char experimentId[96] = {};
+    char backendName[64] = {};
+    if (napi_get_value_string_utf8(env, args[0], experimentId,
+                                   sizeof(experimentId), nullptr) != napi_ok ||
+        napi_get_value_string_utf8(env, args[1], backendName,
+                                   sizeof(backendName), nullptr) != napi_ok) {
+        return BooleanResult(env, false);
+    }
+
+    winehua::ProductGraphicsPolicy experiment;
+    const winehua::D3dBackendKind backend =
+        winehua::ParseD3dBackend(backendName);
+    if (!winehua::ResolveLabGraphicsExperiment(
+            experimentId, backend, &experiment)) {
+        OH_LOG_ERROR(LOG_APP,
+                     "[NAPI] invalid graphics LAB experiment=%{public}s "
+                     "backend=%{public}s",
+                     experimentId, backendName);
+        return BooleanResult(env, false);
+    }
+    return BooleanResult(env, ApplyHostGraphicsProfile(experiment.host));
+}
+
+static napi_value SetHostGraphicsBackend(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    char backendName[64] = {};
+    if (argc >= 1)
+        napi_get_value_string_utf8(env, args[0], backendName, sizeof(backendName), nullptr);
+
+    const winehua::D3dBackendKind backend = winehua::ParseD3dBackend(backendName);
+    winehua::ProductGraphicsPolicy policy;
+    if (!winehua::ResolveProductGraphicsPolicy(backend, &policy)) {
+        OH_LOG_ERROR(LOG_APP, "[NAPI] unknown graphics backend=%{public}s", backendName);
+        return BooleanResult(env, false);
+    }
+    OH_LOG_INFO(LOG_APP,
+                "[NAPI] graphics backend=%{public}s route=%{public}s",
+                backendName, policy.route.data());
+    return BooleanResult(env, ApplyHostGraphicsProfile(policy.host));
+}
+
+static napi_value NullResult(napi_env env) {
+    napi_value result;
+    napi_get_null(env, &result);
+    return result;
+}
+
+static napi_value ResolveGuestGraphicsEnvironmentForLab(
+    napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2] = {};
+    if (napi_get_cb_info(env, info, &argc, args, nullptr, nullptr) != napi_ok ||
+        argc < 2) {
+        return NullResult(env);
+    }
+
+    char profileName[96] = {};
+    char backendName[64] = {};
+    if (napi_get_value_string_utf8(env, args[0], profileName,
+                                   sizeof(profileName), nullptr) != napi_ok ||
+        napi_get_value_string_utf8(env, args[1], backendName,
+                                   sizeof(backendName), nullptr) != napi_ok) {
+        return NullResult(env);
+    }
+
+    std::vector<std::string> environment;
+    const winehua::D3dBackendKind backend = winehua::ParseD3dBackend(backendName);
+    if (!winehua::BuildLabGuestGraphicsEnvironment(
+            profileName, backend, &environment)) {
+        OH_LOG_ERROR(LOG_APP,
+                     "[NAPI] Guest LAB environment resolve failed "
+                     "profile=%{public}s backend=%{public}s",
+                     profileName, backendName);
+        return NullResult(env);
+    }
 
     napi_value result;
-    napi_get_boolean(env, true, &result);
+    if (napi_create_array_with_length(env, environment.size(), &result) != napi_ok)
+        return NullResult(env);
+    for (size_t index = 0; index < environment.size(); ++index) {
+        napi_value line;
+        if (napi_create_string_utf8(env, environment[index].c_str(),
+                                    NAPI_AUTO_LENGTH, &line) != napi_ok ||
+            napi_set_element(env, result, static_cast<uint32_t>(index), line) != napi_ok) {
+            return NullResult(env);
+        }
+    }
     return result;
 }
 
@@ -299,8 +313,20 @@ static napi_value LaunchClient(napi_env env, napi_callback_info info) {
     if (argc >= 8) {
         char d3dBackend[64] = {};
         napi_get_value_string_utf8(env, args[7], d3dBackend, sizeof(d3dBackend), nullptr);
-        if (!strcmp(d3dBackend, "wined3d") || !strncmp(d3dBackend, "dxvk_", 5))
+        const winehua::D3dBackendKind backend =
+            winehua::ParseD3dBackend(d3dBackend);
+        if (backend == winehua::D3dBackendKind::WineD3d ||
+            winehua::IsDxvkBackend(backend)) {
             p->d3dBackend = d3dBackend;
+        } else {
+            OH_LOG_ERROR(LOG_APP,
+                         "[Launch] rejected unsupported d3d backend=%{public}s",
+                         d3dBackend);
+            delete p;
+            napi_value result;
+            napi_create_int32(env, -EINVAL, &result);
+            return result;
+        }
     }
     if (argc >= 9) {
         char compatEnv[2048] = {};
@@ -1234,7 +1260,9 @@ static napi_value Init(napi_env env, napi_value exports) {
 
     napi_property_descriptor desc[] = {
         {"startServer",    nullptr, StartServer,    nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"setHostShadowProfile", nullptr, SetHostShadowProfile, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setHostGraphicsExperimentForLab", nullptr, SetHostGraphicsExperimentForLab, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setHostGraphicsBackend", nullptr, SetHostGraphicsBackend, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"resolveGuestGraphicsEnvironmentForLab", nullptr, ResolveGuestGraphicsEnvironmentForLab, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"launchClient",   nullptr, LaunchClient,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"stopClient",     nullptr, StopClient,     nullptr, nullptr, nullptr, napi_default, nullptr},
         {"stopAll",        nullptr, StopAll,        nullptr, nullptr, nullptr, napi_default, nullptr},

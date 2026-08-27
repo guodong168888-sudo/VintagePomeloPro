@@ -344,7 +344,7 @@ static void log_d3d_environment_summary()
     const char* dxvkVersion = getenv("WINEHUA_DXVK_VERSION");
     const char* dllOverrides = getenv("WINEDLLOVERRIDES");
     const char* dllPath = getenv("WINEDLLPATH");
-    const char* profile = getenv("WINEHUA_PERF_PROFILE");
+    const char* profile = getenv("WINEHUA_GRAPHICS_PROFILE");
     const char* logLevel = getenv("DXVK_LOG_LEVEL");
     const char* logPath = getenv("DXVK_LOG_PATH");
     const char* dumpPath = getenv("DXVK_SHADER_DUMP_PATH");

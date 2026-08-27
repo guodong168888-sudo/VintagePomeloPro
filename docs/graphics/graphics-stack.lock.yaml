@@ -1,0 +1,44 @@
+schema_version: 2
+
+audit:
+  main_commit: d73f299fbb7cca81ead0a947765fd93f9d0c3fec
+  product_version: "1.2.9"
+  product_tag: rc-1.2.9
+  audited_on: "2026-08-27"
+
+reference:
+  branch: opt/nativewindow-direct-present
+  head: 3cb84963ef4f3ceae540ee8c0374e3819dfa048c
+  direct_present_base: e646e74541673d1f8726f318e62c43b4d2033212
+  motion_fix: 3c3c3f684a9747bee2519419cbbd9e337abd3966
+  deadline_fix: 0d4ed2c5927b46757fa5aca59b607ef026be7587
+  mapped_upload_fix: 103ad1207ad7a0300d21b243480ba266504c75b7
+
+known_good:
+  product_version: "1.2.8"
+  product_tag: v1.2.8
+  product_commit: 5a92254f3d6732b8a3987dbeb72eab568247a308
+  evidence: docs/DXVK26_HEAVEN_MALEOON_FIX.md
+
+protocol:
+  whip_version: 10
+  host_config_strings: 11
+
+defaults:
+  virgl_route: product-virgl
+  vulkan_route: product-vulkan
+  dxvk_shadow_selector: inline-gpu-upload-coverage-sort
+  vkd3d_shadow_mode: precise
+  vkd3d_dxvk_companion: modern-2.6
+
+patches:
+  vkd3d_map_width_sha256: b7d18fc22345c07140545febb974e822f4d2405672690f4f87d6107785f0a742
+  vkd3d_execute_width_sha256: d01436757c0eae5685a455af93917ff37ed6cb40d7a66c85689cf8cf30283dcd
+
+submodules:
+  virglrenderer: 670ff19638724ba3e391c073d3e09fb2573246c9
+  mesa: 2939cbb816d3a3c5fcf3147fb8436e105d0a0ee8
+  dxvk: f3436e1796e0e4bab9406460380460a81e1aac69
+  dxvk-modern: 977a3d782e657a14ee28b9553b6e5cf29c4bd88c
+  vkd3d-proton: 3e5aab6fb3e18f81a71b339be4cb5cdf55140980
+  wine: 69c92023f7431c09c6aaf0a5c39ea1d019c56752

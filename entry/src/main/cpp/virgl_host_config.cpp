@@ -36,7 +36,7 @@ bool ValidateVirglHostConfig(const VirglHostConfig& config, std::string* error)
     const std::array<const std::string*, 11> fields = {
         &config.helperPath, &config.socketPath, &config.libraryPath,
         &config.syncMode, &config.logPath, &config.shadowMode,
-        &config.shadowTrace, &config.presentMode,
+        &config.shadowTrace, &config.perfSummary,
         &config.shadowMergeRanges, &config.descriptorUpdateSerialize,
         &config.gpuUploadWait,
     };
@@ -50,10 +50,8 @@ bool ValidateVirglHostConfig(const VirglHostConfig& config, std::string* error)
     if (config.syncMode != "egl-thread" && config.syncMode != "egl-main" &&
         config.syncMode != "native-fd")
         return fail("invalid VirGL synchronization mode");
-    if (config.presentMode != "fifo" && config.presentMode != "mailbox" &&
-        config.presentMode != "fifo-async" && config.presentMode != "fifo-poll")
-        return fail("invalid Venus present mode");
-    if (!IsBinaryFlag(config.shadowMergeRanges) ||
+    if (!IsBinaryFlag(config.perfSummary) ||
+        !IsBinaryFlag(config.shadowMergeRanges) ||
         !IsBinaryFlag(config.descriptorUpdateSerialize) ||
         !IsBinaryFlag(config.gpuUploadWait))
         return fail("host config flags must be 0 or 1");
@@ -67,7 +65,7 @@ uint64_t FingerprintVirglHostConfig(const VirglHostConfig& config)
     const std::array<const std::string*, 11> fields = {
         &config.helperPath, &config.socketPath, &config.libraryPath,
         &config.syncMode, &config.logPath, &config.shadowMode,
-        &config.shadowTrace, &config.presentMode,
+        &config.shadowTrace, &config.perfSummary,
         &config.shadowMergeRanges, &config.descriptorUpdateSerialize,
         &config.gpuUploadWait,
     };
@@ -115,7 +113,8 @@ bool BuildVirglHostLaunchConfig(const VirglHostConfig& config,
         config.shadowTrace == "inline-gpu-upload-descriptor-serialized";
     const bool inlineGpuUpload = config.shadowTrace == "inline-gpu-upload" ||
         serializedGpuUpload || coverageSort || descriptorSerialized || frameAssocTrace;
-    const bool perfSummary = config.shadowTrace == "perf" ||
+    const bool perfSummary = config.perfSummary == "1" ||
+        config.shadowTrace == "perf" ||
         config.shadowTrace == "no-gpu-upload" || descriptorSerialized;
     const bool presentPerfSummary = perfSummary || gpuFrameProfile ||
         frameTimeline || sampledPerf || captureTrace;
@@ -171,7 +170,6 @@ bool BuildVirglHostLaunchConfig(const VirglHostConfig& config,
     AppendEnv(params, "VKR_WINEHUA_SHADOW_MERGE_RANGES", config.shadowMergeRanges);
     AppendEnv(params, "VKR_WINEHUA_SHADOW_COVER_UPLOAD", aliasCover ? "1" : "0");
     AppendEnv(params, "WINEHUA_VKR_PRESENT_STAGE_TRACE", captureTrace ? "1" : "0");
-    AppendEnv(params, "WINEHUA_VENUS_PRESENT_MODE", config.presentMode);
     AppendEnv(params, "EGL_PLATFORM", "surfaceless");
     if (config.syncMode == "egl-thread")
         AppendEnv(params, "VIRGL_DISABLE_NATIVE_FENCE_FD", "1");

@@ -6,9 +6,18 @@ import { WineWindowManager } from '../service/WineWindowManager';
 import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
 import { AppCatalogService, GamesDirectoryStatus } from '../service/AppCatalogService';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
+import { AppSettingsStore } from '../service/AppSettingsStore';
+import { WineEngineService } from '../service/WineEngineService';
+import { NativeLaunchResult, WinePresentationMode } from '../model/AppModels';
 import testNapi from 'libentry.so';
 
 const DOMAIN = 0x0000;
+
+interface AutomationEnvironmentPair {
+  key: string;
+  value: string;
+}
+
 export default class EntryAbility extends UIAbility {
   private mainWindow: window.Window | null = null;
   private titleButtonRectCallback: ((rect: window.TitleButtonRect) => void) | null = null;
@@ -18,6 +27,8 @@ export default class EntryAbility extends UIAbility {
   // some tablet/desktop shells even though the controls return afterwards.
   // Retain the last real safe area for the lifetime of this main window.
   private lastTitleButtonInsetVp: number = 0;
+  private pendingAutomationWant: Want | null = null;
+  private automationLaunchStarted: boolean = false;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     // 日志服务最先初始化，保证后续 ArkTS/native 日志都能实时落盘。
@@ -28,6 +39,7 @@ export default class EntryAbility extends UIAbility {
     hilog.info(DOMAIN, 'EntryAbility', 'NCP backend=%{public}s deviceType=%{public}s',
       useForkNcp ? 'fork' : 'system', DeviceCapabilityPolicy.deviceType());
     this.ensureDownloadGamesDirectory('onCreate');
+    this.rememberAutomationWant(want);
   }
 
   private ensureDownloadGamesDirectory(trigger: string): void {
@@ -46,6 +58,7 @@ export default class EntryAbility extends UIAbility {
     // A singleton Ability may receive the next launch without another
     // onCreate. Re-check the app-owned Download directory on every handoff.
     this.ensureDownloadGamesDirectory('onNewWant');
+    this.rememberAutomationWant(want);
     const parameters = want.parameters ?? {};
     if (parameters.overlayRoute === 'input-layout' || parameters.overlayRoute === 'key-mapping') {
       // 覆盖层属于 Desktop Ability，不能直接把它的子窗口替换为编辑器。
@@ -61,6 +74,7 @@ export default class EntryAbility extends UIAbility {
         returnToplevelId: String(parameters.returnToplevelId ?? '0')
       }));
     }
+    this.scheduleAutomationLaunch();
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
@@ -119,7 +133,123 @@ export default class EntryAbility extends UIAbility {
         }
       }
       hilog.info(DOMAIN, 'testTag', 'Succeeded in loading the content.');
+      this.scheduleAutomationLaunch();
     });
+  }
+
+  private rememberAutomationWant(want: Want): void {
+    const mode = String(want.parameters?.['winehua.mode'] ?? '');
+    if (mode !== 'game') return;
+    this.pendingAutomationWant = want;
+    hilog.info(DOMAIN, 'EntryAbility', 'automation Want accepted mode=%{public}s', mode);
+  }
+
+  private scheduleAutomationLaunch(): void {
+    if (!this.mainWindow || !this.pendingAutomationWant || this.automationLaunchStarted) return;
+    const want = this.pendingAutomationWant;
+    this.pendingAutomationWant = null;
+    this.automationLaunchStarted = true;
+    setTimeout((): void => {
+      this.runAutomationLaunch(want).then((): void => {
+        this.finishAutomationLaunch();
+      }).catch((error: Error): void => {
+        hilog.error(DOMAIN, 'EntryAbility', 'automation launch failed: %{public}s', JSON.stringify(error));
+        this.finishAutomationLaunch();
+      });
+    }, 800);
+  }
+
+  private finishAutomationLaunch(): void {
+    this.automationLaunchStarted = false;
+    if (this.pendingAutomationWant) this.scheduleAutomationLaunch();
+  }
+
+  private decodeAutomationPayload(value: string): string {
+    try {
+      return decodeURIComponent(value);
+    } catch (_) {
+      return value;
+    }
+  }
+
+  private parseAutomationArguments(value: string): string[] {
+    if (!value) return [];
+    try {
+      const raw = JSON.parse(this.decodeAutomationPayload(value)) as string[];
+      const result: string[] = [];
+      for (let i = 0; i < raw.length; i++) {
+        if (typeof raw[i] === 'string') result.push(raw[i]);
+      }
+      return result;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  private parseAutomationEnvironment(value: string): string[] {
+    if (!value) return [];
+    try {
+      const raw = JSON.parse(this.decodeAutomationPayload(value)) as AutomationEnvironmentPair[];
+      const result: string[] = [];
+      for (let i = 0; i < raw.length; i++) {
+        const pair = raw[i];
+        if (pair && typeof pair.key === 'string' && typeof pair.value === 'string' && pair.key.length > 0) {
+          result.push(`${pair.key}=${pair.value}`);
+        }
+      }
+      return result;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  private automationWorkingDirectory(executable: string): string {
+    const separator = Math.max(executable.lastIndexOf('/'), executable.lastIndexOf('\\'));
+    return separator > 0 ? executable.substring(0, separator) : '';
+  }
+
+  private async runAutomationLaunch(want: Want): Promise<void> {
+    const parameters = want.parameters ?? {};
+    const executable = String(parameters['winehua.game_path'] ?? '');
+    if (!executable) throw new Error('winehua.game_path is empty');
+
+    const backend = String(parameters['winehua.d3d_backend'] ?? 'dxvk_legacy');
+    const renderMode = backend === 'dxvk_modern_2_6' ? 'dxvk_2_6' :
+      (backend === 'wined3d' ? 'virgl' : 'dxvk_1_10');
+    const settingsStore = AppSettingsStore.getInstance();
+    await settingsStore.initialize(this.context);
+    await settingsStore.setRenderMode(renderMode);
+
+    const argumentsValue = this.parseAutomationArguments(
+      String(parameters['winehua.game_args_json'] ?? ''));
+    const environment = this.parseAutomationEnvironment(
+      String(parameters['winehua.d3d_env_json'] ?? ''));
+    const homeDirectory = '/storage/Users/currentUser/Download/com.vintage.pomelopro';
+    const engine = WineEngineService.getInstance();
+    engine.initialize(this.context);
+    engine.selectHostGraphicsBackendForExecutable(executable);
+    const graphicsExperiment = String(parameters['winehua.graphics_experiment'] ?? '').trim();
+    if (graphicsExperiment.length > 0 &&
+      !engine.selectHostGraphicsExperimentForLab(graphicsExperiment)) {
+      throw new Error(`Unsupported graphics LAB experiment: ${graphicsExperiment}`);
+    }
+    const settings = settingsStore.getGlobalSettings();
+    const ready = await engine.ensureReady(settings.defaultDisplayMode,
+      WinePresentationMode.DESKTOP, homeDirectory);
+    if (!ready) throw new Error('Wine engine did not become ready');
+
+    // READY can precede desktop-root registration by a few frames. Giving the
+    // Wayland desktop a short event-driven settling window keeps the first game
+    // toplevel from racing the root surface on cold prefix startup.
+    await new Promise<void>((resolve: () => void): void => {
+      setTimeout((): void => resolve(), 1000);
+    });
+    const result = engine.launchExecutable(executable, argumentsValue,
+      this.automationWorkingDirectory(executable), environment) as NativeLaunchResult;
+    if (!result || result.pid <= 0) throw new Error('runWineExe returned no process');
+    hilog.info(DOMAIN, 'EntryAbility',
+      'automation launched pid=%{public}d backend=%{public}s graphicsPolicy=%{public}s exe=%{public}s envCount=%{public}d',
+      result.pid, backend, graphicsExperiment || '(product)', executable, environment.length);
   }
 
   private isPcWindowHost(): boolean {

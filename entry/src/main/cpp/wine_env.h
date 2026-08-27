@@ -154,11 +154,11 @@ void AppendVkd3dDemoPresentEnv(std::vector<std::string>& env,
 
 // Add the stable production DXVK policy shared by Explorer descendants and
 // applications launched directly from an Old Pomelo app card. Diagnostics
-// may provide a specific performance profile; an empty profile selects the
-// qualified product default.
+// may provide an explicit LAB profile; an empty value selects the product
+// Vulkan route without consulting the LAB registry.
 void AppendProductDxvkEnv(std::vector<std::string>& env,
                           const std::string& d3dBackend,
-                          const std::string& perfProfile = "");
+                          const std::string& graphicsExperiment = "");
 
 // 覆盖式追加: 清理同 key 旧条目后追加新值 (graphics_broker 等跨文件使用)
 void UpsertEnvLine(std::vector<std::string>& env, const std::string& line);

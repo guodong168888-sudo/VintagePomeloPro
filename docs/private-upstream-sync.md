@@ -231,7 +231,7 @@
 - 关键修复（均为设备实测驱动）：
   - 打包：DXVK Legacy 全量 DLL（d3d9/d3d10core/d3d10/d3d10_1/d3d11/dxgi ×x64/x86）、`bin/Alarm01.wav`、`bin/x86_64-windows` smoke 必须齐备，否则引擎初始化失败；
   - wine-mono 11.1.0 与 `appwiz.cpl` 必须同包（缺失时 wineboot 弹框阻塞前缀初始化，导致音频驱动/图标缓存缺失）；assemble 增加守卫；
-  - DXVK 性能：启动前 `setHostShadowProfile('shadow-precise-dirty-ring-inline-upload-coverage-sort')`，立方体 4 FPS → 84 FPS；
+  - DXVK 性能：当时启动前使用 `setHostShadowProfile('shadow-precise-dirty-ring-inline-upload-coverage-sort')`，立方体 4 FPS → 84 FPS；当前等价配置已由 Native `GraphicsProfile` resolver 统一生成；
   - games 目录：`bundleManager.getBundleInfoForSelfSync` 动态取包名 + 写探针，杜绝硬编码/假 ready；
   - 标题栏高度：`componentUtils.getRectangleById('HdsTitleBar')` 运行时实测，替代硬编码。
 - 验证：ARM64 Debug HAP（API 23、`com.vintage.pomelopro` 1.1.2/1001002、旧柚Pro、仅 arm64、guest-gfx+dxvk+mono 载荷完整，官方签名工具验签通过）；平板上引擎 READY、桌面 100+ FPS、DXVK 立方体 84 FPS、干净安装后音频与 Wine 内 EXE 图标恢复。

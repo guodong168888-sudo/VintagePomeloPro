@@ -25,6 +25,7 @@ add_library(entry SHARED
     audio_ipc_server.cpp
     audio_stream.cpp
     graphics_broker.cpp
+    graphics_profile.cpp
     game_controller_bridge.cpp
     virgl_host_config.cpp
     napi_init.cpp
@@ -106,6 +107,7 @@ add_library(virgl_child SHARED
     virgl_host_config.cpp
     virgl_surface_presenter.cpp
     venus_surface_presenter.cpp
+    native_window_vk_target.cpp
     phone_adapter/phone_virgl_dispatch.cpp
 )
 target_link_libraries(virgl_child PUBLIC
@@ -113,6 +115,7 @@ target_link_libraries(virgl_child PUBLIC
     libGLESv3.so
     libvulkan.so
     libnative_window.so
+    libnative_buffer.so
     libhilog_ndk.z.so
     libchild_process.so
     libipc_capi.so

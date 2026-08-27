@@ -6,6 +6,7 @@
 #include "wayland_server.h"
 #include "audio_ipc_protocol.h"
 #include "graphics_broker.h"
+#include "graphics_profile.h"
 #include "phone_adapter/phone_adapter.h"
 
 #include <unistd.h>
@@ -293,60 +294,70 @@ static std::string FindLaunchEnvironmentValue(const LaunchParams& params,
 static void AppendStableDesktopDxvkEnv(std::vector<std::string>& env,
                                        const LaunchParams& params)
 {
-    if (params.d3dBackend.rfind("dxvk_", 0) != 0) return;
+    const winehua::D3dBackendKind backend =
+        winehua::ParseD3dBackend(params.d3dBackend);
+    if (!winehua::IsDxvkBackend(backend)) return;
 
-    /* SetHostShadowProfile carries the selected diagnostic profile through
-     * the host-side broker environment before Explorer is launched.  Keep
-     * the desktop descendants on that explicit profile instead of replacing
-     * it with the product default below. */
-    const char* shadowTrace = getenv("VKR_WINEHUA_SHADOW_TRACE");
-    const char* hostShadowMode = getenv("WINEHUA_VIRGL_HOST_SHADOW_MODE");
-    if (!hostShadowMode || !hostShadowMode[0])
-        hostShadowMode = getenv("VKR_WINEHUA_SHADOW_FROM_HOST");
-    const bool hostPrecise = hostShadowMode && !strcmp(hostShadowMode, "precise");
-    const bool guestPerf = shadowTrace && !strcmp(shadowTrace, "perf");
-    std::string selectedProfile =
-        FindLaunchEnvironmentValue(params, "WINEHUA_PERF_PROFILE");
-    if (selectedProfile.empty()) {
-        if (shadowTrace && !strcmp(shadowTrace, "inline-gpu-upload-frame-assoc-trace"))
-            selectedProfile = "shadow-precise-dirty-ring-frame-assoc-trace";
-        else if (shadowTrace && !strcmp(shadowTrace, "present-image-trace"))
-            selectedProfile = "shadow-precise-dirty-ring-present-image-trace";
-        else if (shadowTrace && !strcmp(shadowTrace, "gpu-frame-profile"))
-            selectedProfile = "shadow-precise-dirty-ring-gpu-frame-profile";
-        else if (shadowTrace && !strcmp(shadowTrace, "frame-timeline"))
-            selectedProfile = "shadow-precise-dirty-ring-frame-timeline";
-        else if (shadowTrace && !strcmp(shadowTrace, "inline-gpu-upload-descriptor-serialized"))
-            selectedProfile = "shadow-precise-dirty-ring-inline-upload-descriptor-serialized";
-        else if (shadowTrace && !strcmp(shadowTrace, "inline-gpu-upload-serialized"))
-            selectedProfile = "shadow-precise-dirty-ring-inline-upload-serialized";
-        else if (shadowTrace && !strcmp(shadowTrace, "inline-gpu-upload-alias-cover"))
-            selectedProfile = "shadow-precise-dirty-ring-inline-upload-alias-cover";
-        else if (shadowTrace && !strcmp(shadowTrace, "inline-gpu-upload-coverage-sort"))
-            selectedProfile = "shadow-precise-dirty-ring-inline-upload-coverage-sort";
-        else if (shadowTrace && !strcmp(shadowTrace, "inline-gpu-upload"))
-            selectedProfile = "shadow-precise-dirty-ring-inline-upload";
-        else if (shadowTrace && !strcmp(shadowTrace, "no-gpu-upload-fast"))
-            selectedProfile = "shadow-precise-dirty-ring-no-upload-fast";
-        else if (shadowTrace && !strcmp(shadowTrace, "no-gpu-upload"))
-            selectedProfile = "shadow-precise-dirty-ring-no-upload";
-        else if (hostPrecise)
-            selectedProfile = "shadow-precise";
-        else
-            selectedProfile = guestPerf ? "shadow-precise-strong-ring-perf"
-                                        : "shadow-precise-dirty-ring-inline-upload-coverage-sort";
+    winehua::ProductGraphicsPolicy productPolicy;
+    if (!winehua::ResolveProductGraphicsPolicy(backend, &productPolicy)) {
+        OH_LOG_ERROR(LOG_APP,
+                     "[Launch-Async] product graphics route resolve failed "
+                     "backend=%{public}s",
+                     params.d3dBackend.c_str());
+        return;
     }
 
+    /* Product startup has only VirGL/Vulkan routes. An explicit LAB id may
+     * add a diagnostic delta for A/B runs, but product code never selects a
+     * LAB experiment by name. */
+    std::string selectedExperiment =
+        FindLaunchEnvironmentValue(params, "WINEHUA_GRAPHICS_PROFILE");
+    winehua::GuestGraphicsPolicy guestPolicy = productPolicy.guest;
+    bool explicitProductRoute =
+        selectedExperiment == winehua::kProductVirglRoute ||
+        selectedExperiment == winehua::kProductVulkanRoute;
+    if (!selectedExperiment.empty() && !explicitProductRoute) {
+        winehua::ProductGraphicsPolicy experimentPolicy;
+        if (winehua::ResolveLabGraphicsExperiment(
+                selectedExperiment, backend, &experimentPolicy)) {
+            guestPolicy = experimentPolicy.guest;
+        } else {
+            OH_LOG_WARN(LOG_APP,
+                        "[Launch-Async] ignoring unknown graphics LAB "
+                        "experiment=%{public}s",
+                        selectedExperiment.c_str());
+            selectedExperiment.clear();
+        }
+    }
+    if (explicitProductRoute) selectedExperiment.clear();
+    if (selectedExperiment.empty() && !explicitProductRoute) {
+        const char* activePolicyValue = getenv("WINEHUA_GRAPHICS_PROFILE");
+        const std::string_view activePolicy = activePolicyValue
+            ? std::string_view(activePolicyValue) : std::string_view();
+        if (!activePolicy.empty() &&
+            activePolicy != winehua::kProductVirglRoute &&
+            activePolicy != winehua::kProductVulkanRoute) {
+            winehua::ProductGraphicsPolicy activeExperimentPolicy;
+            if (winehua::ResolveLabGraphicsExperiment(
+                    activePolicy, backend, &activeExperimentPolicy)) {
+                selectedExperiment = activePolicy;
+                guestPolicy = activeExperimentPolicy.guest;
+            }
+        }
+    }
+    const bool guestPerf = guestPolicy.perfSummary;
+
     /* Explorer descendants and app-card launches must use one production
-     * policy. Keep the explicit A/B profile selected above while sharing the
-     * stable defaults with RunWineExe. */
-    AppendProductDxvkEnv(env, params.d3dBackend, selectedProfile);
+     * policy. Keep the explicit A/B experiment selected above while sharing
+     * the stable defaults with RunWineExe. */
+    AppendProductDxvkEnv(env, params.d3dBackend, selectedExperiment);
     if (guestPerf) {
-        env.push_back("VN_WINEHUA_PERF_SUMMARY=1");
-        env.push_back("VN_WINEHUA_PERF_LOG=/storage/Users/currentUser/Download/app.hackeris.winehua/winehua_guest_ring_perf.log");
+        UpsertEnvLine(env,
+            "VN_WINEHUA_PERF_LOG=/storage/Users/currentUser/Download/"
+            "com.vintage.pomelopro/winehua_guest_ring_perf.log");
         /* vn_log uses MESA_LOG_DEBUG.  Raise only the explicit diagnostic
          * profile so the Guest ring summary survives the OHOS logger filter. */
-        env.push_back("MESA_LOG_LEVEL=debug");
+        UpsertEnvLine(env, "MESA_LOG_LEVEL=debug");
     }
 }
 
@@ -356,7 +367,8 @@ static void PrepareDesktopSessionGraphicsEnv(const LaunchParams& params)
     auto& gb = winehua::GraphicsBroker::GetInstance();
     gb.SetWineRuntimeBinaryDir(params.winehuaBin);
     gb.SetRequestedBackend(winehua::GraphicsBackend::Virgl);
-    gb.SetVulkanPresentMode(params.d3dBackend.rfind("dxvk_", 0) == 0);
+    gb.SetVulkanPresentMode(winehua::UsesVenusPresent(
+        winehua::ParseD3dBackend(params.d3dBackend)));
     gb.EnsureStarted(params.sockDir);
 
     winehua::GraphicsBackendState state = gb.GetState();
@@ -889,7 +901,8 @@ void LaunchThreadFunc(LaunchParams* p) {
 
     auto& graphicsBroker = winehua::GraphicsBroker::GetInstance();
     graphicsBroker.SetWineRuntimeBinaryDir(p->winehuaBin);
-    graphicsBroker.SetVulkanPresentMode(p->d3dBackend.rfind("dxvk_", 0) == 0);
+    graphicsBroker.SetVulkanPresentMode(winehua::UsesVenusPresent(
+        winehua::ParseD3dBackend(p->d3dBackend)));
     EmitEnginePhase("graphics");
     graphicsBroker.EnsureStarted(p->sockDir);
 

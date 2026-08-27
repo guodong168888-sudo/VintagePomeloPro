@@ -204,7 +204,7 @@ export class AppSessionService {
     //   避免 ensureReady 返回后继续执行造成的竞态（桌面会话未入表、
     //   DesktopAbility startAbility 阻塞等）。
     const engine = WineEngineService.getInstance();
-    engine.selectHostShadowForExecutable(app.launchTarget.executable);
+    engine.selectHostGraphicsBackendForExecutable(app.launchTarget.executable);
     if (engine.isReady() && engine.getPresentationMode() === presentationMode) {
       return this.launchReady(app, settings, mode, presentationMode, homeDirectory);
     }
@@ -221,10 +221,11 @@ export class AppSessionService {
       return this.deferLaunchUntilReady(app, settings, mode, presentationMode, homeDirectory);
     }
 
-    engine.selectHostShadowForExecutable(app.launchTarget.executable);
-    if (engine.needsHostShadowRestart()) {
-      hilog.info(DOMAIN, '[SESS]', 'launch: host shadow restart app=%{public}s profile=%{public}s',
-        app.id, engine.selectHostShadowForExecutable(app.launchTarget.executable));
+    const hostGraphicsBackend =
+      engine.selectHostGraphicsBackendForExecutable(app.launchTarget.executable);
+    if (engine.needsHostGraphicsRestart()) {
+      hilog.info(DOMAIN, '[SESS]', 'launch: graphics host restart app=%{public}s backend=%{public}s',
+        app.id, hostGraphicsBackend);
       this.sessions.clear();
       this.pendingToplevels = [];
       try {
@@ -233,7 +234,7 @@ export class AppSessionService {
       }
       const hostReady = await engine.ensureReady(mode, presentationMode, homeDirectory);
       if (!hostReady) {
-        hilog.error(DOMAIN, '[SESS]', 'launch: host shadow restart failed app=%{public}s',
+        hilog.error(DOMAIN, '[SESS]', 'launch: graphics host restart failed app=%{public}s',
           app.id);
         return null;
       }

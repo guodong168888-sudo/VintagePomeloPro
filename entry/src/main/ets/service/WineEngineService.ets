@@ -43,10 +43,7 @@ const RESET_KEEP_DIR = '/data/storage/el2/base/cache/wine-reset-keep';
 const PREFIX_USER_KEEP_FOLDERS: string[] = [
   'Documents', 'Desktop', 'Pictures', 'Music', 'Videos', 'Saved Games'
 ];
-const HOST_SHADOW_DXVK = 'shadow-precise-dirty-ring-inline-upload-coverage-sort';
-const HOST_SHADOW_VKD3D = 'shadow-precise';
-
-function executableWantsVkd3dHostShadow(executable: string): boolean {
+function executableUsesVkd3dGraphics(executable: string): boolean {
   const normalized = executable.toLowerCase();
   return normalized.indexOf('smoke') >= 0 &&
     (normalized.indexOf('gears.exe') >= 0 || normalized.indexOf('triangle.exe') >= 0);
@@ -286,8 +283,10 @@ export class WineEngineService {
   private prefixRefreshRequired: boolean = false;
   private pendingPrefixVersion: Uint8Array = new Uint8Array(0);
   private d3dBackend: string = 'dxvk_legacy';
-  private hostShadowProfile: string = HOST_SHADOW_DXVK;
-  private appliedHostShadowProfile: string = HOST_SHADOW_DXVK;
+  private hostGraphicsBackend: string = 'dxvk_legacy';
+  private appliedHostGraphicsBackend: string = 'dxvk_legacy';
+  private hostGraphicsLabExperiment: string = '';
+  private appliedHostGraphicsLabExperiment: string = '';
   private enginePhase: string = '';
   private phaseStartedAt: number = 0;
   private readySafetyTimer: number = -1;
@@ -379,14 +378,16 @@ export class WineEngineService {
     const requestedD3DBackend = this.selectedD3DBackend();
     if (this.state === EngineState.READY && this.mode === mode &&
       this.presentationMode === presentationMode && this.d3dBackend === requestedD3DBackend &&
-      this.appliedHostShadowProfile === this.hostShadowProfile) {
+      this.appliedHostGraphicsBackend === this.hostGraphicsBackend &&
+      this.appliedHostGraphicsLabExperiment === this.hostGraphicsLabExperiment) {
       this.syncManagedSmokePayload('ready-reuse');
       return true;
     }
     if (this.state === EngineState.PREPARING && this.mode === mode &&
       this.presentationMode === presentationMode &&
       this.d3dBackend === requestedD3DBackend &&
-      this.appliedHostShadowProfile === this.hostShadowProfile) return this.waitForReady();
+      this.appliedHostGraphicsBackend === this.hostGraphicsBackend &&
+      this.appliedHostGraphicsLabExperiment === this.hostGraphicsLabExperiment) return this.waitForReady();
 
     if (this.state === EngineState.ERROR) {
       // native 进程仍存活说明协调者可能还在推进 (例如之前 ArkTS 侧瞬态失败):
@@ -402,8 +403,10 @@ export class WineEngineService {
     if (this.state !== EngineState.STOPPED &&
       (this.mode !== mode || this.presentationMode !== presentationMode ||
        this.d3dBackend !== requestedD3DBackend ||
-       this.appliedHostShadowProfile !== this.hostShadowProfile)) {
-      const switchingHost = this.appliedHostShadowProfile !== this.hostShadowProfile &&
+       this.appliedHostGraphicsBackend !== this.hostGraphicsBackend ||
+       this.appliedHostGraphicsLabExperiment !== this.hostGraphicsLabExperiment)) {
+      const switchingHost = (this.appliedHostGraphicsBackend !== this.hostGraphicsBackend ||
+        this.appliedHostGraphicsLabExperiment !== this.hostGraphicsLabExperiment) &&
         this.mode === mode && this.presentationMode === presentationMode &&
         this.d3dBackend === requestedD3DBackend;
       this.setState(EngineState.SWITCHING,
@@ -435,15 +438,27 @@ export class WineEngineService {
         // Wayland desktop frame from being created at the old orientation.
         WineWindowManager.getInstance().prepareOutputForOrientation(orientation);
       }
-      // Product DXVK/Venus path: select the precise-dirty ring + inline GPU
-      // upload + coverage-sort host profile BEFORE the VirGL host starts.
-      // Wine children already receive the matching WINEHUA_PERF_PROFILE env;
-      // without this the host runs the full-shadow baseline (~4 FPS cube).
+      // Resolve the backend intent into one Native-owned Host/Guest route
+      // before VirGL starts. ArkTS no longer duplicates shadow/upload flags.
       try {
-        testNapi.setHostShadowProfile(this.hostShadowProfile);
-        this.appliedHostShadowProfile = this.hostShadowProfile;
-      } catch (_) {
-        this.appliedHostShadowProfile = this.hostShadowProfile;
+        const policyApplied = this.hostGraphicsLabExperiment.length > 0 ?
+          (testNapi.setHostGraphicsExperimentForLab(
+            this.hostGraphicsLabExperiment, this.hostGraphicsBackend) as boolean) :
+          (testNapi.setHostGraphicsBackend(this.hostGraphicsBackend) as boolean);
+        if (!policyApplied) {
+          this.setState(EngineState.ERROR, '图形配置无效');
+          this.finishWaiters(false);
+          return false;
+        }
+        this.appliedHostGraphicsBackend = this.hostGraphicsBackend;
+        this.appliedHostGraphicsLabExperiment = this.hostGraphicsLabExperiment;
+      } catch (error) {
+        hilog.error(DOMAIN, TAG,
+          'graphics policy resolve failed backend=%{public}s labExperiment=%{public}s error=%{public}s',
+          this.hostGraphicsBackend, this.hostGraphicsLabExperiment, JSON.stringify(error));
+        this.setState(EngineState.ERROR, '图形配置解析失败');
+        this.finishWaiters(false);
+        return false;
       }
       const serverReady = testNapi.startServer(SOCK) as boolean;
       if (!serverReady) {
@@ -483,6 +498,14 @@ export class WineEngineService {
     const program = isCommandScript(executable) ? 'cmd.exe' : executable;
     const launchArguments = isCommandScript(executable) ?
       ['/c', executable].concat(argumentsValue) : argumentsValue;
+    // Carry the already-applied LAB id into the child launch. Native resolves
+    // the Guest half from the same policy authority that configured Host;
+    // product sessions add no experiment override.
+    const launchEnvironment = envOverrides.slice();
+    if (this.appliedHostGraphicsLabExperiment.length > 0) {
+      launchEnvironment.push(
+        `WINEHUA_GRAPHICS_PROFILE=${this.appliedHostGraphicsLabExperiment}`);
+    }
     return testNapi.runWineExe(
       WINE_BIN,
       SOCK,
@@ -492,7 +515,7 @@ export class WineEngineService {
       launchArguments,
       workingDirectory,
       this.d3dBackend,
-      envOverrides
+      launchEnvironment
     ) as NativeLaunchResult;
   }
 
@@ -503,9 +526,7 @@ export class WineEngineService {
     let backend = 'dxvk_legacy';
     if (mode === 'virgl') {
       backend = 'wined3d';
-    } else if (mode === 'dxvk_1_10') {
-      backend = 'dxvk_legacy';
-    } else if (this.gpuSupportsDxvk26()) {
+    } else if ((mode === 'auto' || mode === 'dxvk_2_6') && this.gpuSupportsDxvk26()) {
       backend = 'dxvk_modern_2_6';
     }
     AppStorage.setOrCreate<string>('winehua.render.resolved', backend);
@@ -532,14 +553,37 @@ export class WineEngineService {
     }
   }
 
-  selectHostShadowForExecutable(executable: string): string {
-    this.hostShadowProfile = executableWantsVkd3dHostShadow(executable) ?
-      HOST_SHADOW_VKD3D : HOST_SHADOW_DXVK;
-    return this.hostShadowProfile;
+  selectHostGraphicsBackendForExecutable(executable: string): string {
+    // A normal product launch owns the next engine policy. LAB overrides are
+    // scoped to the explicit automation session that selected them.
+    this.hostGraphicsLabExperiment = '';
+    this.hostGraphicsBackend = executableUsesVkd3dGraphics(executable) ?
+      'vkd3d_limited_500k' : this.selectedD3DBackend();
+    return this.hostGraphicsBackend;
   }
 
-  needsHostShadowRestart(): boolean {
-    return this.appliedHostShadowProfile !== this.hostShadowProfile;
+  selectHostGraphicsExperimentForLab(experimentId: string): boolean {
+    const selected = experimentId.trim();
+    if (selected.length === 0) return false;
+    try {
+      // Validate through the same Native resolver used immediately before
+      // Host startup. This also fails closed before an automation run waits
+      // for a profile that can never be applied.
+      const valid = testNapi.setHostGraphicsExperimentForLab(
+        selected, this.hostGraphicsBackend) as boolean;
+      if (!valid) return false;
+      this.hostGraphicsLabExperiment = selected;
+      return true;
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'LAB graphics experiment rejected id=%{public}s error=%{public}s',
+        selected, JSON.stringify(error));
+      return false;
+    }
+  }
+
+  needsHostGraphicsRestart(): boolean {
+    return this.appliedHostGraphicsBackend !== this.hostGraphicsBackend ||
+      this.appliedHostGraphicsLabExperiment !== this.hostGraphicsLabExperiment;
   }
 
   /**

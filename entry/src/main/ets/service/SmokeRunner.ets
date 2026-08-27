@@ -313,18 +313,29 @@ function sleep(milliseconds: number): Promise<void> {
   return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function applySerializedEnvironment(environment: Record<string, string>,
+  serialized: string[]): boolean {
+  for (let index = 0; index < serialized.length; index++) {
+    const line = serialized[index];
+    const separator = line.indexOf('=');
+    if (separator <= 0) return false;
+    environment[line.substring(0, separator)] = line.substring(separator + 1);
+  }
+  return true;
+}
+
 export class SmokeRunner {
   private request: SmokeLaunchRequest;
   private onStatus: (text: string) => void;
-  private perfProfile: string;
+  private graphicsExperiment: string;
   private prefix: string;
   private resultDirectory: string;
 
   constructor(request: SmokeLaunchRequest, onStatus: (text: string) => void,
-              perfProfile: string = 'baseline') {
+              graphicsExperiment: string = 'observe-product-summary') {
     this.request = request;
     this.onStatus = onStatus;
-    this.perfProfile = perfProfile;
+    this.graphicsExperiment = graphicsExperiment;
     this.prefix = prefixRoot(request.prefixMode);
     this.resultDirectory = `${this.prefix}/drive_c/smoke/results/${request.runId}`;
   }
@@ -1284,77 +1295,13 @@ export class SmokeRunner {
            * it here so a false request remains a real off-side A/B run. */
           smokeEnvironment['DXVK_WINEHUA_BATCH_MAPPED_FLUSH'] = '0';
         }
-        if (this.perfProfile === 'shadow-precise' ||
-          this.perfProfile === 'shadow-precise-single-ring' ||
-          this.perfProfile === 'shadow-precise-sync-submit' ||
-          this.perfProfile === 'shadow-precise-strong-ring' ||
-          this.perfProfile === 'shadow-precise-legacy-host-sync' ||
-          this.perfProfile === 'shadow-precise-dirty-ring' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-no-upload' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-no-upload-fast' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-inline-upload' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-inline-upload-coverage-sort' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-coverage-sort-sampled' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-coverage-poll' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-inline-upload-alias-cover' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-inline-upload-serialized' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-inline-upload-descriptor-serialized' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-frame-assoc-trace' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-present-image-trace' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-perf' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-gpu-frame-profile' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-frame-timeline' ||
-          this.perfProfile === 'shadow-precise-strong-ring-trace' ||
-          this.perfProfile === 'shadow-precise-strong-ring-perf' ||
-          this.perfProfile === 'shadow-precise-strong-ring-async-present' ||
-          this.perfProfile === 'shadow-precise-strong-ring-fence-poll' ||
-          this.perfProfile === 'shadow-precise-strong-ring-mailbox' ||
-          this.perfProfile === 'shadow-precise-direct-fence' ||
-          this.perfProfile === 'shadow-precise-retain-shmem' ||
-          this.perfProfile === 'shadow-precise-cpu-upload') {
-          smokeEnvironment['DXVK_WINEHUA_PRECISE_SHADOW'] = '1';
-          smokeEnvironment['DXVK_WINEHUA_FLUSH_DYNAMIC_MAPPED'] = '1';
-          smokeEnvironment['VN_WINEHUA_REMOTE_MEMORY_SYNC'] = '1';
-          if (this.perfProfile === 'shadow-precise-single-ring')
-            smokeEnvironment['VN_PERF'] =
-              'no_fence_feedback,no_query_feedback,no_multi_ring';
-          if (this.perfProfile === 'shadow-precise-sync-submit')
-            smokeEnvironment['VN_PERF'] =
-              'no_fence_feedback,no_query_feedback,no_async_queue_submit';
-          if (this.perfProfile === 'shadow-precise-strong-ring' ||
-            this.perfProfile === 'shadow-precise-legacy-host-sync' ||
-            this.perfProfile === 'shadow-precise-dirty-ring' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-no-upload' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-no-upload-fast' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-inline-upload' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-inline-upload-coverage-sort' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-coverage-sort-sampled' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-coverage-poll' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-inline-upload-alias-cover' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-inline-upload-serialized' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-inline-upload-descriptor-serialized' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-frame-assoc-trace' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-present-image-trace' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-perf' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-gpu-frame-profile' ||
-          this.perfProfile === 'shadow-precise-dirty-ring-frame-timeline' ||
-            this.perfProfile === 'shadow-precise-strong-ring-trace' ||
-            this.perfProfile === 'shadow-precise-strong-ring-perf' ||
-            this.perfProfile === 'shadow-precise-strong-ring-async-present' ||
-            this.perfProfile === 'shadow-precise-strong-ring-fence-poll' ||
-            this.perfProfile === 'shadow-precise-strong-ring-mailbox')
-            smokeEnvironment['VN_WINEHUA_STRONG_RING_BARRIER'] = '1';
-          if (this.perfProfile === 'shadow-precise-strong-ring-perf' ||
-            this.perfProfile === 'shadow-precise-dirty-ring-perf')
-            smokeEnvironment['VN_WINEHUA_PERF_SUMMARY'] = '1';
-          if (this.perfProfile === 'shadow-precise-direct-fence')
-            smokeEnvironment['VN_WINEHUA_DIRECT_FENCE_WAIT'] = '1';
-          if (this.perfProfile === 'shadow-precise-dirty-ring-present-image-trace')
-            smokeEnvironment['WINEHUA_DXVK_TRACE_PRESENT_IMAGE'] = '1';
-          if (this.perfProfile === 'shadow-precise-retain-shmem')
-            smokeEnvironment['VN_WINEHUA_DEFER_SHMEM_UNREF'] = '1';
-          if (this.perfProfile === 'shadow-precise-cpu-upload')
-            smokeEnvironment['VKR_WINEHUA_GPU_UPLOAD'] = '0';
+        const profileEnvironment =
+          testNapi.resolveGuestGraphicsEnvironmentForLab(
+            this.graphicsExperiment, 'dxvk_legacy') as string[] | null;
+        if (!profileEnvironment ||
+          !applySerializedEnvironment(smokeEnvironment, profileEnvironment)) {
+          return this.failureResult(spec, 'startup',
+            `unresolved graphics LAB experiment: ${this.graphicsExperiment}`, null);
         }
         if (this.request.suite === 'dxvk-layout-general')
           smokeEnvironment['DXVK_WINEHUA_FORCE_SAMPLED_GENERAL'] = '1';

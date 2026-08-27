@@ -1,7 +1,11 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('baseline', 'direct-fence-wait', 'no-remote-sync', 'no-dynamic-flush', 'fence-feedback', 'shadow-none', 'shadow-trace', 'shadow-to-host-explicit', 'shadow-precise', 'shadow-precise-single-ring', 'shadow-precise-sync-submit', 'shadow-precise-strong-ring', 'shadow-precise-strong-ring-async-present', 'shadow-precise-strong-ring-fence-poll', 'shadow-precise-strong-ring-mailbox', 'shadow-precise-direct-fence', 'shadow-precise-retain-shmem')]
-    [string]$PerfProfile = 'shadow-precise-strong-ring',
+    [ValidateSet('dxvk_legacy', 'dxvk_modern_2_6')]
+    [string]$D3DBackend = 'dxvk_legacy',
+    [AllowEmptyString()]
+    [string]$GraphicsExperiment = '',
+    [ValidateSet('product', 'on', 'off')]
+    [string]$BatchMappedFlushMode = 'product',
     [string]$GamePath = 'C:\smoke\x64\winehua_d3d_switch_cube.exe',
     [ValidateRange(8, 120)]
     [int]$Samples = 40,
@@ -9,21 +13,36 @@ param(
     [int]$IntervalMs = 120,
     [ValidateRange(5, 120)]
     [int]$StartupTimeoutSeconds = 45,
-    [string]$DeviceId = '5KPBB25818203996',
+    [string]$DeviceId = '',
+    [string]$HdcPath = 'C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe',
     [string]$OutputRoot = 'D:\MyProject\winehua-logs\automation'
 )
 
 $ErrorActionPreference = 'Stop'
-$hdc = 'C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe'
-$bundle = 'app.hackeris.winehua'
+$hdc = $HdcPath
+$bundle = 'com.vintage.pomelopro'
 $startScript = Join-Path $PSScriptRoot 'Start-WineHuaGameTest.ps1'
-$runId = 'frame-order-{0}' -f (Get-Date -Format 'yyyyMMdd-HHmmss')
+$batchLabel = if ($BatchMappedFlushMode -eq 'product') {
+    ''
+} else {
+    "-batch-flush-$BatchMappedFlushMode"
+}
+$runId = 'frame-order-{0}{1}-{2}' -f $D3DBackend, $batchLabel,
+    (Get-Date -Format 'yyyyMMdd-HHmmss')
 $output = Join-Path $OutputRoot $runId
 $frames = Join-Path $output 'frames'
 $remoteRoot = '/data/local/tmp/winehua-frame-order'
 
 if (-not (Test-Path -LiteralPath $hdc)) { throw "Windows HDC not found: $hdc" }
 if (-not (Test-Path -LiteralPath $startScript)) { throw "Launcher not found: $startScript" }
+if (-not $DeviceId) {
+    $targets = @(& $hdc list targets | Where-Object { $_ -and $_ -notmatch '^\[Empty\]' } |
+        ForEach-Object { ($_ -split '\s+')[0] })
+    if ($targets.Count -ne 1) {
+        throw "Expected one connected Windows HDC target, found $($targets.Count)"
+    }
+    $DeviceId = $targets[0]
+}
 New-Item -ItemType Directory -Path $frames -Force | Out-Null
 Add-Type -AssemblyName System.Drawing
 
@@ -99,19 +118,79 @@ function Save-Snapshot {
     return [pscustomobject]@{ path = $local; marker = Get-FrameMarker -Path $local }
 }
 
+function Get-NearestRankPercentile {
+    param(
+        [Parameter(Mandatory)][double[]]$Values,
+        [Parameter(Mandatory)][ValidateRange(0.0, 1.0)][double]$Percentile
+    )
+    if ($Values.Count -eq 0) { return $null }
+    $sorted = @($Values | Sort-Object)
+    $index = [Math]::Max(0, [Math]::Ceiling($Percentile * $sorted.Count) - 1)
+    return [Math]::Round([double]$sorted[$index], 3)
+}
+
+function Test-PresentActionContract {
+    param([AllowNull()][object]$Present)
+    if (-not $Present) { return $null }
+    $transport = $Present.PSObject.Properties['transport']
+    $postWait = $Present.PSObject.Properties['post_present_cpu_wait']
+    if (-not $transport -or -not $postWait) { return $null }
+    switch ([string]$transport.Value) {
+        'direct-native-buffer' { return [long]$postWait.Value -eq 0 }
+        'wsi' { return [long]$postWait.Value -eq 1 }
+        default { return $false }
+    }
+}
+
+function Convert-KeyValueLogLine {
+    param([Parameter(Mandatory)][string]$Line)
+    $values = [ordered]@{}
+    foreach ($match in [regex]::Matches(
+        $Line, '(?<key>[A-Za-z][A-Za-z0-9_]*)=(?<value>[^\s]+)')) {
+        $key = $match.Groups['key'].Value
+        $rawValue = $match.Groups['value'].Value
+        [long]$integerValue = 0
+        [double]$floatingValue = 0
+        if ([long]::TryParse($rawValue, [ref]$integerValue)) {
+            $values[$key] = $integerValue
+        } elseif ([double]::TryParse(
+            $rawValue, [Globalization.NumberStyles]::Float,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [ref]$floatingValue)) {
+            $values[$key] = $floatingValue
+        } else {
+            $values[$key] = $rawValue
+        }
+    }
+    return [pscustomobject]$values
+}
+
 $records = [System.Collections.Generic.List[object]]::new()
 $started = $false
 $summary = $null
 try {
     Invoke-Hdc -Arguments @('shell', 'hilog', '-r') | Out-Null
-    & $startScript -D3DBackend dxvk_legacy -PerfProfile $PerfProfile `
-        -GamePath $GamePath -DeviceId $DeviceId | Tee-Object -FilePath (Join-Path $output 'launch.txt')
+    $launchParameters = @{
+        D3DBackend = $D3DBackend
+        GraphicsExperiment = $GraphicsExperiment
+        GamePath = $GamePath
+        DeviceId = $DeviceId
+        HdcPath = $hdc
+        BatchMappedFlushMode = $BatchMappedFlushMode
+    }
+    & $startScript @launchParameters |
+        Tee-Object -FilePath (Join-Path $output 'launch.txt')
     if ($LASTEXITCODE -ne 0) { throw 'WineHua game launcher failed' }
     $started = $true
 
     $profileObserved = $false
     $profileDeadline = (Get-Date).AddSeconds(10)
-    $profileNeedle = "host shadow profile=$PerfProfile "
+    $expectedGraphicsPolicy = if ($GraphicsExperiment) {
+        $GraphicsExperiment
+    } else {
+        'product-vulkan'
+    }
+    $profileNeedle = "graphics profile=$expectedGraphicsPolicy "
     do {
         Start-Sleep -Milliseconds 300
         $profileLog = @(Invoke-Hdc -Arguments @('shell', 'hilog', '-x'))
@@ -121,7 +200,7 @@ try {
         }
     } while ((Get-Date) -lt $profileDeadline)
     if (-not $profileObserved) {
-        throw "Requested performance profile was not observed: $PerfProfile"
+        throw "Requested graphics policy was not observed: $expectedGraphicsPolicy"
     }
 
     $deadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
@@ -187,11 +266,35 @@ try {
     } else {
         'PASS'
     }
+
+    [long]$forwardFrames = 0
+    $frameTimeMs = [System.Collections.Generic.List[double]]::new()
+    for ($i = 1; $i -lt $valid.Count; ++$i) {
+        $previous = [int]$valid[$i - 1].marker
+        $current = [int]$valid[$i].marker
+        $delta = ($current - $previous + 256) % 256
+        if ($delta -le 0 -or $delta -gt 128) { continue }
+        $previousAt = [DateTimeOffset]::Parse($valid[$i - 1].capturedAt)
+        $currentAt = [DateTimeOffset]::Parse($valid[$i].capturedAt)
+        $elapsedMs = ($currentAt - $previousAt).TotalMilliseconds
+        if ($elapsedMs -le 0) { continue }
+        $forwardFrames += $delta
+        $frameTimeMs.Add($elapsedMs / $delta)
+    }
+    $measurementSeconds = if ($valid.Count -gt 1) {
+        ([DateTimeOffset]::Parse($valid[-1].capturedAt) -
+            [DateTimeOffset]::Parse($valid[0].capturedAt)).TotalSeconds
+    } else { 0.0 }
+    $estimatedDisplayedFps = if ($measurementSeconds -gt 0) {
+        [Math]::Round($forwardFrames / $measurementSeconds, 3)
+    } else { $null }
     $summary = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         runId = $runId
         status = $status
-        perfProfile = $PerfProfile
+        d3dBackend = $D3DBackend
+        graphicsExperiment = $GraphicsExperiment
+        batchMappedFlushMode = $BatchMappedFlushMode
         gamePath = $GamePath
         samplesRequested = $Samples
         samplesValid = $valid.Count
@@ -204,15 +307,22 @@ try {
         maxForwardDelta = if ($forwardDeltas.Count) {
             ($forwardDeltas | Measure-Object -Maximum).Maximum
         } else { $null }
+        measurementSeconds = [Math]::Round($measurementSeconds, 3)
+        estimatedDisplayedFps = $estimatedDisplayedFps
+        estimatedFrameTimeMsP50 = Get-NearestRankPercentile -Values $frameTimeMs.ToArray() -Percentile 0.50
+        estimatedFrameTimeMsP95 = Get-NearestRankPercentile -Values $frameTimeMs.ToArray() -Percentile 0.95
+        estimatedFrameTimeMsP99 = Get-NearestRankPercentile -Values $frameTimeMs.ToArray() -Percentile 0.99
         records = @($records)
     }
     $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'summary.json') -Encoding UTF8
 } catch {
     $summary = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         runId = $runId
         status = 'INFRA_ERROR'
-        perfProfile = $PerfProfile
+        d3dBackend = $D3DBackend
+        graphicsExperiment = $GraphicsExperiment
+        batchMappedFlushMode = $BatchMappedFlushMode
         gamePath = $GamePath
         message = $_.Exception.Message
         records = @($records)
@@ -222,6 +332,33 @@ try {
     try {
         $hilog = Invoke-Hdc -Arguments @('shell', 'hilog', '-x')
         $hilog | Set-Content -LiteralPath (Join-Path $output 'hilog.txt') -Encoding UTF8
+        $presentLines = @($hilog | Where-Object {
+            $_ -match '\[VENUS-PRESENT\]\[NCP\].*\bframes=' })
+        if ($presentLines.Count -gt 0) {
+            $summary['venusPresent'] = Convert-KeyValueLogLine -Line $presentLines[-1]
+            $summary['presentTransport'] = $summary['venusPresent'].transport
+            $summary['presentActionContract'] =
+                Test-PresentActionContract -Present $summary['venusPresent']
+            if ($summary['status'] -eq 'PASS' -and
+                $summary['presentActionContract'] -ne $true) {
+                $summary['status'] = 'INCONCLUSIVE'
+            }
+        }
+        $timelineLines = @($hilog | Where-Object {
+            $_ -match '\[VENUS-FRAME-TIMELINE\]\[NCP\]' } |
+            Select-Object -Last 32)
+        if ($timelineLines.Count -gt 0) {
+            $summary['venusFrameTimeline'] = @($timelineLines | ForEach-Object {
+                Convert-KeyValueLogLine -Line $_
+            })
+        }
+        $graphicsPerfLines = @($hilog | Where-Object {
+            $_ -match '\[VIRGL-PERF\]' } | Select-Object -Last 48)
+        if ($graphicsPerfLines.Count -gt 0) {
+            $summary['graphicsPerfMarkers'] = $graphicsPerfLines
+        }
+        $summary | ConvertTo-Json -Depth 8 |
+            Set-Content -LiteralPath (Join-Path $output 'summary.json') -Encoding UTF8
     } catch {
         $_ | Out-String | Set-Content -LiteralPath (Join-Path $output 'hilog-error.txt') -Encoding UTF8
     }

@@ -1,6 +1,8 @@
 #include "virgl_surface_presenter.h"
 #include "venus_surface_presenter.h"
 #include "native_window_lease.h"
+#include "present_pacing.h"
+#include "present_policy.h"
 
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
@@ -12,7 +14,6 @@
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
-#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -26,23 +27,7 @@ namespace {
 
 using SteadyClock = std::chrono::steady_clock;
 
-constexpr uint64_t kDefaultFramePeriodNs = 16666667;
-constexpr uint64_t kMinFramePeriodNs = 4000000;
-constexpr uint64_t kMaxFramePeriodNs = 33333333;
-constexpr uint64_t kProducerDispatchLeadNs = 500000;
 constexpr auto kVenusTargetAttachTimeout = std::chrono::milliseconds(2500);
-
-uint64_t NormalizeFramePeriodNs(uint64_t framePeriodNs)
-{
-    if (!framePeriodNs) return kDefaultFramePeriodNs;
-    return std::clamp(framePeriodNs, kMinFramePeriodNs, kMaxFramePeriodNs);
-}
-
-uint64_t PacingPeriodNs(uint64_t displayPeriodNs)
-{
-    return displayPeriodNs > kMinFramePeriodNs + kProducerDispatchLeadNs
-        ? displayPeriodNs - kProducerDispatchLeadNs : kMinFramePeriodNs;
-}
 
 uint64_t NowUs()
 {
@@ -54,12 +39,6 @@ uint64_t NowNs()
 {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
         SteadyClock::now().time_since_epoch()).count());
-}
-
-bool PresentPerfSummaryEnabled()
-{
-    const char* summary = std::getenv("WINEHUA_VTEST_PRESENT_PERF_SUMMARY");
-    return summary && summary[0] == '1' && !summary[1];
 }
 
 GLuint CompilePresentShader(GLenum type, const char* source)
@@ -98,8 +77,9 @@ public:
         timestampFailures_ = 0;
         throttled_ = 0;
         lastPresentNs_ = 0;
-        displayPeriodNs_ = NormalizeFramePeriodNs(framePeriodNs);
-        framePeriodNs_ = PacingPeriodNs(displayPeriodNs_);
+        policy_ = winehua::ReadPresenterRuntimePolicyFromEnvironment();
+        displayPeriodNs_ = winehua::NormalizePresentFramePeriodNs(framePeriodNs);
+        framePeriodNs_ = winehua::PresentPacingPeriodNs(displayPeriodNs_);
         OH_LOG_INFO(LOG_APP,
                     "[VIRGL-ZC][NCP] target attached surface_key=%{public}llu "
                     "window=%{public}p display_period_us=%{public}llu "
@@ -113,10 +93,11 @@ public:
     int SetFramePeriod(uint64_t framePeriodNs)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        const uint64_t displayPeriodNs = NormalizeFramePeriodNs(framePeriodNs);
+        const uint64_t displayPeriodNs =
+            winehua::NormalizePresentFramePeriodNs(framePeriodNs);
         if (displayPeriodNs_ == displayPeriodNs) return 0;
         displayPeriodNs_ = displayPeriodNs;
-        framePeriodNs_ = PacingPeriodNs(displayPeriodNs_);
+        framePeriodNs_ = winehua::PresentPacingPeriodNs(displayPeriodNs_);
         OH_LOG_INFO(LOG_APP,
                     "[VIRGL-ZC][NCP] frame period surface_key=%{public}llu "
                     "display_period_us=%{public}llu pace_period_us=%{public}llu",
@@ -154,15 +135,14 @@ public:
         if (!windowLease_) return -2;
         if (!sourceVisible) return -3;
         const uint64_t nowNs = NowNs();
-        if (width_ == width && height_ == height && lastPresentNs_ &&
-            nowNs - lastPresentNs_ < framePeriodNs_)
-        {
+        const winehua::PresentPacingDecision pacing =
+            winehua::EvaluatePresentPacing(nowNs, lastPresentNs_, framePeriodNs_);
+        if (width_ == width && height_ == height && !pacing.presentNow) {
             if (nextPresentDeadlineNs)
-                *nextPresentDeadlineNs = lastPresentNs_ + framePeriodNs_;
+                *nextPresentDeadlineNs = pacing.nextDeadlineNs;
             ++throttled_;
             return 1;
         }
-        lastPresentNs_ = nowNs;
         sourceReady = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         if (!sourceReady) return -7;
         glFlush();
@@ -226,10 +206,12 @@ public:
             return -6;
         }
 
+        lastPresentNs_ = frameTimestamp;
         ++frames_;
         if (nextPresentDeadlineNs)
-            *nextPresentDeadlineNs = lastPresentNs_ + framePeriodNs_;
-        if (PresentPerfSummaryEnabled() &&
+            *nextPresentDeadlineNs =
+                winehua::NextPresentDeadlineNs(lastPresentNs_, framePeriodNs_);
+        if (policy_.perfSummary &&
             (frames_ == 1 || frames_ % 120 == 0))
         {
             OH_LOG_INFO(LOG_APP,
@@ -441,9 +423,10 @@ void main() { outColor = texture(uTexture, vTexCoord); }
     uint64_t failures_ = 0;
     uint64_t timestampFailures_ = 0;
     uint64_t throttled_ = 0;
+    winehua::PresenterRuntimePolicy policy_;
     uint64_t lastPresentNs_ = 0;
-    uint64_t displayPeriodNs_ = kDefaultFramePeriodNs;
-    uint64_t framePeriodNs_ = kDefaultFramePeriodNs;
+    uint64_t displayPeriodNs_ = winehua::kDefaultPresentFramePeriodNs;
+    uint64_t framePeriodNs_ = winehua::kDefaultPresentFramePeriodNs;
 };
 
 class SurfaceQueuePresenterManager {

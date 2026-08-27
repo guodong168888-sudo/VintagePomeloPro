@@ -1,5 +1,11 @@
 export const startServer: (sockPath: string) => boolean;
-export const setHostShadowProfile: (profile: string) => boolean;
+/** LAB-only profile override; product startup must use setHostGraphicsBackend. */
+export const setHostGraphicsExperimentForLab: (
+  experimentId: string, backend: string) => boolean;
+export const setHostGraphicsBackend: (backend: string) => boolean;
+/** LAB/smoke adapter backed by the same Native profile resolver as product startup. */
+export const resolveGuestGraphicsEnvironmentForLab: (
+  profile: string, backend: string) => string[] | null;
 export const launchClient: (exePath: string, argv: string[], sockPath: string, libPath: string,
   homeDir: string, automationMode?: boolean, prefixMode?: string, d3dBackend?: string,
   compatEnvStr?: string) => number;

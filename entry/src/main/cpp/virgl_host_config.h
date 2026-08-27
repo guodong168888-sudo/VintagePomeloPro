@@ -14,7 +14,9 @@ struct VirglHostConfig
     std::string logPath;
     std::string shadowMode;
     std::string shadowTrace;
-    std::string presentMode;
+    // WHIP v10 field 8: explicit Host/presenter observation bit. Product
+    // presentation is fixed to FIFO with synchronous release.
+    std::string perfSummary;
     std::string shadowMergeRanges;
     std::string descriptorUpdateSerialize;
     std::string gpuUploadWait;

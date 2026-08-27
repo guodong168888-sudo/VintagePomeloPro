@@ -28,6 +28,7 @@
 
 ### 优化指南
 - **[virgl_display_optimization_guide.md](virgl_display_optimization_guide.md)** — 显示管线优化设计
+- **[graphics/README.md](graphics/README.md)** — 图形栈重构计划、配置清单、workaround 台账与机器锁
 
 ### 规划
 - **[UNCERTAINTIES.md](UNCERTAINTIES.md)** — 剩余技术风险和待解决问题

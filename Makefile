@@ -407,8 +407,12 @@ hap: assemble
 # ============================================================
 HOST_TEST_DIR := $(BUILD_DIR)/host_tests
 
+.PHONY: graphics-contract-check
+graphics-contract-check:
+	bash $(SCRIPTS)/verify_graphics_contract.sh
+
 .PHONY: test
-test:
+test: graphics-contract-check
 	@mkdir -p $(HOST_TEST_DIR)
 	g++ -std=c++17 -Wall -Wextra -I $(ROOT)/entry/src/main/cpp \
 	    -o $(HOST_TEST_DIR)/geometry_test \
@@ -420,6 +424,17 @@ test:
 	    $(ROOT)/host_tests/blit_scaled_test.cpp \
 	    $(ROOT)/entry/src/main/cpp/compositor/compositor_blit.cpp
 	$(HOST_TEST_DIR)/blit_scaled_test
+	g++ -std=c++17 -Wall -Wextra -I $(ROOT)/entry/src/main/cpp \
+	    -o $(HOST_TEST_DIR)/graphics_policy_test \
+	    $(ROOT)/host_tests/graphics_policy_test.cpp \
+	    $(ROOT)/entry/src/main/cpp/graphics_profile.cpp \
+	    $(ROOT)/entry/src/main/cpp/virgl_host_config.cpp
+	$(HOST_TEST_DIR)/graphics_policy_test
+	g++ -std=c++17 -Wall -Wextra -Werror \
+	    -I $(ROOT)/thirdparty/dxvk-modern/src/dxvk \
+	    -o $(HOST_TEST_DIR)/dxvk_mapped_range_test \
+	    $(ROOT)/host_tests/dxvk_mapped_range_test.cpp
+	$(HOST_TEST_DIR)/dxvk_mapped_range_test
 
 
 # ============================================================
@@ -460,6 +475,8 @@ help:
 	@echo "  make host-vulkan # Host Vulkan exact replay"
 	@echo "  make assemble  # 组装布局"
 	@echo "  make hap       # HAP 打包 + 签名"
+	@echo "  make graphics-contract-check # 校验图形协议、默认 profile 与 gitlink"
+	@echo "  make test      # 图形契约 + 宿主机纯函数测试"
 	@echo ""
 	@echo "每个架构:"
 	@echo "  make native-x86_64  make native-arm64-v8a"

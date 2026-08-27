@@ -2,6 +2,7 @@
 
 #include "broker.h"
 #include "graphics_broker.h"
+#include "graphics_profile.h"
 #include "wayland_server.h"
 #include "wine_constants.h"
 #include "wine_env.h"
@@ -160,6 +161,16 @@ static std::string EnvKey(const std::string& line)
     return separator == std::string::npos ? line : line.substr(0, separator);
 }
 
+static std::string FindEnvValue(const std::vector<std::string>& env,
+                                const char* key)
+{
+    const std::string prefix = std::string(key) + "=";
+    for (auto it = env.rbegin(); it != env.rend(); ++it) {
+        if (it->rfind(prefix, 0) == 0) return it->substr(prefix.size());
+    }
+    return {};
+}
+
 static void UpsertEnv(std::vector<std::string>* env, std::string line)
 {
     const std::string key = EnvKey(line);
@@ -311,7 +322,8 @@ static int SpawnWineProgramImpl(const ProgramOptions& options)
         AppendVkd3dDemoPresentEnv(envStrs, options.d3dBackend, binDir);
     UpsertEnv(&envStrs, std::string("WINEHUA_AUTOMATION=") + (options.automationMode ? "1" : "0"));
     /* DXVK is a managed WineHua runtime overlay, never a game-provided DLL. */
-    if (options.d3dBackend.rfind("dxvk_", 0) == 0)
+    if (winehua::IsDxvkBackend(
+            winehua::ParseD3dBackend(options.d3dBackend)))
         OH_LOG_INFO(LOG_APP, "[WineProgram] managed D3D backend=%{public}s",
                     options.d3dBackend.c_str());
     UpsertEnv(&envStrs, "WINEHUA_WINE_UNIX_ARCH=x86_64");
@@ -501,6 +513,15 @@ napi_value RunWineProgram(napi_env env, napi_callback_info info)
     options.automationMode = GetBool(env, args[0], "automationMode", false);
     ReadStringArray(env, args[0], "argv", &options.argv);
     ReadEnvironment(env, args[0], &options.environment);
+    const winehua::D3dBackendKind requestedBackend =
+        winehua::ParseD3dBackend(options.d3dBackend);
+    if (requestedBackend == winehua::D3dBackendKind::Unknown ||
+        requestedBackend == winehua::D3dBackendKind::Vkd3dLimited500k) {
+        OH_LOG_ERROR(LOG_APP,
+                     "[WineProgram] rejected unsupported d3d backend=%{public}s",
+                     options.d3dBackend.c_str());
+        return MakeProcessObject(env, nullptr, false);
+    }
     OH_LOG_INFO(LOG_APP,
                 "[WineProgram] parsed options exe=%{public}s argc=%{public}zu env=%{public}zu",
                 options.windowsExePath.c_str(), options.argv.size(), options.environment.size());
@@ -705,9 +726,17 @@ napi_value RunWineExe(napi_env env, napi_callback_info info)
         char requestedBackend[64] = {};
         napi_get_value_string_utf8(env, args[7], requestedBackend,
                                    sizeof(requestedBackend), nullptr);
-        if (!strcmp(requestedBackend, "wined3d") ||
-            !strncmp(requestedBackend, "dxvk_", 5))
+        const winehua::D3dBackendKind backend =
+            winehua::ParseD3dBackend(requestedBackend);
+        if (backend == winehua::D3dBackendKind::WineD3d ||
+            winehua::IsDxvkBackend(backend)) {
             strncpy(d3dBackend, requestedBackend, sizeof(d3dBackend) - 1);
+        } else {
+            OH_LOG_ERROR(LOG_APP,
+                         "[Wine] rejected unsupported d3d backend=%{public}s",
+                         requestedBackend);
+            return MakeLaunchResult(env, -1, "", false);
+        }
     }
     std::vector<std::string> envOverrides;
     bool envArray = false;
@@ -756,7 +785,25 @@ napi_value RunWineExe(napi_env env, napi_callback_info info)
     // qualified DXVK/Venus/Box64 product stack. Previously only the initial
     // desktop and automation runWineProgram path received this overlay.
     AppendD3dBackendEnv(wineEnv, d3dBackend, binDir);
-    AppendProductDxvkEnv(wineEnv, d3dBackend);
+    std::string graphicsExperiment =
+        FindEnvValue(envOverrides, "WINEHUA_GRAPHICS_PROFILE");
+    if (graphicsExperiment == winehua::kProductVirglRoute ||
+        graphicsExperiment == winehua::kProductVulkanRoute) {
+        graphicsExperiment.clear();
+    } else if (!graphicsExperiment.empty()) {
+        winehua::ProductGraphicsPolicy experimentPolicy;
+        if (!winehua::ResolveLabGraphicsExperiment(
+                graphicsExperiment,
+                winehua::ParseD3dBackend(d3dBackend),
+                &experimentPolicy)) {
+            OH_LOG_ERROR(LOG_APP,
+                         "[Wine] rejected graphics LAB experiment=%{public}s "
+                         "backend=%{public}s",
+                         graphicsExperiment.c_str(), d3dBackend);
+            return MakeLaunchResult(env, -1, "", false);
+        }
+    }
+    AppendProductDxvkEnv(wineEnv, d3dBackend, graphicsExperiment);
     if (workingDirectoryPath[0])
         UpsertEnv(&wineEnv, "WINEHUA_WORKING_DIRECTORY=" +
                   std::string(workingDirectoryPath));

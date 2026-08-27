@@ -141,17 +141,15 @@ int OnVirglIpcRequest(uint32_t code, const OHIPCParcel* data,
         const char* logPath = OH_IPCParcel_ReadString(data);
         const char* shadowMode = OH_IPCParcel_ReadString(data);
         const char* shadowTrace = OH_IPCParcel_ReadString(data);
-        const char* presentMode = OH_IPCParcel_ReadString(data);
+        const char* perfSummary = OH_IPCParcel_ReadString(data);
         const char* shadowMergeRanges = OH_IPCParcel_ReadString(data);
         const char* descriptorUpdateSerialize = OH_IPCParcel_ReadString(data);
         const char* gpuUploadWait = OH_IPCParcel_ReadString(data);
         if (!helperPath || helperPath[0] != '/' || !socketPath || socketPath[0] != '/' ||
             !libraryPath || libraryPath[0] != '/' || !syncMode || !logPath || logPath[0] != '/' ||
-            !shadowMode || !shadowTrace || !presentMode || !shadowMergeRanges ||
+            !shadowMode || !shadowTrace || !perfSummary || !shadowMergeRanges ||
             !descriptorUpdateSerialize || !gpuUploadWait ||
-            (strcmp(presentMode, "fifo") && strcmp(presentMode, "mailbox") &&
-             strcmp(presentMode, "fifo-async") &&
-             strcmp(presentMode, "fifo-poll")))
+            (strcmp(perfSummary, "0") && strcmp(perfSummary, "1")))
         {
             result = -2;
         }
@@ -171,7 +169,7 @@ int OnVirglIpcRequest(uint32_t code, const OHIPCParcel* data,
                 g_vtestIpcConfig.logPath = logPath;
                 g_vtestIpcConfig.shadowMode = shadowMode;
                 g_vtestIpcConfig.shadowTrace = shadowTrace;
-                g_vtestIpcConfig.presentMode = presentMode;
+                g_vtestIpcConfig.perfSummary = perfSummary;
                 g_vtestIpcConfig.shadowMergeRanges = shadowMergeRanges;
                 g_vtestIpcConfig.descriptorUpdateSerialize =
                     descriptorUpdateSerialize;
@@ -293,7 +291,6 @@ bool IsAllowedHostEnv(const std::string& key)
            key == "VKR_WINEHUA_SHADOW_SUBMIT_UNMAP_LARGE" ||
            key == "VKR_WINEHUA_SHADOW_MERGE_RANGES" ||
            key == "VKR_WINEHUA_SHADOW_COVER_UPLOAD" ||
-           key == "WINEHUA_VENUS_PRESENT_MODE" ||
            key == "WINEHUA_VKR_FREEZE_BOOL_SPEC" ||
            key == "EGL_PLATFORM";
 }
@@ -474,10 +471,10 @@ static int RunConfiguredVtestServer(const winehua::VirglHostConfig& config)
     args.entryParams = launch.entryParams.data();
     OH_LOG_INFO(LOG_APP,
                 "[virgl-child] starting configured vtest server config=0x%{public}llx "
-                "shadow=%{public}s selector=%{public}s present=%{public}s",
+                "shadow=%{public}s selector=%{public}s perf_summary=%{public}s",
                 static_cast<unsigned long long>(launch.fingerprint),
                 config.shadowMode.c_str(), config.shadowTrace.c_str(),
-                config.presentMode.c_str());
+                config.perfSummary.c_str());
     std::atomic<bool> perfLogStop{false};
     std::thread perfLogThread;
     if (launch.forwardPerfSummary)
@@ -548,7 +545,7 @@ extern "C" __attribute__((visibility("default"))) void NativeChildProcess_MainPr
 extern "C" __attribute__((visibility("default"))) int WinehuaVirgl_RunConfiguredHost(
     const char* helperPath, const char* socketPath, const char* libraryPath,
     const char* syncMode, const char* logPath, const char* shadowMode,
-    const char* shadowTrace, const char* presentMode,
+    const char* shadowTrace, const char* perfSummary,
     const char* shadowMergeRanges, const char* descriptorUpdateSerialize,
     const char* gpuUploadWait)
 {
@@ -560,7 +557,7 @@ extern "C" __attribute__((visibility("default"))) int WinehuaVirgl_RunConfigured
         logPath ? logPath : "",
         shadowMode ? shadowMode : "",
         shadowTrace ? shadowTrace : "",
-        presentMode ? presentMode : "",
+        perfSummary ? perfSummary : "",
         shadowMergeRanges ? shadowMergeRanges : "",
         descriptorUpdateSerialize ? descriptorUpdateSerialize : "",
         gpuUploadWait ? gpuUploadWait : "",
@@ -604,17 +601,14 @@ extern "C" __attribute__((visibility("default"))) void Main(NativeChildProcess_A
 
     OH_LOG_INFO(LOG_APP,
                 "[virgl-child] helper=%{public}s socket=%{public}s hostLib=%{public}s egl=%{public}s "
-                "gles=%{public}s sync=%{public}s shadow=%{public}s trace=%{public}s "
-                "present=%{public}s",
+                "gles=%{public}s sync=%{public}s shadow=%{public}s trace=%{public}s",
                 helperPath, socketPath,
                 getenv("LD_LIBRARY_PATH") ? getenv("LD_LIBRARY_PATH") : "(unset)",
                 getenv("EGL_PLATFORM") ? getenv("EGL_PLATFORM") : "(unset)",
                 getenv("VTEST_USE_GLES") ? getenv("VTEST_USE_GLES") : "(unset)",
                 getenv("WINEHUA_VIRGL_SYNC_MODE") ? getenv("WINEHUA_VIRGL_SYNC_MODE") : "egl-thread",
                 getenv("VKR_WINEHUA_SHADOW_FROM_HOST") ? getenv("VKR_WINEHUA_SHADOW_FROM_HOST") : "full",
-                getenv("VKR_WINEHUA_SHADOW_TRACE") ? getenv("VKR_WINEHUA_SHADOW_TRACE") : "0",
-                getenv("WINEHUA_VENUS_PRESENT_MODE")
-                    ? getenv("WINEHUA_VENUS_PRESENT_MODE") : "fifo");
+                getenv("VKR_WINEHUA_SHADOW_TRACE") ? getenv("VKR_WINEHUA_SHADOW_TRACE") : "0");
 
     handle = dlopen(helperPath, RTLD_NOW | RTLD_LOCAL);
     if (!handle)
@@ -667,7 +661,8 @@ extern "C" __attribute__((visibility("default"))) void Main(NativeChildProcess_A
 #ifdef __x86_64__
     // Emulator express GPU: surfaceless EGL crashes it; use default display + GLES
     char arg3[] = "--use-gles";
-    char* argv[] = {arg0, arg1, arg2, arg3, "--socket-path", socketPath, nullptr};
+    char arg4[] = "--socket-path";
+    char* argv[] = {arg0, arg1, arg2, arg3, arg4, socketPath, nullptr};
     int rc = vtestMain(6, argv);
 #else
     char arg3[] = "--use-egl-surfaceless";
