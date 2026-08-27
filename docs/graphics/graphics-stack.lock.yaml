@@ -33,7 +33,7 @@ defaults:
 
 patches:
   vkd3d_map_width_sha256: 3ca5dcc5ef11355cde676b6661172ef1fd8afbf3b8a0cca2cc12307835017867
-  vkd3d_execute_width_sha256: 8a12840eb14d49ca97e87f01bb4cd5506ae98a0ec8efc7ffb9a99b10c328cc16
+  vkd3d_execute_width_sha256: 05df7063e506822da27c8fa05c698eeb9c8af77b0b58296d6a2b96cb1db5763f
 
 submodules:
   virglrenderer: 670ff19638724ba3e391c073d3e09fb2573246c9
