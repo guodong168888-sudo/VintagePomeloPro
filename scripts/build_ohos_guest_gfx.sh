@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/env.sh"
+source "$SCRIPT_DIR/build_cache.sh"
 BUILD_DIR="$ROOT/build"
 SDK_LINK_DIR="$ROOT/build/sdk-links"
 HOST_TOOLS_DIR="$BUILD_DIR/host-tools"
@@ -721,6 +722,44 @@ INSTALL_ROOT="$(normalize_host_path_input "$INSTALL_ROOT")"
 [ -f "$SOURCE_ROOT/meson.build" ] || err "Mesa source root is not valid (meson.build missing): $SOURCE_ROOT"
 ensure_mesa_source_layout "$SOURCE_ROOT"
 
+CACHE_COMPONENT="guest-gfx-${NATIVE_ARCH}-${PLATFORM}-${MODE}-vulkan-${VULKAN_ONLY}-package-${PACKAGE_BUNDLE}"
+CACHE_MANIFEST="$BUILD_DIR/.cache-manifests/$CACHE_COMPONENT.manifest"
+if [ "$PACKAGE_BUNDLE" -eq 1 ]; then
+    CACHE_OUTPUT_ROOT="${WINEHUA_GUEST_GFX_OUTPUT_ROOT:-$ROOT/build/guest_gfx/$NATIVE_ARCH}"
+else
+    CACHE_OUTPUT_ROOT="$INSTALL_ROOT"
+fi
+CACHE_WAYLAND_PROTOCOLS_SOURCE="$WAYLAND_PROTOCOLS_SOURCE_ROOT"
+if [ -z "$CACHE_WAYLAND_PROTOCOLS_SOURCE" ]; then
+    CACHE_WAYLAND_PROTOCOLS_SOURCE="$ROOT/thirdparty/wayland-protocols"
+fi
+CACHE_FILES_DIGEST="$(winehua_cache_files_digest \
+    "$SCRIPT_DIR/build_ohos_guest_gfx.sh" "$SCRIPT_DIR/build_guest_gfx.sh" \
+    "$SCRIPT_DIR/build_cache.sh" "$SCRIPT_DIR/env.sh")"
+CACHE_OHOS_CLANG="$("$CLANG" --version 2>&1 | head -n 1 || printf 'missing')"
+CACHE_INPUT_KEY="$(winehua_cache_input_key \
+    "$CACHE_COMPONENT" "$SOURCE_ROOT" "$CACHE_FILES_DIGEST" \
+    "libdrm=$(winehua_cache_git_digest "$LIBDRM_SOURCE_ROOT")" \
+    "wayland=$(winehua_cache_git_digest "$ROOT/thirdparty/wayland")" \
+    "wayland-protocols=$(winehua_cache_git_digest "$CACHE_WAYLAND_PROTOCOLS_SOURCE")" \
+    "ohos-clang=$CACHE_OHOS_CLANG" \
+    "target-sdk=${TARGET_SDK_VERSION:-unknown}" \
+    "compatible-sdk=${COMPATIBLE_SDK_VERSION:-unknown}" \
+    "ambient-cflags=${CFLAGS:-}" "ambient-cxxflags=${CXXFLAGS:-}")"
+mapfile -d '' -t CACHE_ARTIFACTS < <(
+    find "$CACHE_OUTPUT_ROOT" -type f -print0 2>/dev/null | sort -z)
+
+if [ "$CLEAN" -eq 0 ] && \
+   winehua_cache_verify "$CACHE_MANIFEST" "$CACHE_COMPONENT" "$CACHE_INPUT_KEY" \
+       "${CACHE_ARTIFACTS[@]}"; then
+    log "guest_gfx content cache hit: ${CACHE_INPUT_KEY:0:12}"
+    exit 0
+fi
+if [ "$CLEAN" -eq 1 ]; then
+    WINEHUA_CACHE_MISS_REASON="clean-requested"
+fi
+log "guest_gfx content cache miss: $WINEHUA_CACHE_MISS_REASON"
+
 if [ "$CLEAN" -eq 1 ]; then
     remove_tree "$BUILD_ROOT"
     remove_tree "$INSTALL_ROOT"
@@ -828,5 +867,11 @@ if [ "$PACKAGE_BUNDLE" -eq 1 ]; then
     NATIVE_ARCH="$NATIVE_ARCH" \
     bash "$SCRIPT_DIR/build_guest_gfx.sh" --install-root "$INSTALL_ROOT" --mode "$MODE"
 fi
+
+mapfile -d '' -t CACHE_ARTIFACTS < <(
+    find "$CACHE_OUTPUT_ROOT" -type f -print0 2>/dev/null | sort -z)
+[ "${#CACHE_ARTIFACTS[@]}" -gt 0 ] || err "guest_gfx cache output is empty: $CACHE_OUTPUT_ROOT"
+winehua_cache_write "$CACHE_MANIFEST" "$CACHE_COMPONENT" "$CACHE_INPUT_KEY" \
+    "${CACHE_ARTIFACTS[@]}" || err "failed to record guest_gfx content cache"
 
 log "guest_gfx Mesa build complete"

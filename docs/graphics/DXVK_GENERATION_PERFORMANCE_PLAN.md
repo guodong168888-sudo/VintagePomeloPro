@@ -277,9 +277,10 @@ VKD3D 的隔离源码刻意不复制 `.git`；上游 `vcs_tag` 在这种情况�
 十六进制 build id，先确定性物化模板，并把同一 id 写进 runtime manifest 和缓存 key；不再依赖
 父目录是否偶然处于另一个 Git worktree。
 
-下一片按同一协议覆盖 guest-gfx/guest Vulkan，然后才扩到 Wine、Box64 与 HAP。guest Vulkan 的 key
-还必须纳入 Mesa/libdrm/wayland-protocols、固定 Loader/Headers commit、Loader 补丁，以及 smoke、
-shader 与 replay 输入；不能只用最终 `manifest.json` 或 Mesa HEAD 代替完整输入边界。
+第二片已覆盖 guest-gfx/guest Vulkan：key 纳入 Mesa/libdrm/wayland/wayland-protocols、OHOS clang、
+固定 Loader/Headers commit、Loader 补丁、目标 SDK，以及 smoke、shader、replay 和可选 Heaven
+诊断输入。命中时校验 bundle/install/runtime 的整个文件树，不用最终 `manifest.json` 或 Mesa HEAD
+代替完整输入边界。下一片再扩到 Wine、Box64 与 HAP。
 
 签名流程已先按同一原则缩短失败路径：Hvigor 前验证 signing config 非空、三件材料存在、签名
 profile 有效且 bundle 与 AppScope 一致；`sign.py` 也会拒绝把解密异常文本当成口令。它不改变
@@ -297,6 +298,6 @@ profile 有效且 bundle 与 AppScope 一致；`sign.py` 也会拒绝把解密�
    request/merged range/bytes，避免只看 FPS 猜原因。
 5. 根据 Guest CPU、Host upload、final present 和 GPU draw/submission 指标选择下一分支；若共同
    Present 尾端下降但 2.6/1.10 差距不变，就停止把差距归因于 Direct Present。
-6. 在下一次候选构建中保存 DXVK/VKD3D cache miss 的首次登记与第二次 cache hit 证据，再把同一
-   协议扩到 guest-gfx/guest Vulkan；扩展前不删除旧 stamp，保证单步回滚。
+6. DXVK/VKD3D 已保存首次登记及第二次全命中证据；在下一次 guest runtime 构建中保存 guest-gfx/
+   guest Vulkan 的首次登记与第二次命中证据。旧 deps stamp 暂不删除，保证单步回滚。
 6. 在原因没有被指标区分前，不修改产品默认 backend，不增加新的公开开关。

@@ -5,6 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/env.sh"
+source "$SCRIPT_DIR/build_cache.sh"
 
 GUEST_ARCH="${NATIVE_ARCH:-x86_64}"
 [ "$GUEST_ARCH" = "x86_64" ] || err "guest Vulkan must be built as x86_64, got $GUEST_ARCH"
@@ -22,6 +23,48 @@ LOADER_INSTALL="$BUILD_ROOT/loader-install"
 OUTPUT_ROOT="$ROOT/build/guest_vulkan/$GUEST_ARCH"
 MESA_INSTALL="$BUILD_ROOT/mesa-venus-install"
 LOADER_PATCH="$ROOT/patches/vulkan-loader-v1.3.290-ohos.patch"
+
+[ -f "$LOADER_PATCH" ] || err "Vulkan Loader OHOS patch missing: $LOADER_PATCH"
+
+cache_tool_version() {
+    local tool="$1"
+    if command -v "$tool" >/dev/null 2>&1; then
+        "$tool" --version 2>&1 | head -n 1
+    else
+        printf 'missing\n'
+    fi
+}
+
+CACHE_COMPONENT="guest-vulkan-$GUEST_ARCH"
+CACHE_MANIFEST="$BUILD_DIR/.cache-manifests/$CACHE_COMPONENT.manifest"
+CACHE_FILES_DIGEST="$(winehua_cache_files_digest \
+    "$SCRIPT_DIR/build_ohos_guest_vulkan.sh" "$SCRIPT_DIR/build_ohos_guest_gfx.sh" \
+    "$SCRIPT_DIR/build_guest_gfx.sh" "$SCRIPT_DIR/build_cache.sh" "$SCRIPT_DIR/env.sh" \
+    "$LOADER_PATCH" "$ROOT/smoke" "$ROOT/replay_spv" \
+    "$ROOT/build/diagnostics/heaven-f647-capture" \
+    "$ROOT/build/diagnostics/heaven-material-depth")"
+CACHE_INPUT_KEY="$(winehua_cache_input_key \
+    "$CACHE_COMPONENT" "$ROOT/thirdparty/mesa" "$CACHE_FILES_DIGEST" \
+    "libdrm=$(winehua_cache_git_digest "$ROOT/thirdparty/libdrm")" \
+    "wayland=$(winehua_cache_git_digest "$ROOT/thirdparty/wayland")" \
+    "wayland-protocols=$(winehua_cache_git_digest "$ROOT/thirdparty/wayland-protocols")" \
+    "loader=$LOADER_COMMIT" "headers=$HEADERS_COMMIT" \
+    "ohos-clang=$("$CLANG" --version 2>&1 | head -n 1 || printf 'missing')" \
+    "cmake=$(cache_tool_version cmake)" \
+    "spirv-as=$(cache_tool_version spirv-as)" \
+    "spirv-val=$(cache_tool_version spirv-val)" \
+    "target-sdk=${TARGET_SDK_VERSION:-unknown}" \
+    "compatible-sdk=${COMPATIBLE_SDK_VERSION:-unknown}" \
+    'architecture=x86_64' 'buildtype=release' 'mesa-vulkan-driver=virtio' \
+    'loader-wsi=off')"
+mapfile -d '' -t CACHE_ARTIFACTS < <(
+    find "$OUTPUT_ROOT" -type f -print0 2>/dev/null | sort -z)
+if winehua_cache_verify "$CACHE_MANIFEST" "$CACHE_COMPONENT" "$CACHE_INPUT_KEY" \
+    "${CACHE_ARTIFACTS[@]}"; then
+    log "guest Vulkan content cache hit: ${CACHE_INPUT_KEY:0:12}"
+    exit 0
+fi
+log "guest Vulkan content cache miss: $WINEHUA_CACHE_MISS_REASON"
 
 fetch_pinned_source() {
     local url="$1" tag="$2" commit="$3" destination="$4"
@@ -42,7 +85,6 @@ fetch_pinned_source \
     https://github.com/KhronosGroup/Vulkan-Loader.git \
     "$LOADER_TAG" "$LOADER_COMMIT" "$LOADER_SOURCE"
 
-[ -f "$LOADER_PATCH" ] || err "Vulkan Loader OHOS patch missing: $LOADER_PATCH"
 if ! grep -q 'Linux|BSD|DragonFly|GNU|OHOS' "$LOADER_SOURCE/CMakeLists.txt"; then
     git -C "$LOADER_SOURCE" apply --check "$LOADER_PATCH"
     git -C "$LOADER_SOURCE" apply "$LOADER_PATCH"
@@ -1166,4 +1208,9 @@ EOF
 file "$OUTPUT_ROOT/bin/winehua_guest_vulkan_smoke" \
     "$OUTPUT_ROOT/bin/venus_heaven_material_replay" "$OUTPUT_ROOT/lib/libvulkan.so.1" \
     "$OUTPUT_ROOT/lib/libvulkan_virtio.so"
+mapfile -d '' -t CACHE_ARTIFACTS < <(
+    find "$OUTPUT_ROOT" -type f -print0 2>/dev/null | sort -z)
+[ "${#CACHE_ARTIFACTS[@]}" -gt 0 ] || err "guest Vulkan cache output is empty: $OUTPUT_ROOT"
+winehua_cache_write "$CACHE_MANIFEST" "$CACHE_COMPONENT" "$CACHE_INPUT_KEY" \
+    "${CACHE_ARTIFACTS[@]}" || err "failed to record guest Vulkan content cache"
 log "guest Vulkan runtime ready: $OUTPUT_ROOT"

@@ -443,7 +443,9 @@ require_literal "VKD3D manifest records deterministic build id" \
 for cached_build_script in \
     scripts/build_dxvk.sh \
     scripts/build_dxvk_modern.sh \
-    scripts/build_vkd3d_proton.sh; do
+    scripts/build_vkd3d_proton.sh \
+    scripts/build_ohos_guest_gfx.sh \
+    scripts/build_ohos_guest_vulkan.sh; do
     require_literal "Graphics build sources content cache" \
         'source "$SCRIPT_DIR/build_cache.sh"' "$cached_build_script"
     require_literal "Graphics build verifies content cache" \
@@ -451,6 +453,16 @@ for cached_build_script in \
     require_literal "Graphics build records content cache" \
         'winehua_cache_write "$CACHE_MANIFEST"' "$cached_build_script"
 done
+require_literal "Guest Vulkan cache includes Loader commit" \
+    '"loader=$LOADER_COMMIT"' scripts/build_ohos_guest_vulkan.sh
+require_literal "Guest Vulkan cache includes replay inputs" \
+    '"$LOADER_PATCH" "$ROOT/smoke" "$ROOT/replay_spv"' scripts/build_ohos_guest_vulkan.sh
+require_literal "Guest Vulkan cache verifies full output tree" \
+    'find "$OUTPUT_ROOT" -type f -print0' scripts/build_ohos_guest_vulkan.sh
+require_literal "Guest graphics cache includes OHOS clang" \
+    '"ohos-clang=$CACHE_OHOS_CLANG"' scripts/build_ohos_guest_gfx.sh
+require_literal "Guest graphics cache verifies selected output tree" \
+    'find "$CACHE_OUTPUT_ROOT" -type f -print0' scripts/build_ohos_guest_gfx.sh
 require_literal "Make always verifies legacy DXVK cache" \
     '$(DXVK_ARTIFACTS): dxvk-cache-check' Makefile
 require_literal "Make always verifies modern DXVK cache" \
