@@ -263,10 +263,14 @@ frame slot 现在只在真实 submit 后进入 in-flight：WSI 已完成 post-pr
 ### 7. 构建与验证改成内容寻址的短反馈环
 
 第一片已覆盖 DXVK 1.10、DXVK 2.6 和 VKD3D：`scripts/build_cache.sh` 将源码提交与工作区差异、
-递归子模块状态、补丁/构建脚本、工具链版本、架构和关键 Meson 选项合成 SHA-256 输入 key；每次
+递归子模块状态、补丁/构建脚本、编译器/Meson/Ninja/glslang/widl 工具版本、架构和关键 Meson
+选项合成 SHA-256 输入 key；每次
 `make hap` 都会检查 key，并逐个复算将要打包的 DLL/EXE/manifest 的大小与 SHA-256。两边都命中
 才跳过 Ninja，否则只重建对应组件并原子更新 `build/.cache-manifests/`。因此它不信任旧 mtime，
 也不会把只有同名文件的旧产物当作有效缓存。
+
+DXVK 2.6 的 Meson 目录还会校验其记录的源码路径与 `glslangValidator` 绝对路径；换挂载点后若旧
+路径已失效，只清理并重配该架构的 Modern build 目录，不要求新镜像或清空共享输出。
 
 下一片按同一协议覆盖 guest-gfx/guest Vulkan，然后才扩到 Wine、Box64 与 HAP。guest Vulkan 的 key
 还必须纳入 Mesa/libdrm/wayland-protocols、固定 Loader/Headers commit、Loader 补丁，以及 smoke、

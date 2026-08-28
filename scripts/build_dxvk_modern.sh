@@ -32,10 +32,49 @@ if winehua_cache_verify "$CACHE_MANIFEST" "$CACHE_COMPONENT" "$CACHE_INPUT_KEY" 
 fi
 log "DXVK Modern content cache miss: $WINEHUA_CACHE_MISS_REASON"
 
+configured_source_of() {
+    local build_dir="$1"
+    [ -f "$build_dir/meson-info/meson-info.json" ] || { printf ''; return; }
+    python3 - "$build_dir/meson-info/meson-info.json" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        print(json.load(stream)["directories"]["source"])
+except Exception:
+    print("")
+PY
+}
+
+reset_build_dir() {
+    local build_dir="$1"
+    case "$(realpath -m "$build_dir")" in
+        "$(realpath -m "$DXVK_MODERN_BUILD_ROOT")"/*) rm -rf "$build_dir" ;;
+        *) err "refusing to reset unexpected DXVK Modern build directory: $build_dir" ;;
+    esac
+}
+
 setup_if_missing() {
     local build_dir="$1"
     local cross_file="$2"
     local prefix="$3"
+    local configured_src=""
+    local cached_glslang=""
+    if [ -f "$build_dir/build.ninja" ]; then
+        configured_src="$(configured_source_of "$build_dir")"
+        if [ -n "$configured_src" ] && \
+           [ "$(realpath -m "$configured_src")" != "$(realpath "$DXVK_MODERN_SRC")" ]; then
+            log "DXVK Modern source path changed: $configured_src -> $DXVK_MODERN_SRC"
+            reset_build_dir "$build_dir"
+        fi
+    fi
+    if [ -f "$build_dir/build.ninja" ]; then
+        cached_glslang="$(grep -oE '/[^[:space:]'\''"]+/glslangValidator' \
+            "$build_dir/build.ninja" | head -n 1 || true)"
+        if [ -n "$cached_glslang" ] && [ ! -x "$cached_glslang" ]; then
+            log "DXVK Modern cached glslangValidator disappeared: $cached_glslang"
+            reset_build_dir "$build_dir"
+        fi
+    fi
     if [ ! -f "$build_dir/build.ninja" ]; then
         log "Configuring DXVK Modern $(basename "$build_dir")"
         meson setup "$build_dir" "$DXVK_MODERN_SRC" \

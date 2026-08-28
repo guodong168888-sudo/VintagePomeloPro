@@ -432,6 +432,10 @@ require_literal "Graphics cache validates artifact hashes" \
     'WINEHUA_CACHE_MISS_REASON="artifact-hash:$index"' scripts/build_cache.sh
 require_literal "Graphics cache rejects parent repository discovery" \
     'printf '\''invalid-repository\n'\''' scripts/build_cache.sh
+require_literal "Graphics cache fingerprints shader compiler" \
+    'meson ninja python3 glslangValidator patch' scripts/build_cache.sh
+require_literal "Modern cache repairs stale shader compiler path" \
+    'DXVK Modern cached glslangValidator disappeared' scripts/build_dxvk_modern.sh
 for cached_build_script in \
     scripts/build_dxvk.sh \
     scripts/build_dxvk_modern.sh \

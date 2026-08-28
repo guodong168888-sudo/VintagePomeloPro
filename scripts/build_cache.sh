@@ -78,7 +78,10 @@ winehua_cache_git_digest() {
 winehua_cache_toolchain_digest() {
     local tool=""
     {
-        for tool in meson ninja python3 x86_64-w64-mingw32-g++ i686-w64-mingw32-g++; do
+        for tool in \
+            meson ninja python3 glslangValidator patch \
+            x86_64-w64-mingw32-g++ i686-w64-mingw32-g++ \
+            x86_64-w64-mingw32-widl i686-w64-mingw32-widl; do
             printf 'tool=%s:' "$tool"
             if command -v "$tool" >/dev/null 2>&1; then
                 "$tool" --version 2>&1 | head -n 1
