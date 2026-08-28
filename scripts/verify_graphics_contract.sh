@@ -436,6 +436,10 @@ require_literal "Graphics cache fingerprints shader compiler" \
     'meson ninja python3 glslangValidator patch' scripts/build_cache.sh
 require_literal "Modern cache repairs stale shader compiler path" \
     'DXVK Modern cached glslangValidator disappeared' scripts/build_dxvk_modern.sh
+require_literal "VKD3D isolated source has deterministic build id" \
+    'deterministic_build_id="${base_commit:0:15}"' scripts/build_vkd3d_proton.sh
+require_literal "VKD3D manifest records deterministic build id" \
+    '"buildId": "$deterministic_build_id"' scripts/build_vkd3d_proton.sh
 for cached_build_script in \
     scripts/build_dxvk.sh \
     scripts/build_dxvk_modern.sh \

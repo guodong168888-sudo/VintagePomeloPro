@@ -54,6 +54,7 @@ patch_series_sha="$(sha256sum "${patches[@]}" | sha256sum | awk '{print $1}')"
 patch_head="$(sed -n '1s/^From \([0-9a-f]\{40\}\) .*/\1/p' "${patches[${#patches[@]}-1]}")"
 [ -n "$patch_head" ] || err "Cannot read VKD3D-Proton patch-series head"
 source_id="$base_commit-$patch_series_sha"
+deterministic_build_id="${base_commit:0:15}"
 
 CACHE_COMPONENT="vkd3d-proton-limited-500k"
 CACHE_MANIFEST="$BUILD_DIR/.cache-manifests/$CACHE_COMPONENT.manifest"
@@ -70,7 +71,7 @@ CACHE_FILES_DIGEST="$(winehua_cache_files_digest \
 CACHE_INPUT_KEY="$(winehua_cache_input_key \
     "$CACHE_COMPONENT" "$VKD3D_PROTON_SRC" "$CACHE_FILES_DIGEST" \
     'buildtype=release' 'architecture=x86_64' 'limited-resource-view-heaps=1' \
-    'trace=0' 'tests=1' 'extras=1')"
+    'trace=0' 'tests=1' 'extras=1' "build-id=$deterministic_build_id")"
 
 if winehua_cache_verify "$CACHE_MANIFEST" "$CACHE_COMPONENT" "$CACHE_INPUT_KEY" \
     "${CACHE_ARTIFACTS[@]}"; then
@@ -92,6 +93,18 @@ if [ ! -f "$SOURCE_STAMP" ] || [ "$(cat "$SOURCE_STAMP")" != "$source_id" ]; the
         patch -d "$SOURCE_ROOT" -p1 --forward --batch < "$patch_file"
     done
     printf '%s\n' "$source_id" > "$SOURCE_STAMP"
+fi
+
+# Meson's vcs_tag falls back to project_version ("2.6") when the isolated
+# source intentionally has no .git directory. The upstream template prefixes
+# that value with 0x, producing invalid C (0x2.6). Materialize a stable numeric
+# build id from the locked upstream commit before Meson/Ninja sees the template.
+build_id_template="$SOURCE_ROOT/vkd3d_build.h.in"
+expected_build_id_line="static const uint64_t vkd3d_build = 0x$deterministic_build_id;"
+if grep -Fq 'static const uint64_t vkd3d_build = 0x@VCS_TAG@;' "$build_id_template"; then
+    sed_i "s/0x@VCS_TAG@/0x$deterministic_build_id/" "$build_id_template"
+elif ! grep -Fqx "$expected_build_id_line" "$build_id_template"; then
+    err "unexpected VKD3D build-id template: $build_id_template"
 fi
 
 meson_args=(
@@ -152,6 +165,7 @@ cat > "$OUTPUT_ROOT/manifest.json" <<EOF
   "architecture": "x86_64-windows",
   "version": "2.6",
   "upstreamCommit": "$base_commit",
+  "buildId": "$deterministic_build_id",
   "patchSeriesHead": "$patch_head",
   "patchSeriesSha256": "$patch_series_sha",
   "maximumShaderVisibleResourceDescriptors": 500000,

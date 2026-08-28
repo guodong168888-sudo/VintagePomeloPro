@@ -272,6 +272,11 @@ frame slot 现在只在真实 submit 后进入 in-flight：WSI 已完成 post-pr
 DXVK 2.6 的 Meson 目录还会校验其记录的源码路径与 `glslangValidator` 绝对路径；换挂载点后若旧
 路径已失效，只清理并重配该架构的 Modern build 目录，不要求新镜像或清空共享输出。
 
+VKD3D 的隔离源码刻意不复制 `.git`；上游 `vcs_tag` 在这种情况下会退回项目版本 `2.6`，与其
+`0x@VCS_TAG@` 模板组合会生成非法的 `0x2.6`。构建脚本现在从已锁定 upstream commit 取 15 位
+十六进制 build id，先确定性物化模板，并把同一 id 写进 runtime manifest 和缓存 key；不再依赖
+父目录是否偶然处于另一个 Git worktree。
+
 下一片按同一协议覆盖 guest-gfx/guest Vulkan，然后才扩到 Wine、Box64 与 HAP。guest Vulkan 的 key
 还必须纳入 Mesa/libdrm/wayland-protocols、固定 Loader/Headers commit、Loader 补丁，以及 smoke、
 shader 与 replay 输入；不能只用最终 `manifest.json` 或 Mesa HEAD 代替完整输入边界。
