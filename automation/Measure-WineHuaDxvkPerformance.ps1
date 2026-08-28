@@ -12,6 +12,8 @@ param(
     [int]$ReadyTimeoutSeconds = 180,
     [ValidateRange(30, 10000)]
     [int]$ReadyFrames = 120,
+    [ValidateSet('product', 'modern-batch', 'all')]
+    [string]$ConditionSet = 'product',
     [switch]$IncludeModernBatchMappedFlushOff,
     [switch]$CollectModernMappedFlushStats,
     [string]$DeviceId = '',
@@ -421,24 +423,30 @@ function Invoke-Measurement {
     return [pscustomobject]$result
 }
 
-$conditions = @(
-    [pscustomobject]@{
+$legacyCondition = [pscustomobject]@{
         id = 'legacy-1.10-product'
         backend = 'dxvk_legacy'
         batchMappedFlushMode = 'product'
-    },
-    [pscustomobject]@{
+    }
+$modernCondition = [pscustomobject]@{
         id = 'modern-2.6-product'
         backend = 'dxvk_modern_2_6'
         batchMappedFlushMode = 'product'
     }
-)
-if ($IncludeModernBatchMappedFlushOff) {
-    $conditions += [pscustomobject]@{
+$modernBatchOffCondition = [pscustomobject]@{
         id = 'modern-2.6-batch-flush-off'
         backend = 'dxvk_modern_2_6'
         batchMappedFlushMode = 'off'
     }
+$conditions = switch ($ConditionSet) {
+    'product' { @($legacyCondition, $modernCondition) }
+    'modern-batch' { @($modernCondition, $modernBatchOffCondition) }
+    'all' { @($legacyCondition, $modernCondition, $modernBatchOffCondition) }
+}
+# Preserve the original opt-in switch as a compatibility alias for the full
+# three-condition matrix.
+if ($IncludeModernBatchMappedFlushOff -and $ConditionSet -eq 'product') {
+    $conditions = @($legacyCondition, $modernCondition, $modernBatchOffCondition)
 }
 
 $results = [System.Collections.Generic.List[object]]::new()
@@ -507,6 +515,7 @@ $comparison = [ordered]@{
     cooldownSeconds = $CooldownSeconds
     readyTimeoutSeconds = $ReadyTimeoutSeconds
     readyFrames = $ReadyFrames
+    conditionSet = $ConditionSet
     collectModernMappedFlushStats = [bool]$CollectModernMappedFlushStats
     status = if (@($results | Where-Object status -ne 'MEASURED').Count) {
         'INCONCLUSIVE'
@@ -519,7 +528,15 @@ $comparison = [ordered]@{
 $comparisonPath = Join-Path $sessionRoot 'comparison.json'
 $comparison | ConvertTo-Json -Depth 12 |
     Set-Content -LiteralPath $comparisonPath -Encoding UTF8
-$comparison | ConvertTo-Json -Depth 5
+$consoleSummary = [ordered]@{
+    schemaVersion = $comparison.schemaVersion
+    sessionId = $comparison.sessionId
+    status = $comparison.status
+    conditionSet = $ConditionSet
+    aggregates = @($aggregates)
+    comparisonPath = $comparisonPath
+}
+$consoleSummary | ConvertTo-Json -Depth 5
 Write-Host "DXVK performance archive: $comparisonPath"
 if ($comparison.status -eq 'MEASURED') { exit 0 }
 exit 2

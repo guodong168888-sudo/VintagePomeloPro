@@ -155,6 +155,9 @@ inline GPU upload、coverage sort 和 FIFO 动作，只增加每 120 帧一次�
 需要短时确认 Modern range 合并效率时，可另加 `-CollectModernMappedFlushStats`。它只在 Modern
 且 batching 未关闭的轮次设置 stats，`result.json` 会把最后一个累计 marker 解析到
 `modernMappedFlush`；正式 FPS 轮次仍应关闭该参数，避免统计原子与日志干扰稳定态。
+若产品代际基线已经完成，可用 `-ConditionSet modern-batch` 只运行 Modern 产品配置与
+batch-off 单变量，避免重复消耗 Legacy 轮次；`-ConditionSet all` 则运行完整三条件矩阵。
+终端只打印聚合摘要与归档路径，逐轮 timeline/perf marker 保留在 `comparison.json`。
 
 设备测量至少读取：
 

@@ -195,6 +195,8 @@ require_literal "DXVK performance inherits product batching" \
 require_literal "DXVK performance isolates batch-off" \
     "id = 'modern-2.6-batch-flush-off'" \
     automation/Measure-WineHuaDxvkPerformance.ps1
+require_literal "DXVK performance supports focused Modern batch A/B" \
+    "'modern-batch'" automation/Measure-WineHuaDxvkPerformance.ps1
 require_literal "DXVK performance product-equivalent observation" \
     "observe-frame-timeline" \
     automation/Measure-WineHuaDxvkPerformance.ps1
@@ -217,6 +219,8 @@ require_literal "DXVK performance excludes startup from sample" \
     automation/Measure-WineHuaDxvkPerformance.ps1
 require_literal "DXVK performance uses interval FPS" \
     "samplePresenterFps" automation/Measure-WineHuaDxvkPerformance.ps1
+require_literal "DXVK performance keeps console output compact" \
+    "consoleSummary" automation/Measure-WineHuaDxvkPerformance.ps1
 require_literal "Frame-order validates transport action" \
     "presentActionContract" automation/Measure-WineHuaFrameOrder.ps1
 require_literal "Frame-order parser accepts Direct transport summary" \
