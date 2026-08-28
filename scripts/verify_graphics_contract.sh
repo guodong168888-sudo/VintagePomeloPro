@@ -210,6 +210,13 @@ require_literal "DXVK aggregate prevents mixed transport attribution" \
     "transportsObserved" automation/Measure-WineHuaDxvkPerformance.ps1
 require_literal "DXVK performance validates transport action" \
     "presentActionContract" automation/Measure-WineHuaDxvkPerformance.ps1
+require_literal "DXVK performance waits for rendered workload" \
+    "Wait-PresenterReady" automation/Measure-WineHuaDxvkPerformance.ps1
+require_literal "DXVK performance excludes startup from sample" \
+    "Sampling starts from a clean log buffer" \
+    automation/Measure-WineHuaDxvkPerformance.ps1
+require_literal "DXVK performance uses interval FPS" \
+    "samplePresenterFps" automation/Measure-WineHuaDxvkPerformance.ps1
 require_literal "Frame-order validates transport action" \
     "presentActionContract" automation/Measure-WineHuaFrameOrder.ps1
 require_literal "Frame-order parser accepts Direct transport summary" \

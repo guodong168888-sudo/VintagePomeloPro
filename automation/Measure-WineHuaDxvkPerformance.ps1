@@ -8,6 +8,10 @@ param(
     [int]$SampleSeconds = 60,
     [ValidateRange(0, 180)]
     [int]$CooldownSeconds = 15,
+    [ValidateRange(30, 600)]
+    [int]$ReadyTimeoutSeconds = 180,
+    [ValidateRange(30, 10000)]
+    [int]$ReadyFrames = 120,
     [switch]$IncludeModernBatchMappedFlushOff,
     [switch]$CollectModernMappedFlushStats,
     [string]$DeviceId = '',
@@ -79,7 +83,7 @@ function Convert-KeyValueLogLine {
 
 function Get-NearestRankPercentile {
     param(
-        [Parameter(Mandatory)][double[]]$Values,
+        [Parameter(Mandatory)][AllowEmptyCollection()][double[]]$Values,
         [Parameter(Mandatory)][ValidateRange(0.0, 1.0)][double]$Percentile
     )
     if ($Values.Count -eq 0) { return $null }
@@ -89,7 +93,7 @@ function Get-NearestRankPercentile {
 }
 
 function Get-TimelineStatistics {
-    param([Parameter(Mandatory)][object[]]$Samples)
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Samples)
     $result = [ordered]@{ sampleCount = $Samples.Count }
     foreach ($name in @(
         'present_cpu_us', 'release_wait_us', 'wait_fence_us', 'acquire_us',
@@ -110,6 +114,102 @@ function Get-TimelineStatistics {
         }
     }
     return [pscustomobject]$result
+}
+
+function Get-PresenterIntervalStatistics {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Lines)
+
+    $samples = @($Lines | ForEach-Object {
+        $timestampMatch = [regex]::Match(
+            $_, '^(?<month>\d{2})-(?<day>\d{2})\s+' +
+                '(?<hour>\d{2}):(?<minute>\d{2}):(?<second>\d{2})\.(?<millisecond>\d{3})')
+        $values = Convert-KeyValueLogLine -Line $_
+        if (-not $timestampMatch.Success -or
+            -not $values.PSObject.Properties['frames'] -or
+            -not $values.PSObject.Properties['key'] -or
+            -not $values.PSObject.Properties['fps']) {
+            return
+        }
+        $timestampText = '{0:d4}-{1}-{2} {3}:{4}:{5}.{6}' -f
+            (Get-Date).Year,
+            $timestampMatch.Groups['month'].Value,
+            $timestampMatch.Groups['day'].Value,
+            $timestampMatch.Groups['hour'].Value,
+            $timestampMatch.Groups['minute'].Value,
+            $timestampMatch.Groups['second'].Value,
+            $timestampMatch.Groups['millisecond'].Value
+        $timestamp = [DateTime]::ParseExact(
+            $timestampText, 'yyyy-MM-dd HH:mm:ss.fff',
+            [Globalization.CultureInfo]::InvariantCulture)
+        [pscustomobject]@{
+            timestamp = $timestamp
+            key = [string]$values.key
+            frames = [long]$values.frames
+        }
+    })
+
+    $best = $null
+    foreach ($group in @($samples | Group-Object key)) {
+        $ordered = @($group.Group | Sort-Object timestamp)
+        if ($ordered.Count -lt 2) { continue }
+        $first = $ordered[0]
+        $last = $ordered[-1]
+        $elapsedSeconds = ($last.timestamp - $first.timestamp).TotalSeconds
+        $frameDelta = $last.frames - $first.frames
+        if ($elapsedSeconds -le 0 -or $frameDelta -le 0) { continue }
+        $candidate = [pscustomobject][ordered]@{
+            sampleCount = $ordered.Count
+            key = $group.Name
+            firstFrames = $first.frames
+            lastFrames = $last.frames
+            frameDelta = $frameDelta
+            elapsedSeconds = [Math]::Round($elapsedSeconds, 3)
+            fps = [Math]::Round($frameDelta / $elapsedSeconds, 3)
+        }
+        if (-not $best -or $candidate.elapsedSeconds -gt $best.elapsedSeconds) {
+            $best = $candidate
+        }
+    }
+    return $best
+}
+
+function Wait-PresenterReady {
+    param(
+        [Parameter(Mandatory)][string]$RunDirectory,
+        [Parameter(Mandatory)][int]$TimeoutSeconds,
+        [Parameter(Mandatory)][int]$MinimumFrames
+    )
+
+    $startedAt = [DateTimeOffset]::Now
+    $lastFrameCount = 0L
+    $latestLog = @()
+    while (([DateTimeOffset]::Now - $startedAt).TotalSeconds -lt $TimeoutSeconds) {
+        $latestLog = @(Invoke-Hdc -Arguments @('shell', 'hilog', '-x'))
+        $summaryLines = @($latestLog | Where-Object {
+            $_ -match '\[VENUS-PRESENT\]\[NCP\].*\bframes=' -and
+            $_ -match '\bfps='
+        })
+        foreach ($line in $summaryLines) {
+            $present = Convert-KeyValueLogLine -Line $line
+            if ($present.PSObject.Properties['frames']) {
+                $lastFrameCount = [Math]::Max($lastFrameCount, [long]$present.frames)
+            }
+        }
+        if ($lastFrameCount -ge $MinimumFrames) {
+            $latestLog | Set-Content -LiteralPath (
+                Join-Path $RunDirectory 'readiness-hilog.txt') -Encoding UTF8
+            return [pscustomobject][ordered]@{
+                elapsedSeconds = [Math]::Round(
+                    ([DateTimeOffset]::Now - $startedAt).TotalSeconds, 3)
+                frames = $lastFrameCount
+                log = $latestLog
+            }
+        }
+        Start-Sleep -Seconds 1
+    }
+    $latestLog | Set-Content -LiteralPath (
+        Join-Path $RunDirectory 'readiness-timeout-hilog.txt') -Encoding UTF8
+    throw "Heaven did not reach $MinimumFrames presented frames within $TimeoutSeconds seconds (last=$lastFrameCount)"
 }
 
 function Test-PresentActionContract {
@@ -180,7 +280,7 @@ function Invoke-Measurement {
     New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
     $startedAt = [DateTimeOffset]::Now
     $result = [ordered]@{
-        schemaVersion = 3
+        schemaVersion = 4
         runId = $runId
         condition = $Condition.id
         d3dBackend = $Condition.backend
@@ -191,6 +291,8 @@ function Invoke-Measurement {
         observationExperiment = $observationExperiment
         warmupSeconds = $WarmupSeconds
         sampleSeconds = $SampleSeconds
+        readyTimeoutSeconds = $ReadyTimeoutSeconds
+        readyFrames = $ReadyFrames
         startedAt = $startedAt.ToString('o')
         status = 'INFRA_ERROR'
     }
@@ -220,7 +322,17 @@ function Invoke-Measurement {
             throw 'WineHua Heaven launcher failed'
         }
 
+        $readiness = Wait-PresenterReady -RunDirectory $runDirectory `
+            -TimeoutSeconds $ReadyTimeoutSeconds -MinimumFrames $ReadyFrames
+        $warmupStartedAt = [DateTimeOffset]::Now
         Start-Sleep -Seconds $WarmupSeconds
+        $preSampleLog = @(Invoke-Hdc -Arguments @('shell', 'hilog', '-x'))
+        $preSampleLog | Set-Content -LiteralPath (
+            Join-Path $runDirectory 'warmup-hilog.txt') -Encoding UTF8
+        # Sampling starts from a clean log buffer. Otherwise startup extraction,
+        # Heaven loading, and the cumulative presenter FPS contaminate the A/B
+        # window even though the wall-clock sample begins later.
+        Invoke-Hdc -Arguments @('shell', 'hilog', '-r') | Out-Null
         $measurementStartedAt = [DateTimeOffset]::Now
         Start-Sleep -Seconds $SampleSeconds
         $measurementEndedAt = [DateTimeOffset]::Now
@@ -250,11 +362,15 @@ function Invoke-Measurement {
             $_ -match 'VK_ERROR|device.?lost|CRASH|FATAL' -and
             $_ -match $graphicsContextPattern
         })
-        $backendObserved = [bool]($interesting | Where-Object {
+        $backendObserved = [bool]($preSampleLog | Where-Object {
             $_ -match [regex]::Escape("backend=$($Condition.backend)") -or
             $_ -match [regex]::Escape("WINEHUA_D3D_BACKEND=$($Condition.backend)")
         } | Select-Object -First 1)
+        $presentInterval = Get-PresenterIntervalStatistics -Lines $presentLines
 
+        $result['readinessElapsedSeconds'] = $readiness.elapsedSeconds
+        $result['readinessFrames'] = $readiness.frames
+        $result['warmupStartedAt'] = $warmupStartedAt.ToString('o')
         $result['measurementStartedAt'] = $measurementStartedAt.ToString('o')
         $result['measurementEndedAt'] = $measurementEndedAt.ToString('o')
         $result['actualSampleSeconds'] = [Math]::Round(
@@ -268,6 +384,10 @@ function Invoke-Measurement {
         $result['presentTransport'] = if ($result['venusPresent']) {
             $result['venusPresent'].transport
         } else { $null }
+        $result['presentInterval'] = $presentInterval
+        $result['samplePresenterFps'] = if ($presentInterval) {
+            $presentInterval.fps
+        } else { $null }
         $result['presentActionContract'] =
             Test-PresentActionContract -Present $result['venusPresent']
         $result['venusTimeline'] = Get-TimelineStatistics -Samples $timelineSamples
@@ -277,6 +397,7 @@ function Invoke-Measurement {
         } else { $null }
         $result['criticalErrors'] = $criticalErrors
         $result['status'] = if (-not $backendObserved -or $presentLines.Count -eq 0 -or
+            $null -eq $result['samplePresenterFps'] -or
             $null -eq $result['presentActionContract']) {
             'INCONCLUSIVE'
         } elseif ($criticalErrors.Count -gt 0 -or
@@ -338,8 +459,8 @@ $legacyAverageFps = $null
 foreach ($condition in $conditions) {
     $conditionResults = @($results | Where-Object condition -eq $condition.id)
     [double[]]$fpsValues = @($conditionResults | ForEach-Object {
-        if ($_.venusPresent -and $null -ne $_.venusPresent.fps) {
-            [double]$_.venusPresent.fps
+        if ($null -ne $_.samplePresenterFps) {
+            [double]$_.samplePresenterFps
         }
     })
     $averageFps = if ($fpsValues.Count) {
@@ -377,13 +498,15 @@ if ($legacyAverageFps) {
 }
 
 $comparison = [ordered]@{
-    schemaVersion = 3
+    schemaVersion = 4
     sessionId = $sessionId
     observationExperiment = $observationExperiment
     rounds = $Rounds
     warmupSeconds = $WarmupSeconds
     sampleSeconds = $SampleSeconds
     cooldownSeconds = $CooldownSeconds
+    readyTimeoutSeconds = $ReadyTimeoutSeconds
+    readyFrames = $ReadyFrames
     collectModernMappedFlushStats = [bool]$CollectModernMappedFlushStats
     status = if (@($results | Where-Object status -ne 'MEASURED').Count) {
         'INCONCLUSIVE'

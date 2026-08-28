@@ -133,7 +133,10 @@ VirGL/Venus presenter 对两代相同。若 2.6 的 `wait_fence`、`acquire`、`
 2. Modern 2.6 产品基线（继承产品的 mapped-flush batching）。
 3. 可选 Modern 2.6 batch-off 单变量。
 
-各轮循环旋转顺序。它使用现有
+各轮循环旋转顺序。启动后先等待 Presenter 至少提交 120 帧，再开始预热；预热结束时清空
+hilog，避免首次 runtime 解压、Wine 初始化和 Heaven Loading 混入正式采样。正式 FPS 使用采样窗口内
+同一 surface 的 Presenter 帧号增量/日志时间增量计算，不再使用从首帧起累计、会被加载阶段稀释的 FPS。
+空 timeline 或 FPS 样本会将单轮标记为 `INCONCLUSIVE`，但不会中断整组 A/B 会话。它使用现有
 `observe-frame-timeline` LAB 观察实验；该实验从产品策略派生，保持 precise-dirty、
 inline GPU upload、coverage sort 和 FIFO 动作，只增加每 120 帧一次的阶段观测。产物仅包含每轮
 一张截图、筛选后的图形日志和 JSON，不复制 HAP、runtime 或源码。
