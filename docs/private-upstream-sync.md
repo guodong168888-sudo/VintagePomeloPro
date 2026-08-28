@@ -6,6 +6,22 @@
 
 > **同步基线标记**：最新核对到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `d256317e`，本地镜像 `mirror_master`）。下次同步先 `git fetch winehua && git branch -f mirror_master winehua/master && git log d256317e..mirror_master --oneline`，避免重复合并。
 
+### 2026-08-28 对齐会话生命周期三原语命名（d256317e 结构层）
+
+- 分支：产品线 `main`（叠在启动/环境栈第 1–5 步之上）。
+- 镜像：`winehua/master` @ `d256317e`。
+- 原则：只在 `WineEngineService` 上挂齐 `startSession` / `stopSession` / `wipeEnvironment` 三个名字，方便后续上游重构落到同一结构。不上游 `WineEnvService` 类、不引入前台 overlay / `opBusy` / `EngineGuide`、不改 `AppSessionService` / 设置页调用方。
+- 映射（行为与改前相同）：
+
+  | 上游原语 | 本仓实现 | 产品入口（保留） |
+  | --- | --- | --- |
+  | `startSession` | 原 `ensureReady` 体（幂等；首启/二启仍由 native prefix 决定） | `ensureReady` 转发 |
+  | `stopSession` | 原 `stopAll` 体（NAPI `stopAll` + 35s drain + 300ms socket settle） | `stopAll` 转发 |
+  | `wipeEnvironment` | `resetWinePrefix` + `forceRefreshRuntime`（不清整棵 `WINE_ROOT`） | `resetPrefix` 的清空半段 |
+
+- 组合未改：`restart` = `stopSession` + `startSession`；`resetPrefix` = `stopSession` +（可选文档/注册表备份）+ `wipeEnvironment` +（还原）+ `startSession`。ERROR + 仍有活进程时仍等待、不双开。
+- 验证：`make hap`（winehua-dev / vp-build，arm64-v8a，API 23）CompileArkTS + 签名通过。调用方与 UI 未改，未做真机动作回归。
+
 ### 2026-08-27 对齐 WineHua master 启动/环境栈第 5 步
 
 - 分支：`feature/align-env-spawn-1-4`（叠在第 1–4 步之上；真机已验证 1–4 可玩后再做本步）。
@@ -58,7 +74,7 @@
   - `3b589770` `95d03f95` `ade24e0f`（docs）
   - `b04e3410` `18b6f5a5` `f3370b05` `fed07ecf` `f9aaaaed` 的 EnvSpec/Spawner/「全部 wineserver 改走 broker、删除 NCP 直启」
   - `3720e13a`（`Box64Dynarec.ets` 单源化；本仓 `FilterCompatLines` 已用 `BOX64_DYNAREC_` 前缀门）
-  - `d256317e` 的 `WineEnvService.startSession/stopSession/wipeEnvironment` 重命名（本仓已是 `WineEngineService.ensureReady/stopAll/resetPrefix`，重启/重置已无条件先停）
+  - `d256317e` 的 `WineEnvService` 类本身（本仓仍用 `WineEngineService`；三原语名字已于 2026-08-28 挂到该类上，见上一节）
 - 子模块 gitlink：未跟随上游。
 - 验证：`make hap`（winehua-dev / vp-build，arm64-v8a，API 23）。
 

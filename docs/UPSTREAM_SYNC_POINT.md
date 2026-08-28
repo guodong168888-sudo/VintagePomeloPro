@@ -11,15 +11,15 @@
 | 上游分支 | `master` |
 | **最后核对的上游 SHA** | `d256317e`（2026-08-27，`winehua/master` 尖端） |
 | 功能同步起点（用户指定） | `10a9e6caf33e0147363793947461417dd60a8372`（master 线等价 `189c27c`） |
-| 合并方式 | 第 1–5 步已对齐 EnvSpec / 基线 / Profile / Spawner（全部 kind 走 broker）。不上游品牌/版本号/CI/README |
-| 本地对应分支 | `feature/align-env-spawn-1-4`（叠在 `feature/host-fps-hud` 上） |
-| 核对日期 | 2026-08-27 |
+| 合并方式 | 第 1–5 步已对齐 EnvSpec / 基线 / Profile / Spawner（全部 kind 走 broker）。`d256317e` 三原语名字已挂到 `WineEngineService`（不上游 `WineEnvService` / overlay）。不上游品牌/版本号/CI/README |
+| 本地对应分支 | `main`（含 `feature/align-env-spawn-1-4`） |
+| 核对日期 | 2026-08-28 |
 
-## 已对齐的上游架构（第 1–5 步）
+## 已对齐的上游架构（第 1–5 步 + 三原语命名）
 
 WineHua `master` @ `d256317e` 的 EnvSpec / Profile / SpawnRequest 重构，本仓按第 1–5 步落地（`175ed930` `af871191` `3725dfb5` `d00df45b` + 第 5 步 `f9aaaaed` 适配）。wineserver/wineboot 经 broker 单一通道，`wine_child Main` 截获 wineserver 转入本体。
 
-明细见 `docs/private-upstream-sync.md`「2026-08-27 对齐 WineHua master 启动/环境栈第 5 步」。
+`startSession` / `stopSession` / `wipeEnvironment` 已作为 `WineEngineService` 上的命名入口；产品仍走 `ensureReady` / `stopAll` / `resetPrefix`。明细见 `docs/private-upstream-sync.md`「2026-08-28 对齐会话生命周期三原语命名」与「2026-08-27 对齐 WineHua master 启动/环境栈第 5 步」。
 
 ## 已核对的上游增量（90edaae..d256317e）
 
