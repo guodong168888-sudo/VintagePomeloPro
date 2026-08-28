@@ -262,10 +262,15 @@ frame slot 现在只在真实 submit 后进入 in-flight：WSI 已完成 post-pr
 
 ### 7. 构建与验证改成内容寻址的短反馈环
 
-当前 Makefile 的大组件缓存仍主要比较 mtime；同一内容换到干净 ext4 checkout 后可能误判为需要
-重编，反过来旧 stamp 也不足以证明输入完全一致。下一阶段应为 DXVK、VKD3D、Wine、Box64、
-guest-gfx 和 HAP 分别记录“源码/补丁/工具链/架构/关键选项”输入摘要，只有摘要和产物校验都命中
-才复用。这会把分支切换和验证从人工 touch stamp 变成可审计的内容缓存。
+第一片已覆盖 DXVK 1.10、DXVK 2.6 和 VKD3D：`scripts/build_cache.sh` 将源码提交与工作区差异、
+递归子模块状态、补丁/构建脚本、工具链版本、架构和关键 Meson 选项合成 SHA-256 输入 key；每次
+`make hap` 都会检查 key，并逐个复算将要打包的 DLL/EXE/manifest 的大小与 SHA-256。两边都命中
+才跳过 Ninja，否则只重建对应组件并原子更新 `build/.cache-manifests/`。因此它不信任旧 mtime，
+也不会把只有同名文件的旧产物当作有效缓存。
+
+下一片按同一协议覆盖 guest-gfx/guest Vulkan，然后才扩到 Wine、Box64 与 HAP。guest Vulkan 的 key
+还必须纳入 Mesa/libdrm/wayland-protocols、固定 Loader/Headers commit、Loader 补丁，以及 smoke、
+shader 与 replay 输入；不能只用最终 `manifest.json` 或 Mesa HEAD 代替完整输入边界。
 
 签名流程已先按同一原则缩短失败路径：Hvigor 前验证 signing config 非空、三件材料存在、签名
 profile 有效且 bundle 与 AppScope 一致；`sign.py` 也会拒绝把解密异常文本当成口令。它不改变
@@ -283,4 +288,6 @@ profile 有效且 bundle 与 AppScope 一致；`sign.py` 也会拒绝把解密�
    request/merged range/bytes，避免只看 FPS 猜原因。
 5. 根据 Guest CPU、Host upload、final present 和 GPU draw/submission 指标选择下一分支；若共同
    Present 尾端下降但 2.6/1.10 差距不变，就停止把差距归因于 Direct Present。
+6. 在下一次候选构建中保存 DXVK/VKD3D cache miss 的首次登记与第二次 cache hit 证据，再把同一
+   协议扩到 guest-gfx/guest Vulkan；扩展前不删除旧 stamp，保证单步回滚。
 6. 在原因没有被指标区分前，不修改产品默认 backend，不增加新的公开开关。

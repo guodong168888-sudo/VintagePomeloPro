@@ -7,6 +7,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/env.sh"
+source "$SCRIPT_DIR/build_cache.sh"
 
 PATCH_ROOT="$ROOT/patches/vkd3d-proton"
 SOURCE_ROOT="$VKD3D_PROTON_BUILD_ROOT/limited-500k-source"
@@ -53,6 +54,30 @@ patch_series_sha="$(sha256sum "${patches[@]}" | sha256sum | awk '{print $1}')"
 patch_head="$(sed -n '1s/^From \([0-9a-f]\{40\}\) .*/\1/p' "${patches[${#patches[@]}-1]}")"
 [ -n "$patch_head" ] || err "Cannot read VKD3D-Proton patch-series head"
 source_id="$base_commit-$patch_series_sha"
+
+CACHE_COMPONENT="vkd3d-proton-limited-500k"
+CACHE_MANIFEST="$BUILD_DIR/.cache-manifests/$CACHE_COMPONENT.manifest"
+CACHE_ARTIFACTS=(
+    "$OUTPUT_X64/d3d12.dll"
+    "$OUTPUT_X64/winehua-d3d12-smoke.exe"
+    "$OUTPUT_X64/triangle.exe"
+    "$OUTPUT_X64/gears.exe"
+    "$OUTPUT_ROOT/manifest.json"
+)
+CACHE_FILES_DIGEST="$(winehua_cache_files_digest \
+    "$SCRIPT_DIR/build_vkd3d_proton.sh" "$SCRIPT_DIR/build_cache.sh" \
+    "$SCRIPT_DIR/env.sh" "${patches[@]}")"
+CACHE_INPUT_KEY="$(winehua_cache_input_key \
+    "$CACHE_COMPONENT" "$VKD3D_PROTON_SRC" "$CACHE_FILES_DIGEST" \
+    'buildtype=release' 'architecture=x86_64' 'limited-resource-view-heaps=1' \
+    'trace=0' 'tests=1' 'extras=1')"
+
+if winehua_cache_verify "$CACHE_MANIFEST" "$CACHE_COMPONENT" "$CACHE_INPUT_KEY" \
+    "${CACHE_ARTIFACTS[@]}"; then
+    log "VKD3D-Proton content cache hit: ${CACHE_INPUT_KEY:0:12}"
+    exit 0
+fi
+log "VKD3D-Proton content cache miss: $WINEHUA_CACHE_MISS_REASON"
 
 if [ ! -f "$SOURCE_STAMP" ] || [ "$(cat "$SOURCE_STAMP")" != "$source_id" ]; then
     log "Refreshing isolated VKD3D-Proton source"
@@ -139,5 +164,8 @@ cat > "$OUTPUT_ROOT/manifest.json" <<EOF
   }
 }
 EOF
+
+winehua_cache_write "$CACHE_MANIFEST" "$CACHE_COMPONENT" "$CACHE_INPUT_KEY" \
+    "${CACHE_ARTIFACTS[@]}" || err "failed to record VKD3D-Proton content cache"
 
 log "VKD3D-Proton ready: base=${base_commit:0:8} patch=${patch_head:0:8} dll=$dll_sha"

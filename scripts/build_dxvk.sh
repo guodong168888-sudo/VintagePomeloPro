@@ -7,8 +7,38 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/env.sh"
+source "$SCRIPT_DIR/build_cache.sh"
 
 [ -d "$DXVK_SRC" ] || err "DXVK fork missing: $DXVK_SRC"
+
+CACHE_COMPONENT="dxvk-legacy"
+CACHE_MANIFEST="$BUILD_DIR/.cache-manifests/$CACHE_COMPONENT.manifest"
+CACHE_ARTIFACTS=(
+    "$DXVK_BUILD_ROOT/x64/bin/d3d9.dll"
+    "$DXVK_BUILD_ROOT/x64/bin/d3d10core.dll"
+    "$DXVK_BUILD_ROOT/x64/bin/d3d10.dll"
+    "$DXVK_BUILD_ROOT/x64/bin/d3d10_1.dll"
+    "$DXVK_BUILD_ROOT/x64/bin/d3d11.dll"
+    "$DXVK_BUILD_ROOT/x64/bin/dxgi.dll"
+    "$DXVK_BUILD_ROOT/x86/bin/d3d9.dll"
+    "$DXVK_BUILD_ROOT/x86/bin/d3d10core.dll"
+    "$DXVK_BUILD_ROOT/x86/bin/d3d10.dll"
+    "$DXVK_BUILD_ROOT/x86/bin/d3d10_1.dll"
+    "$DXVK_BUILD_ROOT/x86/bin/d3d11.dll"
+    "$DXVK_BUILD_ROOT/x86/bin/dxgi.dll"
+)
+CACHE_FILES_DIGEST="$(winehua_cache_files_digest \
+    "$SCRIPT_DIR/build_dxvk.sh" "$SCRIPT_DIR/build_cache.sh" "$SCRIPT_DIR/env.sh")"
+CACHE_INPUT_KEY="$(winehua_cache_input_key \
+    "$CACHE_COMPONENT" "$DXVK_SRC" "$CACHE_FILES_DIGEST" \
+    'buildtype=release' 'architectures=x86_64,i686' 'managed-runtime=legacy')"
+
+if winehua_cache_verify "$CACHE_MANIFEST" "$CACHE_COMPONENT" "$CACHE_INPUT_KEY" \
+    "${CACHE_ARTIFACTS[@]}"; then
+    log "DXVK Legacy content cache hit: ${CACHE_INPUT_KEY:0:12}"
+    exit 0
+fi
+log "DXVK Legacy content cache miss: $WINEHUA_CACHE_MISS_REASON"
 
 # 读取 meson 缓存里配置的源码绝对路径 (可能为空)
 configured_source_of() {
@@ -64,5 +94,8 @@ for dll in d3d11.dll dxgi.dll; do
     [ -f "$DXVK_BUILD_ROOT/x86/bin/$dll" ] || \
         err "DXVK x86 artifact missing: $DXVK_BUILD_ROOT/x86/bin/$dll"
 done
+
+winehua_cache_write "$CACHE_MANIFEST" "$CACHE_COMPONENT" "$CACHE_INPUT_KEY" \
+    "${CACHE_ARTIFACTS[@]}" || err "failed to record DXVK Legacy content cache"
 
 log "DXVK Legacy ready: $(git -c safe.directory="$DXVK_SRC" -C "$DXVK_SRC" rev-parse --short HEAD)"

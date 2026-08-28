@@ -38,6 +38,7 @@
 1. VKD3D 0001..0019 已在 `3e5aab6` 上以 `fuzz=0` 完整应用并完成 limited-500K x64 编译；下一门禁是设备 gears/SingleGpu 动画与 Width-flush 统计。
 2. `GraphicsProfile`/DP1 已通过宿主测试、ARM64/x86_64 Native 严格链接和 API 23 ARM64 HAP 编译/Release 签名。候选版本为 1.2.9，签名 HAP SHA-256 为 `08920731b159f777edc93e72ba61ee0bba67da798f14c560a5a05d8dc852553b`。
 3. 当前设备离线，尚未覆盖安装候选；设备恢复后先做正确性/帧序矩阵，再运行三轮 DXVK 1.10/2.6 同条件 Heaven 稳定态对照。
+4. DXVK 1.10、DXVK 2.6 与 VKD3D 的内容寻址构建校验已落地：输入 key 与所有打包产物哈希同时命中才复用；guest-gfx/guest Vulkan 是下一缓存边界，不再依赖人工 touch stamp。
 4. 通过上述门禁后再评估 GLES Direct 与 scanout backing；不得整分支合并或沿用已漂移的旧 cherry-pick 配方。
 
 ## 本地校验

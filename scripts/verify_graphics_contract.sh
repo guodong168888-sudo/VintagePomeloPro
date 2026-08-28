@@ -426,4 +426,28 @@ require_literal "VKD3D Execute Width hook" \
     "vkd3d_winehua_flush_mapped_upload_buffers(command_queue->device);" \
     patches/vkd3d-proton/0019-vkd3d-flush-mapped-upload-width-on-execute.patch
 
+require_literal "Graphics cache validates input key" \
+    'grep -qx "input_sha256=$input_key"' scripts/build_cache.sh
+require_literal "Graphics cache validates artifact hashes" \
+    'WINEHUA_CACHE_MISS_REASON="artifact-hash:$index"' scripts/build_cache.sh
+require_literal "Graphics cache rejects parent repository discovery" \
+    'printf '\''invalid-repository\n'\''' scripts/build_cache.sh
+for cached_build_script in \
+    scripts/build_dxvk.sh \
+    scripts/build_dxvk_modern.sh \
+    scripts/build_vkd3d_proton.sh; do
+    require_literal "Graphics build sources content cache" \
+        'source "$SCRIPT_DIR/build_cache.sh"' "$cached_build_script"
+    require_literal "Graphics build verifies content cache" \
+        'winehua_cache_verify "$CACHE_MANIFEST"' "$cached_build_script"
+    require_literal "Graphics build records content cache" \
+        'winehua_cache_write "$CACHE_MANIFEST"' "$cached_build_script"
+done
+require_literal "Make always verifies legacy DXVK cache" \
+    '$(DXVK_ARTIFACTS): dxvk-cache-check' Makefile
+require_literal "Make always verifies modern DXVK cache" \
+    '$(DXVK_MODERN_ARTIFACTS): dxvk-modern-cache-check' Makefile
+require_literal "Make always verifies VKD3D cache" \
+    '$(VKD3D_PROTON_ARTIFACTS): vkd3d-proton-cache-check' Makefile
+
 printf 'graphics-contract: all checks passed\n'
