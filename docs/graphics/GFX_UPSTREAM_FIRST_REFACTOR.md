@@ -37,13 +37,15 @@
 
 退出条件：`make graphics-contract-check` 通过；文档不存在互相冲突的“当前默认”。
 
-### Phase 1：建立单一配置模型（代码已落地，待 HAP/设备门禁）
+### Phase 1：建立单一配置模型（代码与 ARM64 HAP 已通过，待设备门禁）
 
 - 在 Native 层定义 `GraphicsProfileId`、`GraphicsCapabilities`、`GraphicsProfile` 和 `ResolveGraphicsProfile()`。
 - 先以 characterization tests 固定现有字符串到环境变量的映射，再迁移逻辑。
 - ArkTS 传递公开意图和显式 LAB override，不再拼接底层环境变量集合。
 
 当前进度：`graphics_profile.h/.cpp` 已成为 product route、LAB experiment 与 DXVK runtime 的唯一解析器；ArkTS 生产入口只传 D3D backend。WineD3D/OpenGL 解析为 `product-virgl`，DXVK 1.10/2.6 与 VKD3D 解析为 `product-vulkan`；VKD3D 固定配套 DXVK 2.6.2 DXGI。产品策略不查询 LAB 实验。历史 32 个组合 profile 已删除，替换为 5 个从产品策略派生的观察/单变量实验；未知 backend/experiment fail closed。
+
+集成状态：相同源码已通过 ARM64/x86_64 Native 严格链接；API 23 ARM64 1.2.9 HAP 已完成 Native、ArkTS、资源打包、Release 签名和签名块验证。包内只有 ARM64 Native ABI，同时携带 x86_64 Guest Vulkan、DXVK 1.10/2.6 x64/x86 和 VKD3D limited-500K。设备安装与运行时 characterization 尚未完成，因此这里仍不是性能结论。
 
 退出条件：同一输入在生产启动和 Smoke 启动中得到相同基础配置；旧路径和新 resolver 的快照完全一致。
 
@@ -74,7 +76,7 @@ Presenter 控制面已进一步收敛：产品与现有五个 LAB 实验都不�
 - 每次只替换一条 workaround 或一个子模块 gitlink，保留 A/B 构建和单步回滚点。
 - Direct Present/零拷贝必须重新基于当前 `main` 做接口审计；历史 SHA 和 cherry-pick 顺序只作线索，不作执行配方。
 - Direct Present 参考分支审计与当前语义移植记录见 `DIRECT_PRESENT_REFERENCE_AUDIT.md`。
-- `103ad12` 的 VKD3D Map/Execute Width flush 已按相同子模块基线移植并由补丁哈希门禁锁定；完整补丁应用、编译和设备 D3D12 动画仍是退出门禁。
+- `103ad12` 的 VKD3D Map/Execute Width flush 已按相同子模块基线移植并由补丁哈希门禁锁定；0001..0019 已以 `fuzz=0` 完整应用并完成 limited-500K x64 编译，设备 D3D12 动画仍是退出门禁。
 
 退出条件：正确性矩阵不退化，P50/P95 帧时间和卡顿指标有可复现实测收益，且新增代码拥有明确 upstream/removal 路径。
 

@@ -246,8 +246,8 @@ frame slot 现在只在真实 submit 后进入 in-flight：WSI 已完成 post-pr
 不再重复等待，Direct 则只在无 CPU post-wait 后的实际槽复用点等待；异常 rebuild 对所有真实在途槽
 做有界回收。该优化属于三种 Guest runtime 共用的 Host 尾链，不计入 2.6 相对 1.10 的独有收益。
 该共享单元以及包含它的完整 `virgl_child` 源清单已在 API23 ARM64/x86_64 SDK 下通过
-`-Werror` 与 `--no-undefined` 链接；完整 HAP 与真机结果仍是进入候选的独立门禁，不能用静态
-门禁代替。
+`-Werror` 与 `--no-undefined` 链接；API 23 ARM64 HAP 也已完成编译、Release 签名和签名块
+验证。x86_64 完整 HAP 与真机结果仍是进入候选的独立门禁，不能用静态门禁代替。
 
 ### 5. 自动内部 runtime 选择，而不是增加用户线路
 
@@ -260,12 +260,27 @@ frame slot 现在只在真实 submit 后进入 in-flight：WSI 已完成 post-pr
 每个候选保存版本、runtime SHA、设备类别、场景、分辨率、温控、P50/P95/P99、正确性结果和原始
 日志。只有多轮改善超过噪声且没有正确性退化，才允许改变默认内部策略。
 
+### 7. 构建与验证改成内容寻址的短反馈环
+
+当前 Makefile 的大组件缓存仍主要比较 mtime；同一内容换到干净 ext4 checkout 后可能误判为需要
+重编，反过来旧 stamp 也不足以证明输入完全一致。下一阶段应为 DXVK、VKD3D、Wine、Box64、
+guest-gfx 和 HAP 分别记录“源码/补丁/工具链/架构/关键选项”输入摘要，只有摘要和产物校验都命中
+才复用。这会把分支切换和验证从人工 touch stamp 变成可审计的内容缓存。
+
+签名流程已先按同一原则缩短失败路径：Hvigor 前验证 signing config 非空、三件材料存在、签名
+profile 有效且 bundle 与 AppScope 一致；`sign.py` 也会拒绝把解密异常文本当成口令。它不改变
+证书或发布策略，只把原先 2–3 分钟后的确定性失败前移到秒级。
+
 ## 当前下一步
 
-1. 当前 DP1 已通过现有 `winehua-dev` + API 23 ARM64 SDK 的目标文件语法检查；下一步仍须用当前
-   源码产出完整 ARM64 候选，不能复用设备上的 1.2.8 冒充候选。
-2. 安装候选后运行三轮 Legacy/Modern 产品基线，不带任何强制 on/off override。
-3. 确认差距属于稳定态还是 cold path，并用改前/改后 DLL验证 API trace 与在线 range 合并净收益。
-4. 再加入 Modern batch-off 单变量，验证当前产品 capability 的净收益。
-5. 根据 Host/present 指标决定进入 Guest CPU、兼容功能或 Host uploader 分支。
+1. 当前 DP1 已用原有 `winehua-dev` 产出 API 23 ARM64 1.2.9 Release 签名候选；签名、bundle、ABI、
+   DXVK/VKD3D runtime 文件与哈希均已核验。设备目前离线，尚未覆盖安装。
+2. 设备恢复后先验证启动、首帧、resize/前后台、Direct/WSI 实际 transport 和帧序，再运行三轮
+   Legacy/Modern 产品基线，不带任何强制 on/off override。
+3. 确认差距属于稳定态还是 cold path，并用改前/改后 DLL 验证 API trace 编译移除与在线 range
+   合并的净收益。
+4. 再加入 Modern batch-off 单变量，验证当前产品 capability 的净收益；同轮记录 mapped-flush
+   request/merged range/bytes，避免只看 FPS 猜原因。
+5. 根据 Guest CPU、Host upload、final present 和 GPU draw/submission 指标选择下一分支；若共同
+   Present 尾端下降但 2.6/1.10 差距不变，就停止把差距归因于 Direct Present。
 6. 在原因没有被指标区分前，不修改产品默认 backend，不增加新的公开开关。

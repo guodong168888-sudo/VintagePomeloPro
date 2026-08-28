@@ -5,6 +5,8 @@
 ## 当前审计基线
 
 - 当前私有 `main`：`d73f299fbb7cca81ead0a947765fd93f9d0c3fec`，产品版本 `1.2.9`，标签 `rc-1.2.9`。
+- 本轮本地集成候选：`317e45c`。它在上述 `main` 上收敛两条产品 route、移植 DP1、锁定
+  DXVK/VKD3D 优化并补齐打包预检；尚未推送，也尚未成为新的设备性能基线。
 - 已验证图形基线：`v1.2.8` / `5a92254f3d6732b8a3987dbeb72eab568247a308`。
 - `1.2.9` 已包含输入与 Box64 兼容性更新；它不是一次新的图形性能结论。图形回归比较仍以 `v1.2.8` 的设备证据为起点。
 - 机器可校验的协议、两条产品 route 与子模块 gitlink 记录在 [graphics-stack.lock.yaml](graphics-stack.lock.yaml)。
@@ -33,10 +35,10 @@
 
 当前优先级是“稳定与可维护”：
 
-1. 在已初始化的 `3e5aab6` VKD3D 源上应用 0001..0019，完成 limited-500K 编译及 gears/SingleGpu Width-flush 正确性测试。
-2. 完成 `GraphicsProfile`/Presenter policy 的 native/HAP 集成编译与设备 characterization；宿主纯函数测试已通过。
-3. 用相同设备场景验证 Guest deadline pacing 的帧序、queue-full 和延迟指标。
-4. 通过上述门禁后，A/B 评估参考分支 NativeBuffer import cache；不得沿用已漂移的旧 cherry-pick 配方。
+1. VKD3D 0001..0019 已在 `3e5aab6` 上以 `fuzz=0` 完整应用并完成 limited-500K x64 编译；下一门禁是设备 gears/SingleGpu 动画与 Width-flush 统计。
+2. `GraphicsProfile`/DP1 已通过宿主测试、ARM64/x86_64 Native 严格链接和 API 23 ARM64 HAP 编译/Release 签名。候选版本为 1.2.9，签名 HAP SHA-256 为 `08920731b159f777edc93e72ba61ee0bba67da798f14c560a5a05d8dc852553b`。
+3. 当前设备离线，尚未覆盖安装候选；设备恢复后先做正确性/帧序矩阵，再运行三轮 DXVK 1.10/2.6 同条件 Heaven 稳定态对照。
+4. 通过上述门禁后再评估 GLES Direct 与 scanout backing；不得整分支合并或沿用已漂移的旧 cherry-pick 配方。
 
 ## 本地校验
 

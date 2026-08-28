@@ -154,9 +154,10 @@ transport，不向用户暴露 Direct/WSI/scanout profile：
 
 Vulkan DP1 目前通过了 API 23 ARM64/x86_64 SDK 真实头文件下的严格语法检查；完整
 `virgl_child` 源清单也以 `--no-undefined` 链接到对应架构 CMake 声明的 SDK 库。该门禁同时发现并
-修复了 x86_64 vtest 参数数组中字符串常量误放入 `char*` 的旧问题。这仍只是 native 模块编译和
-SDK 符号闭包，尚未通过完整 HAP 链接与真机验证，不能标记为候选完成。GLES Direct 与 scanout
-remap 继续后置，避免一次引入多层 ownership 变化后无法归因黑屏、释放竞态或 GPU hang。
+修复了 x86_64 vtest 参数数组中字符串常量误放入 `char*` 的旧问题。随后 API 23 ARM64 HAP 已完成
+Native/ArkTS 编译、资源打包、Release 签名与签名块验证；x86_64 完整 HAP 和真机运行仍未完成，
+因此不能标记为候选完成。GLES Direct 与 scanout remap 继续后置，避免一次引入多层 ownership
+变化后无法归因黑屏、释放竞态或 GPU hang。
 
 ## 下一验证门禁
 
