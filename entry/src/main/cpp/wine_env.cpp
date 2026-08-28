@@ -373,6 +373,9 @@ void AppendProductDxvkEnv(std::vector<std::string>& env,
     const winehua::D3dBackendKind backend = winehua::ParseD3dBackend(d3dBackend);
     if (!winehua::IsDxvkBackend(backend)) return;
 
+    winehua::DxvkRuntimeProfile dxvkRuntime;
+    if (!winehua::ResolveDxvkRuntimeProfile(backend, &dxvkRuntime)) return;
+
     std::vector<std::string> policyEnvironment;
     const bool resolved = graphicsExperiment.empty()
         ? winehua::BuildProductGuestGraphicsEnvironment(

@@ -363,6 +363,12 @@ require_literal "VKD3D companion directory" \
     entry/src/main/cpp/graphics_profile.cpp
 require_literal "Modern mapped flush capability owner" \
     "if (dxvkRuntime.batchMappedFlush)" entry/src/main/cpp/wine_env.cpp
+if ! sed -n '/^void AppendProductDxvkEnv(/,/^}/p' \
+        "$ROOT/entry/src/main/cpp/wine_env.cpp" | \
+        grep -Fq -- "ResolveDxvkRuntimeProfile(backend, &dxvkRuntime)"; then
+    fail "Modern mapped flush runtime capability is not resolved in AppendProductDxvkEnv"
+fi
+printf 'graphics-contract: OK: Modern mapped flush runtime capability scope\n'
 reject_literal "Modern mapped flush per-range diagnostic atomic" \
     "g_winehuaMappedFlushBatchLogged" \
     thirdparty/dxvk-modern/src/dxvk/dxvk_cmdlist.cpp
