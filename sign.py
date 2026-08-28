@@ -15,7 +15,9 @@ content = re.sub(r',\s*([}\]])', r'\1', content)
 content = re.sub(r'//.*$', '', content, flags=re.MULTILINE)
 profile = json.loads(content)
 
-signingConfigs = profile["app"]["signingConfigs"]
+signingConfigs = profile.get("app", {}).get("signingConfigs", [])
+if not signingConfigs:
+    raise ValueError("no signing configs found in build profile")
 selected = signingConfigs[0]
 if signingConfigName:
     selected = next(
@@ -36,13 +38,21 @@ storeFile = material_path(config["storeFile"])
 basePath = certPath.parent
 sdkToolDir = os.environ['TOOL_HOME']
 
-# Decrypt passwords using sign.js
-keyPwd = subprocess.check_output(
-    ["node", "sign.js", str(basePath.absolute()), config["keyPassword"]], encoding="utf-8"
-).strip()
-keystorePwd = subprocess.check_output(
-    ["node", "sign.js", str(basePath.absolute()), config["storePassword"]], encoding="utf-8"
-).strip()
+def decrypt_password(label, encrypted):
+    completed = subprocess.run(
+        ["node", "sign.js", str(basePath.absolute()), encrypted],
+        check=True,
+        capture_output=True,
+        encoding="utf-8",
+    )
+    value = completed.stdout.strip()
+    if not value or "Unsupported state" in value or value.startswith("Error:"):
+        raise ValueError(f"failed to decrypt {label} with mounted signing material")
+    return value
+
+# Decrypt passwords using sign.js without ever copying them to build logs.
+keyPwd = decrypt_password("key password", config["keyPassword"])
+keystorePwd = decrypt_password("keystore password", config["storePassword"])
 
 # Build the signing command without a shell. Do not log the decrypted
 # passwords: CI/build logs are part of the release threat model.
