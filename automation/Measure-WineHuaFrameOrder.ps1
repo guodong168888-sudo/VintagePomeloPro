@@ -1,12 +1,13 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('dxvk_legacy', 'dxvk_modern_2_6')]
+    [ValidateSet('dxvk_legacy', 'dxvk_modern_2_6', 'wined3d')]
     [string]$D3DBackend = 'dxvk_legacy',
     [AllowEmptyString()]
     [string]$GraphicsExperiment = '',
     [ValidateSet('product', 'on', 'off')]
     [string]$BatchMappedFlushMode = 'product',
     [string]$GamePath = 'C:\smoke\x64\winehua_d3d_switch_cube.exe',
+    [string[]]$GameArguments = @(),
     [ValidateRange(8, 120)]
     [int]$Samples = 40,
     [ValidateRange(50, 2000)]
@@ -62,47 +63,85 @@ function Get-FrameMarker {
     try {
         # The marker is a blue-dominant quad in the upper-left part of the D3D
         # client. R and G store the high/low nibbles as 4 + nibble * 8.
-        $maxX = [Math]::Min($bitmap.Width - 1, [Math]::Max(260, [int]($bitmap.Width * 0.22)))
-        # The OHNativeImage transform currently displays D3D positive Y in the
-        # lower half of the Wine client, so the marker appears at lower-left.
-        $minY = [Math]::Max(90, [int]($bitmap.Height * 0.60))
-        $maxY = [Math]::Min($bitmap.Height - 1, [int]($bitmap.Height * 0.90))
-        [long]$sumR = 0
-        [long]$sumG = 0
-        [long]$sumB = 0
-        [int]$count = 0
-        # Keep clear of the Harmony status bar and desktop taskbar. Small blue
-        # app icons must never be accepted during runtime extraction.
-        for ($y = $minY; $y -le $maxY; $y += 2) {
-            for ($x = 0; $x -le $maxX; $x += 2) {
-                $pixel = $bitmap.GetPixel($x, $y)
-                if ($pixel.B -ge 180 -and
-                    ($pixel.B - $pixel.R) -ge 70 -and
-                    ($pixel.B - $pixel.G) -ge 70) {
-                    $sumR += $pixel.R
-                    $sumG += $pixel.G
-                    $sumB += $pixel.B
-                    ++$count
+        $maxX = [Math]::Min($bitmap.Width - 1,
+            [Math]::Max(260, [Math]::Min(360, [int]($bitmap.Width * 0.18))))
+        $upperMaxY = [Math]::Min($bitmap.Height - 1,
+            [Math]::Max(180, [Math]::Min(320, [int]($bitmap.Height * 0.22))))
+        # Older tablet transforms placed the marker at lower-left, while the
+        # current phone transform preserves the original upper-left position.
+        $regions = @(
+            [pscustomobject]@{ minY = 20; maxY = $upperMaxY },
+            [pscustomobject]@{
+                minY = [Math]::Max(90, [int]($bitmap.Height * 0.60))
+                maxY = [Math]::Min($bitmap.Height - 1, [int]($bitmap.Height * 0.90))
+            }
+        )
+        foreach ($region in $regions) {
+            [long]$sumR = 0
+            [long]$sumG = 0
+            [long]$sumB = 0
+            [long]$sumSquareR = 0
+            [long]$sumSquareG = 0
+            [long]$sumSquareB = 0
+            [int]$count = 0
+            [int]$minHitX = $bitmap.Width
+            [int]$maxHitX = -1
+            [int]$minHitY = $bitmap.Height
+            [int]$maxHitY = -1
+            for ($y = $region.minY; $y -le $region.maxY; $y += 2) {
+                for ($x = 0; $x -le $maxX; $x += 2) {
+                    $pixel = $bitmap.GetPixel($x, $y)
+                    if ($pixel.B -ge 180 -and
+                        ($pixel.B - $pixel.R) -ge 70 -and
+                        ($pixel.B - $pixel.G) -ge 70) {
+                        $sumR += $pixel.R
+                        $sumG += $pixel.G
+                        $sumB += $pixel.B
+                        $sumSquareR += $pixel.R * $pixel.R
+                        $sumSquareG += $pixel.G * $pixel.G
+                        $sumSquareB += $pixel.B * $pixel.B
+                        $minHitX = [Math]::Min($minHitX, $x)
+                        $maxHitX = [Math]::Max($maxHitX, $x)
+                        $minHitY = [Math]::Min($minHitY, $y)
+                        $maxHitY = [Math]::Max($maxHitY, $y)
+                        ++$count
+                    }
                 }
             }
-        }
-        if ($count -lt 500) {
-            return [pscustomobject]@{ valid = $false; pixels = $count; value = $null }
-        }
+            if ($count -lt 500) { continue }
 
-        $averageR = [double]$sumR / $count
-        $averageG = [double]$sumG / $count
-        $averageB = [double]$sumB / $count
-        $high = [Math]::Max(0, [Math]::Min(15, [int][Math]::Round(($averageR - 4.0) / 8.0)))
-        $low = [Math]::Max(0, [Math]::Min(15, [int][Math]::Round(($averageG - 4.0) / 8.0)))
-        return [pscustomobject]@{
-            valid = $true
-            pixels = $count
-            value = (($high -shl 4) -bor $low)
-            averageR = [Math]::Round($averageR, 2)
-            averageG = [Math]::Round($averageG, 2)
-            averageB = [Math]::Round($averageB, 2)
+            $averageR = [double]$sumR / $count
+            $averageG = [double]$sumG / $count
+            $averageB = [double]$sumB / $count
+            $stddevR = [Math]::Sqrt([Math]::Max(0.0, [double]$sumSquareR / $count - $averageR * $averageR))
+            $stddevG = [Math]::Sqrt([Math]::Max(0.0, [double]$sumSquareG / $count - $averageG * $averageG))
+            $stddevB = [Math]::Sqrt([Math]::Max(0.0, [double]$sumSquareB / $count - $averageB * $averageB))
+            $hitWidth = $maxHitX - $minHitX + 2
+            $hitHeight = $maxHitY - $minHitY + 2
+            $sampledArea = [Math]::Max(1.0, ($hitWidth / 2.0) * ($hitHeight / 2.0))
+            $fillRatio = $count / $sampledArea
+            # Reject blue UI artwork and status icons: the encoded marker is a
+            # nearly uniform, filled horizontal rectangle with nibble channels
+            # restricted to 4..124 (allowing a small JPEG margin).
+            if ($averageR -gt 132 -or $averageG -gt 132 -or $averageB -lt 210 -or
+                $stddevR -gt 18 -or $stddevG -gt 18 -or $stddevB -gt 18 -or
+                $hitWidth -lt 60 -or $hitHeight -lt 30 -or
+                $hitWidth -lt (1.35 * $hitHeight) -or $fillRatio -lt 0.55) {
+                continue
+            }
+
+            $high = [Math]::Max(0, [Math]::Min(15, [int][Math]::Round(($averageR - 4.0) / 8.0)))
+            $low = [Math]::Max(0, [Math]::Min(15, [int][Math]::Round(($averageG - 4.0) / 8.0)))
+            return [pscustomobject]@{
+                valid = $true
+                pixels = $count
+                value = (($high -shl 4) -bor $low)
+                averageR = [Math]::Round($averageR, 2)
+                averageG = [Math]::Round($averageG, 2)
+                averageB = [Math]::Round($averageB, 2)
+            }
         }
+        return [pscustomobject]@{ valid = $false; pixels = 0; value = $null }
     } finally {
         $bitmap.Dispose()
     }
@@ -174,6 +213,7 @@ try {
         D3DBackend = $D3DBackend
         GraphicsExperiment = $GraphicsExperiment
         GamePath = $GamePath
+        GameArguments = $GameArguments
         DeviceId = $DeviceId
         HdcPath = $hdc
         BatchMappedFlushMode = $BatchMappedFlushMode
@@ -187,6 +227,8 @@ try {
     $profileDeadline = (Get-Date).AddSeconds(10)
     $expectedGraphicsPolicy = if ($GraphicsExperiment) {
         $GraphicsExperiment
+    } elseif ($D3DBackend -eq 'wined3d') {
+        'product-virgl'
     } else {
         'product-vulkan'
     }
@@ -309,9 +351,15 @@ try {
         } else { $null }
         measurementSeconds = [Math]::Round($measurementSeconds, 3)
         estimatedDisplayedFps = $estimatedDisplayedFps
-        estimatedFrameTimeMsP50 = Get-NearestRankPercentile -Values $frameTimeMs.ToArray() -Percentile 0.50
-        estimatedFrameTimeMsP95 = Get-NearestRankPercentile -Values $frameTimeMs.ToArray() -Percentile 0.95
-        estimatedFrameTimeMsP99 = Get-NearestRankPercentile -Values $frameTimeMs.ToArray() -Percentile 0.99
+        estimatedFrameTimeMsP50 = if ($frameTimeMs.Count) {
+            Get-NearestRankPercentile -Values $frameTimeMs.ToArray() -Percentile 0.50
+        } else { $null }
+        estimatedFrameTimeMsP95 = if ($frameTimeMs.Count) {
+            Get-NearestRankPercentile -Values $frameTimeMs.ToArray() -Percentile 0.95
+        } else { $null }
+        estimatedFrameTimeMsP99 = if ($frameTimeMs.Count) {
+            Get-NearestRankPercentile -Values $frameTimeMs.ToArray() -Percentile 0.99
+        } else { $null }
         records = @($records)
     }
     $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'summary.json') -Encoding UTF8

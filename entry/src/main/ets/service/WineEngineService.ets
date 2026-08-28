@@ -60,25 +60,66 @@ interface FontSubstitute {
   replacement: string;
 }
 
-// Exact semantic font changes introduced by upstream master c8e1a21. Existing
-// prefixes predate the new wine.inf, so update only this registry section
-// directly before Wine starts instead of running the slow wineboot --update.
+// Keep this list aligned with the OHOS FontSubstitutes block assembled into
+// wine.inf. Fresh prefixes do not reliably retain every sans-serif mapping,
+// while older prefixes predate the block entirely. Update only this registry
+// section directly before Wine starts instead of running the slow wineboot
+// --update.
 const MASTER_FONT_SUBSTITUTES: FontSubstitute[] = [
+  { name: 'System', replacement: 'HarmonyOS Sans SC' },
+  { name: 'MS Sans Serif', replacement: 'HarmonyOS Sans SC' },
+  { name: 'MS Shell Dlg', replacement: 'HarmonyOS Sans SC' },
+  { name: 'MS Shell Dlg 2', replacement: 'HarmonyOS Sans SC' },
+  { name: 'Arial', replacement: 'HarmonyOS Sans SC' },
+  { name: 'Arial Black', replacement: 'HarmonyOS Sans SC' },
+  { name: 'Calibri', replacement: 'HarmonyOS Sans SC' },
   { name: 'Cambria', replacement: 'Noto Serif' },
+  { name: 'Candara', replacement: 'HarmonyOS Sans SC' },
+  { name: 'Comic Sans MS', replacement: 'HarmonyOS Sans SC' },
   { name: 'Constantia', replacement: 'Noto Serif' },
+  { name: 'Corbel', replacement: 'HarmonyOS Sans SC' },
+  { name: 'Impact', replacement: 'HarmonyOS Sans SC' },
   { name: 'Palatino Linotype', replacement: 'Noto Serif' },
+  { name: 'Segoe UI', replacement: 'HarmonyOS Sans SC' },
+  { name: 'Tahoma', replacement: 'HarmonyOS Sans SC' },
+  { name: 'Trebuchet MS', replacement: 'HarmonyOS Sans SC' },
+  { name: 'Verdana', replacement: 'HarmonyOS Sans SC' },
   { name: 'Georgia', replacement: 'Noto Serif' },
   { name: 'Times New Roman', replacement: 'Noto Serif' },
+  { name: 'Microsoft JhengHei', replacement: 'HarmonyOS Sans TC' },
+  { name: 'Microsoft JhengHei UI', replacement: 'HarmonyOS Sans TC' },
+  { name: 'Microsoft YaHei', replacement: 'HarmonyOS Sans SC' },
+  { name: 'Microsoft YaHei UI', replacement: 'HarmonyOS Sans SC' },
   { name: 'SimSun', replacement: 'Noto Serif CJK SC' },
   { name: 'NSimSun', replacement: 'Noto Serif CJK SC' },
+  { name: 'SimHei', replacement: 'HarmonyOS Sans SC' },
   { name: 'FangSong', replacement: 'Noto Serif CJK SC' },
   { name: 'KaiTi', replacement: 'Noto Serif CJK SC' },
+  { name: 'YouYuan', replacement: 'HarmonyOS Sans SC' },
+  { name: 'LiSu', replacement: 'HarmonyOS Sans SC' },
+  { name: 'DengXian', replacement: 'HarmonyOS Sans SC' },
   { name: 'STSong', replacement: 'Noto Serif CJK SC' },
   { name: 'STKaiti', replacement: 'Noto Serif CJK SC' },
   { name: 'STFangsong', replacement: 'Noto Serif CJK SC' },
+  { name: 'STHeiti', replacement: 'HarmonyOS Sans SC' },
+  { name: 'STXihei', replacement: 'HarmonyOS Sans SC' },
+  { name: 'STLiti', replacement: 'HarmonyOS Sans SC' },
+  { name: 'STXingkai', replacement: 'HarmonyOS Sans SC' },
+  { name: 'STXinwei', replacement: 'HarmonyOS Sans SC' },
+  { name: 'STHupo', replacement: 'HarmonyOS Sans SC' },
+  { name: 'STCaiyun', replacement: 'HarmonyOS Sans SC' },
   { name: 'STZhongSong', replacement: 'Noto Serif CJK SC' },
   { name: 'STBaoli', replacement: 'Noto Serif CJK SC' },
-  { name: 'DFKai-SB', replacement: 'Noto Serif CJK TC' }
+  { name: 'FZShuTi', replacement: 'HarmonyOS Sans SC' },
+  { name: 'FZYaoti', replacement: 'HarmonyOS Sans SC' },
+  { name: 'MingLiU', replacement: 'HarmonyOS Sans TC' },
+  { name: 'PMingLiU', replacement: 'HarmonyOS Sans TC' },
+  { name: 'DFKai-SB', replacement: 'Noto Serif CJK TC' },
+  { name: 'Consolas', replacement: 'Noto Sans Mono' },
+  { name: 'Courier', replacement: 'Noto Sans Mono' },
+  { name: 'Courier New', replacement: 'Noto Sans Mono' },
+  { name: 'Fixedsys', replacement: 'Noto Sans Mono' },
+  { name: 'Lucida Console', replacement: 'Noto Sans Mono' }
 ];
 
 const REQUIRED_RUNTIME_PATHS: RuntimePathRequirement[] = [
@@ -891,9 +932,8 @@ export class WineEngineService {
     if (!pathExists(PREFIX_SYSTEM_REG)) return false;
     try {
       const registry = fs.readTextSync(PREFIX_SYSTEM_REG);
-      return registry.includes('"Times New Roman"="Noto Serif"') &&
-        registry.includes('"SimSun"="Noto Serif CJK SC"') &&
-        registry.includes('"DFKai-SB"="Noto Serif CJK TC"');
+      return MASTER_FONT_SUBSTITUTES.every((item: FontSubstitute) =>
+        registry.includes('"' + item.name + '"="' + item.replacement + '"'));
     } catch (_) {
       return false;
     }

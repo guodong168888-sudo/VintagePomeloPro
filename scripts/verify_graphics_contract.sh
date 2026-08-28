@@ -223,6 +223,14 @@ require_literal "DXVK performance keeps console output compact" \
     "consoleSummary" automation/Measure-WineHuaDxvkPerformance.ps1
 require_literal "Frame-order validates transport action" \
     "presentActionContract" automation/Measure-WineHuaFrameOrder.ps1
+require_literal "Frame-order supports the WineD3D VirGL route" \
+    "'product-virgl'" automation/Measure-WineHuaFrameOrder.ps1
+require_literal "Prefix migration validates the HarmonyOS UI font mapping" \
+    "{ name: 'MS Shell Dlg', replacement: 'HarmonyOS Sans SC' }" \
+    entry/src/main/ets/service/WineEngineService.ets
+require_literal "Prefix migration validates every managed font mapping" \
+    "MASTER_FONT_SUBSTITUTES.every" \
+    entry/src/main/ets/service/WineEngineService.ets
 require_literal "Frame-order parser accepts Direct transport summary" \
     '\[VENUS-PRESENT\]\[NCP\].*\bframes=' \
     automation/Measure-WineHuaFrameOrder.ps1

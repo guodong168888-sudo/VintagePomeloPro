@@ -161,6 +161,11 @@ batch-off 单变量，避免重复消耗 Legacy 轮次；`-ConditionSet all` 则
 
 设备测量至少读取：
 
+固定 cube 的跨 route 回归可用 `Measure-WineHuaFrameOrder.ps1` 分别选择
+`dxvk_legacy`、`dxvk_modern_2_6` 与 `wined3d`。其中 `wined3d` 必须观察到
+`product-virgl`，DXVK 两代必须观察到 `product-vulkan`；三者使用相同的帧标记、截图采样
+和 FPS 估算，不能把 cube 的结果与 Heaven 的结果直接横向比较。
+
 - Presenter FPS、frames、failure、throttled/deferred。
 - present CPU、wait fence、acquire、submit、queue present 的平均值与稀疏 P50/P95/P99。
 - GPU final present copy 时间。
