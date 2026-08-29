@@ -6,10 +6,14 @@
  *
  * 管线顺序只在此文件定义一次:
  *   BuildWineEnv (L0-L5 基线, wine_env.cpp)
+ *     L4 窗口模式: WINEHUA_DESKTOP_MODE / SIMULATE_RESOLUTION
+ *       取值 WindowingModeFor (wine_env_baseline.h), 与 master 同层。
+ *       spawn 点不要再写这两键。
  *   → AppendD3dBackendEnv (dxvk/vkd3d 受管 overlay, wine_env.cpp)
  *   → AppendCompatEnvLines (设置页兼容档位, 本文件)
  *   → AppendStableDesktopDxvkEnv (桌面会话稳定化 overlay, 本文件, 可选;
  *     含本仓 host-shadow / WINEHUA_PERF_PROFILE)
+ *     融合目录启动必须 overlay=false, 否则全屏/适配会偏 (1.2.8 无此 overlay)。
  *   → WINEHUA_DESKTOP=shell (可选)
  *   → extraEnv (per-run/per-app 覆盖, 优先级最高)
  *

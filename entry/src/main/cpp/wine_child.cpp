@@ -496,6 +496,16 @@ extern "C" void Main(NativeChildProcess_Args args)
     // Step B: entryParams 中的环境覆盖应用。
     apply_entry_param_env_overrides(envOverrides);
 
+    // 窗口模式: 父进程 BuildWineEnv Layer 4 权威。__env 缺键时补同一对值 (master 只信父进程)。
+    if (!hostElfMode) {
+        winehua::EnsureWindowingModeEnv();
+        const char* dm = getenv("WINEHUA_DESKTOP_MODE");
+        const char* sim = getenv("WINEHUA_SIMULATE_RESOLUTION");
+        OH_LOG_INFO(LOG_APP,
+                    "[WineChild] windowing DESKTOP_MODE=%{public}s SIMULATE_RESOLUTION=%{public}s",
+                    dm ? dm : "(unset)", sim ? sim : "(unset)");
+    }
+
     if (!hostElfMode) log_d3d_environment_summary();
 
     // 覆盖 per-process fd 变量 (__env__ 中的是父进程 fd 号, 本进程无效)

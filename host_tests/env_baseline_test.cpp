@@ -147,6 +147,52 @@ int main()
         winehua::SetBox64PerfEnv(); // 不崩即可 (x86_64 为空操作)
     }
 
+    // 7. 窗口模式契约: 取值单源; 父进程写出完整对; 子进程只补缺键
+    {
+        const winehua::WindowingModeEnv fusion = winehua::WindowingModeFor(false);
+        const winehua::WindowingModeEnv desktop = winehua::WindowingModeFor(true);
+        CHECK(std::string(fusion.desktopMode) == "0" &&
+              std::string(fusion.simulateResolution) == "1",
+              "fusion: independent window + CDS simulate");
+        CHECK(std::string(desktop.desktopMode) == "1" &&
+              std::string(desktop.simulateResolution) == "0",
+              "desktop: subsurface + no CDS simulate");
+
+        std::vector<std::string> lines;
+        winehua::AppendWindowingModeLines(lines, false);
+        CHECK(lines.size() == 2, "parent always emits both windowing keys");
+        CHECK(lines[0] == "WINEHUA_DESKTOP_MODE=0", "fusion DESKTOP_MODE line");
+        CHECK(lines[1] == "WINEHUA_SIMULATE_RESOLUTION=1", "fusion SIMULATE line");
+        lines.clear();
+        winehua::AppendWindowingModeLines(lines, true);
+        CHECK(lines[0] == "WINEHUA_DESKTOP_MODE=1", "desktop DESKTOP_MODE line");
+        CHECK(lines[1] == "WINEHUA_SIMULATE_RESOLUTION=0", "desktop SIMULATE line");
+
+        unsetenv("WINEHUA_DESKTOP_MODE");
+        unsetenv("WINEHUA_SIMULATE_RESOLUTION");
+        winehua::EnsureWindowingModeEnv();
+        CHECK(std::string(getenv("WINEHUA_DESKTOP_MODE")) == "0",
+              "missing keys → fusion DESKTOP_MODE=0");
+        CHECK(std::string(getenv("WINEHUA_SIMULATE_RESOLUTION")) == "1",
+              "missing keys → fusion SIMULATE=1");
+
+        setenv("WINEHUA_DESKTOP_MODE", "1", 1);
+        unsetenv("WINEHUA_SIMULATE_RESOLUTION");
+        winehua::EnsureWindowingModeEnv();
+        CHECK(std::string(getenv("WINEHUA_DESKTOP_MODE")) == "1", "desktop DESKTOP_MODE kept");
+        CHECK(std::string(getenv("WINEHUA_SIMULATE_RESOLUTION")) == "0",
+              "desktop missing SIMULATE → 0");
+
+        setenv("WINEHUA_DESKTOP_MODE", "0", 1);
+        setenv("WINEHUA_SIMULATE_RESOLUTION", "1", 1);
+        winehua::EnsureWindowingModeEnv();
+        CHECK(std::string(getenv("WINEHUA_DESKTOP_MODE")) == "0", "parent fusion DESKTOP_MODE kept");
+        CHECK(std::string(getenv("WINEHUA_SIMULATE_RESOLUTION")) == "1", "parent SIMULATE kept");
+
+        unsetenv("WINEHUA_DESKTOP_MODE");
+        unsetenv("WINEHUA_SIMULATE_RESOLUTION");
+    }
+
     std::printf("env_baseline_test: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }

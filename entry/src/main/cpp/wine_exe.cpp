@@ -770,8 +770,11 @@ napi_value RunWineExe(napi_env env, napi_callback_info info)
     policy.binDir = binDir;
     policy.homeDir = homeDir;
     policy.d3dBackend = d3dBackend;
-    policy.stableDesktopOverlay = true;
-    policy.desktopShellFlag = WaylandServer::GetInstance()->IsDesktopMode();
+    // 目录启动 (融合游戏走这里)。master RunWineExe 默认 overlay=false;
+    // 本仓只在桌面会话打开 DXVK 稳定化, 融合必须保持 1.2.8 的独立窗口剖面。
+    const bool desktopMode = WaylandServer::GetInstance()->IsDesktopMode();
+    policy.stableDesktopOverlay = desktopMode;
+    policy.desktopShellFlag = desktopMode;
     if (workingDirectoryPath[0])
         policy.extraEnv.push_back("WINEHUA_WORKING_DIRECTORY=" +
                                   std::string(workingDirectoryPath));
@@ -788,9 +791,10 @@ napi_value RunWineExe(napi_env env, napi_callback_info info)
         AppendVkd3dDemoPresentEnv(policy.extraEnv, d3dBackend, binDir);
     std::vector<std::string> wineEnv = winehua::BuildSessionEnv(policy);
     OH_LOG_INFO(LOG_APP,
-                "[Wine] product D3D backend=%{public}s cwd=%{public}s",
+                "[Wine] product D3D backend=%{public}s cwd=%{public}s desktopOverlay=%{public}s",
                 d3dBackend,
-                workingDirectoryPath[0] ? workingDirectoryPath : "(derived)");
+                workingDirectoryPath[0] ? workingDirectoryPath : "(derived)",
+                desktopMode ? "yes" : "no");
 
     {
         winehua::SpawnRequest req{winehua::SpawnKind::WineExe};
