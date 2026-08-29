@@ -601,7 +601,28 @@ export struct VirtualInputOverlay {
     }
   }
 
+  private hubGamepadActive(): boolean {
+    try {
+      return testNapi.controllerGetOutputMode() === 'dinput';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /** Arrow-bound sticks are the right analog; WASD / everything else is left. */
+  private stickIsRight(element: ControlElement): boolean {
+    const binding = (element.bindings ?? [])[0];
+    return !!binding && binding.kind === InputBindingKind.KEY && binding.code === 103;
+  }
+
   private applyStickDirection(element: ControlElement, dx: number, dy: number, touchId: number): void {
+    if (this.hubGamepadActive()) {
+      const radius = this.stickRadius(element);
+      const nx = radius > 0 ? Math.max(-1, Math.min(1, dx / radius)) : 0;
+      const ny = radius > 0 ? Math.max(-1, Math.min(1, -dy / radius)) : 0;
+      InputDispatcher.getInstance().setLogicalStick(this.stickIsRight(element) ? 1 : 0, nx, ny);
+      return;
+    }
     const direction = resolveVirtualJoystickDirection(dx, dy, this.stickRadius(element), 15, true);
     this.setDirectionSlot(element, 0, direction.up, touchId);
     this.setDirectionSlot(element, 1, direction.right, touchId);
@@ -610,6 +631,14 @@ export struct VirtualInputOverlay {
   }
 
   private releaseStickBindings(element: ControlElement, touchId: number): void {
+    if (this.hubGamepadActive()) {
+      if (element.type === ControlElementType.STICK && element.outputMode !== 'mouse') {
+        InputDispatcher.getInstance().setLogicalStick(this.stickIsRight(element) ? 1 : 0, 0, 0);
+      } else if (element.type === ControlElementType.D_PAD) {
+        InputDispatcher.getInstance().setLogicalHat(0, 0);
+      }
+      return;
+    }
     for (let slot = 0; slot < 4; slot++) {
       this.setDirectionSlot(element, slot, false, touchId);
     }
@@ -847,6 +876,12 @@ export struct VirtualInputOverlay {
     } else {
       if (dy > 0) down = true;
       else up = true;
+    }
+    if (this.hubGamepadActive()) {
+      const hx = right ? 1 : (left ? -1 : 0);
+      const hy = up ? 1 : (down ? -1 : 0);
+      InputDispatcher.getInstance().setLogicalHat(hx, hy);
+      return;
     }
     this.setDpadSlot(element, 0, up, touchId);
     this.setDpadSlot(element, 1, right, touchId);

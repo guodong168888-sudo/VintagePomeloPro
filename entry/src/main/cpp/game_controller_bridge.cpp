@@ -1,5 +1,7 @@
 #include "game_controller_bridge.h"
 
+#include "controller/physical_gamepad.h"
+
 #include <dlfcn.h>
 #include <atomic>
 #include <mutex>
@@ -104,21 +106,27 @@ void RefreshDeviceCount() {
 }
 
 void DeviceChanged(const DeviceEvent* event) {
-    if (!event || !gGetDeviceChangedType || !gDeviceTsfn) return;
+    if (!event || !gGetDeviceChangedType) return;
     int type = 0;
     gGetDeviceChangedType(event, &type);
     RefreshDeviceCount();
-    auto* data = new DeviceData{type == 1};
+    const bool connected = (type == 1);
+    winehua::controller::PhysicalFeedDevice(connected);
+    if (!gDeviceTsfn) return;
+    auto* data = new DeviceData{connected};
     if (napi_call_threadsafe_function(gDeviceTsfn, data, napi_tsfn_nonblocking) != napi_ok) delete data;
 }
 
 void EmitButton(const ButtonEvent* event) {
-    if (!event || !gGetButtonAction || !gGetButtonCode || !gButtonTsfn) return;
+    if (!event || !gGetButtonAction || !gGetButtonCode) return;
     ButtonAction action = 1;
     int code = 0;
     gGetButtonAction(event, &action);
     gGetButtonCode(event, &code);
-    auto* data = new ButtonData{code, action == 0};
+    const bool pressed = (action == 0);
+    winehua::controller::PhysicalFeedButton(code, pressed);
+    if (!gButtonTsfn) return;
+    auto* data = new ButtonData{code, pressed};
     if (napi_call_threadsafe_function(gButtonTsfn, data, napi_tsfn_nonblocking) != napi_ok) delete data;
 }
 
@@ -140,6 +148,7 @@ void ButtonLeft(const ButtonEvent* event) { EmitButton(event); }
 void ButtonRight(const ButtonEvent* event) { EmitButton(event); }
 
 void EmitAxis(int type, double x, double y) {
+    winehua::controller::PhysicalFeedAxis(type, x, y);
     if (!gAxisTsfn) return;
     auto* data = new AxisData{type, x, y};
     if (napi_call_threadsafe_function(gAxisTsfn, data, napi_tsfn_nonblocking) != napi_ok) delete data;

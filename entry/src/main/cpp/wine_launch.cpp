@@ -33,6 +33,7 @@
 
 #include "broker.h"
 #include "wait_utils.h"
+#include "controller/controller_runtime.h"
 
 // 进程启动统一走 winehua::Spawner (重构第 4-5 步): kind 推导 token 布局,
 // 全部 kind 经 broker 单一通道 spawn, 本文件只声明意图。
@@ -386,6 +387,9 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd) {
     StartBrokerServer();
     setenv("PROCESSBROKER", WINE_BROKER_SOCKET, 1);
 
+    /* Hub socket must exist before wineboot/winedevice load winebus. */
+    winehua::controller::EnsureBridgeForWineLaunch(p->prefixDir);
+
     // -- wineserver via broker --
     // broker → wine_child Main → 截获 argv[0]=="wineserver" 转入本体
     // (wineserver 是纯 Unix ELF, 不能走 wine loader 的 PE 解析)。
@@ -457,6 +461,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd) {
 #ifdef __aarch64__
             winehua::AppendCompatEnvLines(wbReq.env, p->compatEnvStr, p->automationMode);
 #endif
+            winehua::controller::AppendWineGamepadEnv(wbReq.env);
             const pid_t childPid = winehua::Spawner::Spawn(wbReq);
             if (childPid <= 0) {
                 OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineboot spawn FAILED (attempt %{public}d)",

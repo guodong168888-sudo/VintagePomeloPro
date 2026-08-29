@@ -429,6 +429,11 @@ test:
 	    -o $(HOST_TEST_DIR)/env_baseline_test \
 	    $(ROOT)/host_tests/env_baseline_test.cpp
 	$(HOST_TEST_DIR)/env_baseline_test
+	g++ -std=c++17 -Wall -Wextra -I $(ROOT)/entry/src/main/cpp \
+	    -o $(HOST_TEST_DIR)/controller_merge_test \
+	    $(ROOT)/host_tests/controller_merge_test.cpp \
+	    $(ROOT)/entry/src/main/cpp/controller/controller_hub.cpp
+	$(HOST_TEST_DIR)/controller_merge_test
 
 
 # ============================================================

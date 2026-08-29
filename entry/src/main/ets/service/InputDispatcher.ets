@@ -58,14 +58,43 @@ export class InputDispatcher {
 
   pressKey(source: string, evdevCode: number): void {
     if (!this.session.active || !this.tracker.pressKey(source, evdevCode)) return;
-    InputRouter.getInstance().sendKey(evdevCode, true);
+    if (!this.feedHubKey(evdevCode, true)) {
+      InputRouter.getInstance().sendKey(evdevCode, true);
+    }
     this.injectedEvents++;
     this.publishDiagnostics();
   }
 
   releaseKey(source: string, evdevCode: number): void {
     if (!this.tracker.releaseKey(source, evdevCode)) return;
-    InputRouter.getInstance().sendKey(evdevCode, false);
+    if (!this.feedHubKey(evdevCode, false)) {
+      InputRouter.getInstance().sendKey(evdevCode, false);
+    }
+    this.injectedEvents++;
+    this.publishDiagnostics();
+  }
+
+  /** Overlay analog stick. stick 0 = left, 1 = right. +Y = Up, [-1, 1]. */
+  setLogicalStick(stick: number, x: number, y: number): void {
+    if (!this.isDinputHub()) return;
+    const axisX = stick === 1 ? 2 : 0;
+    const axisY = stick === 1 ? 3 : 1;
+    try {
+      testNapi.controllerSetAxis(0, 0, axisX, x);
+      testNapi.controllerSetAxis(0, 0, axisY, y);
+    } catch (_) {
+    }
+    this.injectedEvents++;
+    this.publishDiagnostics();
+  }
+
+  /** Overlay D-Pad. +Y = Up, values -1 / 0 / +1. */
+  setLogicalHat(x: number, y: number): void {
+    if (!this.isDinputHub()) return;
+    try {
+      testNapi.controllerSetHat(0, 0, x, y);
+    } catch (_) {
+    }
     this.injectedEvents++;
     this.publishDiagnostics();
   }
@@ -137,6 +166,9 @@ export class InputDispatcher {
     this.releaseTracked(this.tracker.releaseAll());
     // 兼容主窗口的实体输入路径：即使它没有经过 tracker，也必须收尾。
     InputRouter.getInstance().releaseAllKeys();
+    if (this.isDinputHub()) {
+      try { testNapi.controllerResetSource(0); } catch (_) {}
+    }
     this.publishDiagnostics();
   }
 
@@ -160,9 +192,50 @@ export class InputDispatcher {
     };
   }
 
+  private isDinputHub(): boolean {
+    try {
+      return testNapi.controllerGetOutputMode() === 'dinput';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /** Overlay evdev → LogicalButton. Shift/Ctrl stay keyboard (common overlay modifiers). */
+  private mapEvdevToLogical(code: number): number {
+    switch (code) {
+      case 57: return 0;  // Space → A
+      case 45: return 1;  // KEY_X → B
+      case 30: return 2;  // KEY_A → X
+      case 31: return 3;  // KEY_S → Y
+      case 16: return 4;  // KEY_Q → LB
+      case 17: return 5;  // KEY_W → RB
+      case 1: return 6;   // Esc → Back
+      case 28: return 7;  // Enter → Start
+      case 103: return 10; // DpadUp
+      case 106: return 11; // DpadRight
+      case 108: return 12; // DpadDown
+      case 105: return 13; // DpadLeft
+      case 63: return 14;  // Home → Guide
+      default: return -1;
+    }
+  }
+
+  private feedHubKey(evdevCode: number, pressed: boolean): boolean {
+    if (!this.isDinputHub()) return false;
+    const button = this.mapEvdevToLogical(evdevCode);
+    if (button < 0) return false;
+    try {
+      testNapi.controllerSetButton(0, 0, button, pressed);
+    } catch (_) {
+    }
+    return true;
+  }
+
   private releaseTracked(released: ReleasedInputState): void {
     released.keys.forEach((code: number): void => {
-      InputRouter.getInstance().sendKey(code, false);
+      if (!this.feedHubKey(code, false)) {
+        InputRouter.getInstance().sendKey(code, false);
+      }
       this.injectedEvents++;
     });
     released.buttons.forEach((button: number): void => {

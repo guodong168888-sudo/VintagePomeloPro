@@ -4,6 +4,7 @@ import testNapi from 'libentry.so';
 
 export type GamepadConnectionListener = (connected: boolean) => void;
 export type GamepadActivityListener = () => void;
+export type ControllerOutputMode = 'dinput' | 'keyboard_legacy';
 
 export class GamepadManager {
   private static instance: GamepadManager | null = null;
@@ -13,6 +14,7 @@ export class GamepadManager {
   private initialized: boolean = false;
   private axisKeys: Set<number> = new Set<number>();
   private connected: boolean = false;
+  private outputMode: ControllerOutputMode = 'dinput';
   private connectionListeners: Set<GamepadConnectionListener> = new Set<GamepadConnectionListener>();
   private activityListeners: Set<GamepadActivityListener> = new Set<GamepadActivityListener>();
   private buttonMappings: Map<number, number> = new Map<number, number>(
@@ -30,6 +32,23 @@ export class GamepadManager {
     this.sink = sink;
   }
 
+  setOutputMode(mode: ControllerOutputMode): void {
+    if (this.outputMode === mode) return;
+    this.releaseAll();
+    this.outputMode = mode;
+    try {
+      testNapi.controllerSetOutputMode(mode);
+      if (mode === 'dinput') {
+        testNapi.controllerSetEnabled(true);
+      }
+    } catch (_) {
+    }
+  }
+
+  getOutputMode(): ControllerOutputMode {
+    return this.outputMode;
+  }
+
   setButtonMappings(mappings: GamepadButtonMapping[]): void {
     this.releaseAll();
     const source = mappings.length > 0 ? mappings : createDefaultInputProfile().gamepadMappings;
@@ -38,8 +57,14 @@ export class GamepadManager {
     );
   }
 
-  initialize(deadzonePercent: number): void {
+  initialize(deadzonePercent: number, outputMode?: ControllerOutputMode): void {
     this.setDeadzone(deadzonePercent);
+    if (outputMode) this.outputMode = outputMode;
+    try {
+      testNapi.controllerSetOutputMode(this.outputMode);
+      if (this.outputMode === 'dinput') testNapi.controllerSetEnabled(true);
+    } catch (_) {
+    }
     if (this.initialized) return;
     this.initialized = true;
     testNapi.setGamepadButtonCallback((buttonCode: number, pressed: boolean) => {
@@ -56,6 +81,9 @@ export class GamepadManager {
     try {
       testNapi.initGameController();
       this.connected = testNapi.isGamepadConnected();
+      if (this.outputMode === 'dinput') {
+        testNapi.controllerSetEnabled(true);
+      }
     } catch (_) {
       this.connected = false;
     }
@@ -91,6 +119,14 @@ export class GamepadManager {
   }
 
   handleKey(keyCode: number, pressed: boolean): boolean {
+    // dinput: Physical already feeds ControllerHub in native; skip evdev mapping.
+    if (this.outputMode === 'dinput') {
+      if (this.buttonMappings.has(keyCode)) {
+        this.notifyActivity();
+        return true;
+      }
+      return false;
+    }
     const evdev = this.buttonMappings.get(keyCode);
     if (!evdev) return false;
     if (pressed && !this.pressed.has(evdev)) {
@@ -106,6 +142,10 @@ export class GamepadManager {
   }
 
   handleRightStick(x: number, y: number): void {
+    if (this.outputMode === 'dinput') {
+      if (Math.abs(x) >= this.deadzone || Math.abs(y) >= this.deadzone) this.notifyActivity();
+      return;
+    }
     const dx = Math.abs(x) >= this.deadzone ? Math.round(x * 18) : 0;
     const dy = Math.abs(y) >= this.deadzone ? Math.round(y * 18) : 0;
     if (dx !== 0 || dy !== 0) {
@@ -122,6 +162,11 @@ export class GamepadManager {
   }
 
   handleAxis(axisType: number, x: number, y: number): void {
+    if (this.outputMode === 'dinput') {
+      const active = Math.abs(x) >= this.deadzone || Math.abs(y) >= this.deadzone;
+      if (active) this.notifyActivity();
+      return;
+    }
     if (axisType === 1) {
       this.handleRightStick(x, y);
       return;
@@ -150,5 +195,9 @@ export class GamepadManager {
     this.pressed.clear();
     this.axisKeys.forEach((evdev: number) => this.sink.onButton(evdev, false));
     this.axisKeys.clear();
+    if (this.outputMode === 'dinput') {
+      // Overlay / key-emulation leftovers only. Physical is owned by native kit.
+      try { testNapi.controllerResetSource(0); } catch (_) {}
+    }
   }
 }

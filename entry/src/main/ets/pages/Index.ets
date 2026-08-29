@@ -747,6 +747,8 @@ struct Index {
     this.settingsCallback = (settings: GlobalSettings): void => {
       this.settings = settings;
       WineWindowManager.getInstance().setOutputScalePercent(settings.outputScale);
+      GamepadManager.getInstance().setDeadzone(settings.gamepadDeadzone);
+      GamepadManager.getInstance().setOutputMode(settings.controllerOutputMode ?? 'dinput');
     };
     ThemeSettingsService.getInstance().subscribe(this.settingsCallback);
     await AppCatalogService.getInstance().initialize(this.context);
@@ -754,7 +756,8 @@ struct Index {
     LauncherAdapterRegistry.getInstance().initialize(this.context);
     WineEngineService.getInstance().initialize(this.context);
     await InputProfileService.getInstance().initialize(this.context);
-    GamepadManager.getInstance().initialize(this.settings.gamepadDeadzone);
+    GamepadManager.getInstance().initialize(this.settings.gamepadDeadzone,
+      this.settings.controllerOutputMode ?? 'dinput');
     await this.rescan();
     this.catalogInitialized = true;
   }

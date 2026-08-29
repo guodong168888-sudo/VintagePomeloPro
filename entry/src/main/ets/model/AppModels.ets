@@ -339,6 +339,8 @@ export interface GlobalSettings {
   virtualMouseConfig: VirtualMouseConfig;
   controlOpacity: number;
   gamepadDeadzone: number;
+  /** DirectInput (Controller Hub) or keyboard/mouse emulation for gamepads. */
+  controllerOutputMode: 'dinput' | 'keyboard_legacy';
   outputScale: number;
   d3dRendererPreference: D3DRendererPreference;
   /** 重置 Wine prefix 时默认保留文档目录与注册表，只重建沙盒。 */
@@ -952,6 +954,7 @@ export function createDefaultGlobalSettings(): GlobalSettings {
     virtualMouseConfig: cloneVirtualMouseConfig(DEFAULT_VIRTUAL_MOUSE_CONFIG),
     controlOpacity: 72,
     gamepadDeadzone: 18,
+    controllerOutputMode: 'dinput',
     outputScale: 100,
     d3dRendererPreference: D3DRendererPreference.DXVK,
     preserveUserDataOnReset: true,
