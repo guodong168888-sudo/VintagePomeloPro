@@ -78,11 +78,13 @@ VirGLRenderer、NativeWindow 与系统合成路径，但会产生不同的命令
   `direct-native-buffer` 且动作契约通过。Legacy batch-on 的 DX11 cube 也已通过 40/40 帧序门禁，
   `direct-native-buffer` 动作契约成立。一次后续候选 HAP 的 90 s Heaven 轮次在持续呈现期间记录到
   Box64 `dlopen` 启动辅助进程的 `SIGSEGV`；虽然游戏窗口随后继续以 27.775 FPS 呈现，且显式
-  batch-off 对照为 15.972 FPS、未见该事件，但这不足以排除关联。故 Legacy batching 仍保持
-  测试期环境 override，绝不作为产品默认。稳定基线上的后续三轮 20 s 交替复现均未见 fault：
+  batch-off 对照为 15.972 FPS、未见该事件，但这不足以单独归因为 batching。稳定基线上的后续三轮
+  20 s 交替复现均未见 fault：
   batch-on 平均 38.219 FPS，batch-off 平均 22.194 FPS（+72.20%），六个样本均完成动作契约与
-  process-teardown gate。这降低了 batching 为唯一诱因的可能性，但不能替代一次干净的长时复现；
-  直到该启动 fault 被独立复现并修复或排除，Legacy 默认仍维持关闭。
+  process-teardown gate。这降低了 batching 为唯一诱因的可能性，但不能替代长时观察。本轮按产品
+  决策把 Legacy `batchMappedFlush` 切回默认开启：正常启动与没有显式覆盖的自动化均继承产品高性能
+  capability；`legacy-batch` A/B 改为“产品开启”对“显式临时关闭”，而不是再把开启态作为临时环境
+  override。历史启动 fault 继续记录和归因，但不再以 22 FPS 回退作为常规产品配置。
 
 ### 媒体播放与图形路由：已确认的边界
 
@@ -208,8 +210,9 @@ inline GPU upload、coverage sort 和 FIFO 动作，只增加每 120 帧一次�
 `WineHuaModernMappedFlushPerf` marker 并写入 `modernMappedFlush`，不会把旧运行的累计计数混入。
 正式 FPS 轮次仍应关闭该参数，避免统计原子与日志干扰稳定态。
 若产品代际基线已经完成，可用 `-ConditionSet modern-batch` 只运行 Modern 产品配置与
-batch-off 单变量，避免重复消耗 Legacy 轮次；`-ConditionSet legacy-batch` 则以环境 override
-验证 Legacy 已有 batching 实现，绝不改变产品 capability。`-ConditionSet all` 运行四条件矩阵。
+batch-off 单变量，避免重复消耗 Legacy 轮次；`-ConditionSet legacy-batch` 则比较 Legacy 的产品
+高性能配置与显式 batch-off 控制组。只有该控制组注入临时环境变量，绝不改变产品 capability。
+`-ConditionSet all` 运行四条件矩阵。
 终端只打印聚合摘要与归档路径，逐轮 timeline/perf marker 保留在 `comparison.json`。
 
 设备测量至少读取：
@@ -365,11 +368,11 @@ profile 有效且 bundle 与 AppScope 一致；`sign.py` 也会拒绝把解密�
 
 1. 已完成替换安装与真机启动、视频、Direct NativeBuffer、DXVK Modern 帧序及 VirGL D3D9 帧序验证；
    不需重建镜像或创建额外容器。
-2. 扩展 Legacy/Modern 到更长时长、冷热两次和温控窗口；保持产品默认 capability，不再重复做
-   batch-off 的短窗口证明。
-3. Legacy batching 已确认有大幅性能收益，但候选默认的 90 s 门禁记录到 Box64 `dlopen` 启动 fault；
-   已回退为实验 override。先在 process-teardown gate 下独立复现/排除 fault，再完成三轮有效 A/B、
-   smoke、帧序和长稳门禁，才可考虑产品 capability；不得新增用户 profile。
+2. Legacy 与 Modern 都保持产品默认 batching，扩展到更长时长、冷热两次和温控窗口；batch-off 只作为
+   有明确诊断目的的单变量控制组。
+3. Legacy batching 已确认有大幅性能收益。候选默认的 90 s 门禁曾记录 Box64 `dlopen` 启动 fault；
+   现在以高性能默认值继续收集按 PID 关联的启动证据，并完成 smoke、帧序和长稳门禁。不得新增用户
+   profile，也不得让普通自动化隐式关闭 batching。
 4. Modern batch-off 已确认是主要回归来源；在保留 batching 前提下，用改前/改后 DLL 隔离
    API-trace 编译移除和在线 range 合并各自的净收益。
 5. 为 Heaven 增加 draw/submission 计数，再判断 Modern dual-source 两次 draw、custom-border 或 BC

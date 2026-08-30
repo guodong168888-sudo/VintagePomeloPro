@@ -512,22 +512,21 @@ $modernBatchOffCondition = [pscustomobject]@{
         backend = 'dxvk_modern_2_6'
         batchMappedFlushMode = 'off'
     }
-$legacyBatchOnCondition = [pscustomobject]@{
-        # Legacy contains the same command-list ownership implementation, but
-        # stability qualification has not yet cleared its product capability.
-        # Keep this a test-only override until the Box64 startup fault is
-        # independently reproduced and resolved.
-        id = 'legacy-1.10-batch-flush-on'
+$legacyBatchOffCondition = [pscustomobject]@{
+        # Product Legacy is high-performance batching. The only Legacy A/B
+        # override is now the explicit off-side control; ordinary measurements
+        # inherit the product capability without injecting this key.
+        id = 'legacy-1.10-batch-flush-off'
         backend = 'dxvk_legacy'
-        batchMappedFlushMode = 'product'
-        batchMappedFlushOverride = '1'
+        batchMappedFlushMode = 'off'
+        batchMappedFlushOverride = '0'
     }
 $conditions = switch ($ConditionSet) {
     'product' { @($legacyCondition, $modernCondition) }
     'modern-batch' { @($modernCondition, $modernBatchOffCondition) }
-    'legacy-batch' { @($legacyCondition, $legacyBatchOnCondition) }
+    'legacy-batch' { @($legacyCondition, $legacyBatchOffCondition) }
     'all' {
-        @($legacyCondition, $modernCondition, $legacyBatchOnCondition,
+        @($legacyCondition, $modernCondition, $legacyBatchOffCondition,
           $modernBatchOffCondition)
     }
 }

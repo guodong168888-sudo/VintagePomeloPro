@@ -223,11 +223,11 @@ require_literal "DXVK performance supports focused Modern batch A/B" \
     "'modern-batch'" automation/Measure-WineHuaDxvkPerformance.ps1
 require_literal "DXVK performance supports focused Legacy batch experiment" \
     "'legacy-batch'" automation/Measure-WineHuaDxvkPerformance.ps1
-require_literal "Legacy batch experiment is explicitly identified" \
-    "id = 'legacy-1.10-batch-flush-on'" \
+require_literal "Legacy batch experiment is explicit off-side control" \
+    "id = 'legacy-1.10-batch-flush-off'" \
     automation/Measure-WineHuaDxvkPerformance.ps1
-require_literal "Legacy batch experiment stays a per-run override" \
-    "batchMappedFlushOverride = '1'" \
+require_literal "Legacy batch experiment keeps off-side as a per-run override" \
+    "batchMappedFlushOverride = '0'" \
     automation/Measure-WineHuaDxvkPerformance.ps1
 require_literal "DXVK performance product-equivalent observation" \
     "observe-frame-timeline" \
@@ -446,8 +446,8 @@ require_literal "VKD3D companion directory" \
     entry/src/main/cpp/graphics_profile.cpp
 require_literal "Modern mapped flush capability owner" \
     "if (dxvkRuntime.batchMappedFlush)" entry/src/main/cpp/wine_env.cpp
-require_literal "Legacy mapped flush remains product-off pending qualification" \
-    "false, // batchMappedFlush" entry/src/main/cpp/graphics_profile.cpp
+require_literal "Legacy mapped flush defaults to the product high-performance path" \
+    "true,  // batchMappedFlush" entry/src/main/cpp/graphics_profile.cpp
 if ! sed -n '/^void AppendProductDxvkEnv(/,/^}/p' \
         "$ROOT/entry/src/main/cpp/wine_env.cpp" | \
         grep -Fq -- "ResolveDxvkRuntimeProfile(backend, &dxvkRuntime)"; then

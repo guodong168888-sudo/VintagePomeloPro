@@ -20,6 +20,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$batchMappedFlushOverrideRequested = $PSBoundParameters.ContainsKey('BatchMappedFlush')
 $RepoWsl = '/home/maple/Work/WineHua-build'
 $Container = 'winehua-master-ext4'
 $ContainerRepo = '/data/src/winehua'
@@ -536,8 +537,13 @@ function Invoke-OneRun {
     # starting Wayland, wineserver or Wine.
     Invoke-Hdc shell 'power-shell wakeup' | Out-Null
     Invoke-Hdc shell 'hilog -x' | Out-Null
-    $batchMappedFlushValue = if ($BatchMappedFlush) { '1' } else { '0' }
-    $startCommand = "aa start -a $Ability -b $Bundle --ps winehua.mode smoke --ps winehua.run_id $RunId --ps winehua.suite $RunSuite --ps winehua.prefix $RunPrefix --ps winehua.graphics_experiment $GraphicsExperiment --ps winehua.long_seconds $LongSeconds --ps winehua.batch_mapped_flush $batchMappedFlushValue"
+    $batchMappedFlushArgument = if ($batchMappedFlushOverrideRequested) {
+        $batchMappedFlushValue = if ($BatchMappedFlush) { '1' } else { '0' }
+        " --ps winehua.batch_mapped_flush $batchMappedFlushValue"
+    } else {
+        ''
+    }
+    $startCommand = "aa start -a $Ability -b $Bundle --ps winehua.mode smoke --ps winehua.run_id $RunId --ps winehua.suite $RunSuite --ps winehua.prefix $RunPrefix --ps winehua.graphics_experiment $GraphicsExperiment --ps winehua.long_seconds $LongSeconds$batchMappedFlushArgument"
     $startOutput = Invoke-Hdc shell $startCommand
     if (($startOutput -join "`n") -match '10106102') {
         # Devices without a credential can be dismissed with one deterministic
@@ -821,7 +827,7 @@ if ($Suite -eq 'capabilities') {
     hapSha256 = $artifact.hapSha256
     gate = [bool]$Gate
     graphicsExperiment = $GraphicsExperiment
-    batchMappedFlush = [bool]$BatchMappedFlush
+    batchMappedFlush = if ($batchMappedFlushOverrideRequested) { [bool]$BatchMappedFlush } else { $null }
     status = if ($allPassed) { 'PASS' } else { 'FAIL' }
     runs = $runRecords
     capabilityHashes = if ($capabilityMatrix) {

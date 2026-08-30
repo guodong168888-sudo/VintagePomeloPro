@@ -140,7 +140,7 @@ bool ResolveDxvkRuntimeProfile(D3dBackendKind backend,
             true,  // relaxedFeatureCompatibility
             true,  // commandQueryReset
             true,  // dynamicMappedFlush
-            false, // batchMappedFlush
+            true,  // batchMappedFlush
             false, // disableSemaphoreFeedback
         };
         return true;
