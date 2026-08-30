@@ -68,6 +68,12 @@ VirGLRenderer、NativeWindow 与系统合成路径，但会产生不同的命令
   flush 调用、5.642 GB queued bytes、1.989 GB emitted bytes，失败为零。range 数下降 1.91%，
   而合并后的 byte 覆盖下降 64.75%，与“合并相邻/重叠 dirty range，减少 Venus 非 coherent flush
   及其 Host 处理”的预期一致；这解释了 A/B 方向，但不是其它游戏的性能承诺。
+- Legacy 1.10 源码也具备 command-list batching 实现，但其产品 capability 仍为关闭。专用的
+  `legacy-batch` 自动化以环境 override 仅作实验，两个有效的同场配对从 22.867→43.241 FPS
+  与 21.417→37.704 FPS，均值 22.142→40.472 FPS（+82.79%）。这说明此前 1.10 的主要瓶颈同样是
+  非合并 mapped flush，而不是“旧 runtime 天生更慢”。其中一次启动在两秒内发生原生 `SIGSEGV`、
+  尚未产生 Presenter 帧；它不进入 FPS 均值，也使 Legacy batching 暂不具备提升为产品默认的资格。
+  还需消除/复现该启动异常并完成多轮、smoke、帧序和长稳门禁。
 
 ### 媒体播放与图形路由：已确认的边界
 
@@ -191,7 +197,9 @@ inline GPU upload、coverage sort 和 FIFO 动作，只增加每 120 帧一次�
 `WineHuaModernMappedFlushPerf` marker 并写入 `modernMappedFlush`，不会把旧运行的累计计数混入。
 正式 FPS 轮次仍应关闭该参数，避免统计原子与日志干扰稳定态。
 若产品代际基线已经完成，可用 `-ConditionSet modern-batch` 只运行 Modern 产品配置与
-batch-off 单变量，避免重复消耗 Legacy 轮次；`-ConditionSet all` 则运行完整三条件矩阵。
+batch-off 单变量，避免重复消耗 Legacy 轮次；`-ConditionSet legacy-batch` 则以同样的产品对照
+验证 Legacy 已有 batching 实现，但只注入本轮环境 override，绝不改变产品 capability。`-ConditionSet all`
+运行四条件矩阵。
 终端只打印聚合摘要与归档路径，逐轮 timeline/perf marker 保留在 `comparison.json`。
 
 设备测量至少读取：
@@ -349,13 +357,15 @@ profile 有效且 bundle 与 AppScope 一致；`sign.py` 也会拒绝把解密�
    不需重建镜像或创建额外容器。
 2. 扩展 Legacy/Modern 到更长时长、冷热两次和温控窗口；保持产品默认 capability，不再重复做
    batch-off 的短窗口证明。
-3. batch-off 已确认是主要回归来源；下一项在保留 batching 前提下，用改前/改后 DLL 隔离
+3. Legacy batching 已显示大幅收益，但尚有一次启动期原生异常；先复现/消除这个异常并完成三轮
+   有效 A/B、smoke、帧序和长稳门禁，才可把 Legacy capability 从实验 override 提升为产品默认。
+4. Modern batch-off 已确认是主要回归来源；在保留 batching 前提下，用改前/改后 DLL 隔离
    API-trace 编译移除和在线 range 合并各自的净收益。
-4. 为 Heaven 增加 draw/submission 计数，再判断 Modern dual-source 两次 draw、custom-border 或 BC
+5. 为 Heaven 增加 draw/submission 计数，再判断 Modern dual-source 两次 draw、custom-border 或 BC
    兼容是否值得做正确性受限的单变量实验。
-5. 使用独立固定分辨率 VirGL 工作负载（例如固定设置的 FurMark）补足 WineD3D/VirGL；不能以
+6. 使用独立固定分辨率 VirGL 工作负载（例如固定设置的 FurMark）补足 WineD3D/VirGL；不能以
    WineD3D D3D11 `CreateVertexShader` 能力缺口代替 VirGL 性能结论。若共同
    Present 尾端下降但 2.6/1.10 差距不变，就停止把差距归因于 Direct Present。
-6. DXVK/VKD3D 已保存首次登记及第二次全命中证据；在下一次 guest runtime 构建中保存 guest-gfx/
+7. DXVK/VKD3D 已保存首次登记及第二次全命中证据；在下一次 guest runtime 构建中保存 guest-gfx/
    guest Vulkan 的首次登记与第二次命中证据。旧 deps stamp 暂不删除，保证单步回滚。
-7. 在原因没有被指标区分前，不修改产品默认 backend，不增加新的公开开关。
+8. 在原因没有被指标区分前，不修改产品默认 backend，不增加新的公开开关。

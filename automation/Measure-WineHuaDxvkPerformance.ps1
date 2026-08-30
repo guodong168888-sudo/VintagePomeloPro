@@ -12,7 +12,7 @@ param(
     [int]$ReadyTimeoutSeconds = 180,
     [ValidateRange(30, 10000)]
     [int]$ReadyFrames = 120,
-    [ValidateSet('product', 'modern-batch', 'all')]
+    [ValidateSet('product', 'modern-batch', 'legacy-batch', 'all')]
     [string]$ConditionSet = 'product',
     [switch]$IncludeModernBatchMappedFlushOff,
     [switch]$CollectModernMappedFlushStats,
@@ -310,6 +310,12 @@ function Invoke-Measurement {
         condition = $Condition.id
         d3dBackend = $Condition.backend
         batchMappedFlushMode = $Condition.batchMappedFlushMode
+        batchMappedFlushOverride = if (
+            $Condition.PSObject.Properties['batchMappedFlushOverride']) {
+            $Condition.batchMappedFlushOverride
+        } else {
+            $null
+        }
         collectModernMappedFlushStats = [bool]$CollectModernMappedFlushStats
         round = $Round
         order = $Order
@@ -335,6 +341,10 @@ function Invoke-Measurement {
         $result['wineStderrLineOffset'] = $wineStderrLineOffset
         $d3dEnvironment = @{
             DXVK_LOG_LEVEL = 'info'
+        }
+        if ($Condition.PSObject.Properties['batchMappedFlushOverride']) {
+            $d3dEnvironment['DXVK_WINEHUA_BATCH_MAPPED_FLUSH'] =
+                [string]$Condition.batchMappedFlushOverride
         }
         if ($collectMappedFlushStats) {
             $d3dEnvironment['DXVK_WINEHUA_BATCH_MAPPED_FLUSH_STATS'] = '1'
@@ -475,10 +485,23 @@ $modernBatchOffCondition = [pscustomobject]@{
         backend = 'dxvk_modern_2_6'
         batchMappedFlushMode = 'off'
     }
+$legacyBatchOnCondition = [pscustomobject]@{
+        # Legacy contains the same command-list ownership implementation, but
+        # its product capability is intentionally still off. Keep this as a
+        # test-only environment override until it passes the full gate.
+        id = 'legacy-1.10-batch-flush-on'
+        backend = 'dxvk_legacy'
+        batchMappedFlushMode = 'product'
+        batchMappedFlushOverride = '1'
+    }
 $conditions = switch ($ConditionSet) {
     'product' { @($legacyCondition, $modernCondition) }
     'modern-batch' { @($modernCondition, $modernBatchOffCondition) }
-    'all' { @($legacyCondition, $modernCondition, $modernBatchOffCondition) }
+    'legacy-batch' { @($legacyCondition, $legacyBatchOnCondition) }
+    'all' {
+        @($legacyCondition, $modernCondition, $legacyBatchOnCondition,
+          $modernBatchOffCondition)
+    }
 }
 # Preserve the original opt-in switch as a compatibility alias for the full
 # three-condition matrix.
