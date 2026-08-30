@@ -330,6 +330,66 @@ export class AppLog {
     return fileUri.getUriFromPath(zipPath);
   }
 
+  private static tailText(path: string, maxChars: number): string {
+    try {
+      const text = fs.readTextSync(path);
+      return text.length > maxChars ? text.substring(text.length - maxChars) : text;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  private static findPlayerLogs(root: string, depth: number, result: string[], budget: number[]): void {
+    if (depth < 0 || result.length >= 4 || budget[0] <= 0) return;
+    let names: string[] = [];
+    try { names = fs.listFileSync(root); } catch (_) { return; }
+    for (let index = 0; index < names.length && result.length < 4 && budget[0] > 0; index += 1) {
+      budget[0] -= 1;
+      const path = root + '/' + names[index];
+      if (names[index].toLowerCase() === 'player.log') {
+        result.push(path);
+        continue;
+      }
+      if (depth > 0) {
+        try {
+          if (fs.statSync(path).isDirectory()) AppLog.findPlayerLogs(path, depth - 1, result, budget);
+        } catch (_) {}
+      }
+    }
+  }
+
+  /** 直接供手机端诊断页展示，不依赖 USB、分享或外部文件管理器。 */
+  static readUnityDiagnostics(): string {
+    AppLog.init();
+    const sections: string[] = [];
+    sections.push('旧柚Pro Unity 诊断\n生成时间: ' + localStamp());
+    if (AppLog.logDir) {
+      try {
+        const names = fs.listFileSync(AppLog.logDir)
+          .filter((name: string): boolean =>
+            (name.startsWith('app-') || name.startsWith('native-')) && name.endsWith('.log'))
+          .sort();
+        const latest = names.slice(Math.max(0, names.length - 4));
+        for (let index = 0; index < latest.length; index += 1) {
+          const text = AppLog.tailText(AppLog.logDir + '/' + latest[index], 12000);
+          if (text.length > 0) sections.push('=== ' + latest[index] + '（末尾）===\n' + text);
+        }
+      } catch (_) {}
+    }
+    const stderrPath = '/data/storage/el2/base/temp/wine_stderr_' + localDateKey() + '.log';
+    const stderrText = AppLog.tailText(stderrPath, 12000);
+    if (stderrText.length > 0) sections.push('=== Wine stderr（末尾）===\n' + stderrText);
+
+    const playerLogs: string[] = [];
+    AppLog.findPlayerLogs('/data/storage/el2/base/files/.wine/drive_c/users', 6, playerLogs, [4000]);
+    for (let index = 0; index < playerLogs.length; index += 1) {
+      const text = AppLog.tailText(playerLogs[index], 16000);
+      if (text.length > 0) sections.push('=== Unity Player.log\n' + playerLogs[index] + ' ===\n' + text);
+    }
+    if (sections.length === 1) sections.push('尚未找到日志。请先运行游戏至黑屏退出，再返回此页刷新。');
+    return sections.join('\n\n');
+  }
+
   private static cleanupOldZips(zipDir: string): void {
     try {
       const names = fs.listFileSync(zipDir);
