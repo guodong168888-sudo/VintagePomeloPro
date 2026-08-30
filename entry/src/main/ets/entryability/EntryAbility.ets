@@ -8,6 +8,7 @@ import { AppCatalogService, GamesDirectoryStatus } from '../service/AppCatalogSe
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
 import { AppSettingsStore } from '../service/AppSettingsStore';
 import { WineEngineService } from '../service/WineEngineService';
+import { AppSessionService } from '../service/AppSessionService';
 import { NativeLaunchResult, WinePresentationMode } from '../model/AppModels';
 import testNapi from 'libentry.so';
 
@@ -247,6 +248,8 @@ export default class EntryAbility extends UIAbility {
     const result = engine.launchExecutable(executable, argumentsValue,
       this.automationWorkingDirectory(executable), environment) as NativeLaunchResult;
     if (!result || result.pid <= 0) throw new Error('runWineExe returned no process');
+    AppSessionService.getInstance().registerDiagnosticLaunch(executable, result,
+      settings.defaultDisplayMode, WinePresentationMode.DESKTOP);
     hilog.info(DOMAIN, 'EntryAbility',
       'automation launched pid=%{public}d backend=%{public}s graphicsPolicy=%{public}s exe=%{public}s envCount=%{public}d',
       result.pid, backend, graphicsExperiment || '(product)', executable, environment.length);

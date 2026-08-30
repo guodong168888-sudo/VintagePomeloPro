@@ -141,6 +141,30 @@ require_literal "Wine env product Guest resolver" \
 require_literal "Wine launch product route resolver" \
     "ResolveProductGraphicsPolicy" \
     entry/src/main/cpp/wine_launch.cpp
+require_literal "Product Host route follows selected Guest backend" \
+    "hostGraphicsBackendOverride : requestedD3DBackend" \
+    entry/src/main/ets/service/WineEngineService.ets
+require_literal "Program present route derives from D3D backend" \
+    "UsesVenusPresent(backend)" entry/src/main/cpp/wine_exe.cpp
+require_literal "Smoke exposes only surface/offscreen intent" \
+    "presentToSurface" entry/src/main/ets/service/SmokeRunner.ets
+reject_literal "Removed public present backend profile" \
+    "presentBackend" entry/src/main/cpp/wine_exe.h
+reject_literal "Removed unused present backend environment" \
+    "WINEHUA_PRESENT_BACKEND" entry/src/main/cpp/wine_exe.cpp
+require_literal "Wineboot waits for broker worker" \
+    "HasRunningWinebootWorker" entry/src/main/cpp/wine_launch.cpp
+require_literal "Prefix health checks a critical Wine COM registration" \
+    "bcde0395-e52f-467c-8e3d-c4579291692e" \
+    entry/src/main/cpp/wine_launch.cpp
+require_literal "Incomplete prefix repair forces wine.inf registration" \
+    'repairIncompletePrefix ? "--update" : "--init"' \
+    entry/src/main/cpp/wine_launch.cpp
+require_literal "Unchanged wine.inf avoids prefix reinstall" \
+    "preserved unchanged wine.inf timestamp" \
+    entry/src/main/ets/service/WineEngineService.ets
+require_literal "Runtime identity uses semantic content" \
+    "runtime_content_sha" scripts/assemble.sh
 reject_literal "Removed product-to-LAB resolver" \
     "ProductionHostProfileForBackend" entry/src/main/cpp/graphics_profile.h
 require_literal "DXVK runtime resolver" "ResolveDxvkRuntimeProfile" \
@@ -214,6 +238,30 @@ require_literal "DXVK performance validates transport action" \
     "presentActionContract" automation/Measure-WineHuaDxvkPerformance.ps1
 require_literal "DXVK performance waits for rendered workload" \
     "Wait-PresenterReady" automation/Measure-WineHuaDxvkPerformance.ps1
+require_literal "Device automation keeps the display awake for long runs" \
+    "power-shell timeout -o 2147483647" \
+    automation/Start-WineHuaGameTest.ps1
+require_literal "Zero-copy keeps producer Vulkan classification per surface" \
+    "surface.vulkan))" entry/src/main/cpp/egl_renderer.cpp
+require_literal "Zero-copy stale binding tracks surface serial" \
+    "uint32_t zeroCopySurfaceSerial_" entry/src/main/cpp/egl_renderer.h
+require_literal "Zero-copy promotion follows latest-present ordering" \
+    "candidate != currentSurface" entry/src/main/cpp/egl_renderer.cpp
+require_literal "Zero-copy promotion is gated on no produced frame" \
+    "const bool currentHasFrame = zeroCopyFrames_ != 0 || zeroCopyHasFrame_ ||" \
+    entry/src/main/cpp/egl_renderer.cpp
+require_literal "Media probe participates in assemble invalidation" \
+    '$(ROOT)/smoke/winehua_media_smoke.cpp' Makefile
+require_literal "Media probe is self-contained on the Wine runtime" \
+    "-static-libgcc -static-libstdc++" scripts/assemble.sh
+require_literal "Media probe has a versioned managed payload" \
+    "phase2-vulkan-dxvk-legacy-v7-media" scripts/assemble.sh
+require_literal "Media probe packages the x64 PE" \
+    '"x64/winehua_media_smoke.exe"' scripts/assemble.sh
+require_literal "Media probe packages the x86 PE" \
+    '"x86/winehua_media_smoke.exe"' scripts/assemble.sh
+require_literal_count "Media probe is required for both PE widths" \
+    "winehua_media_smoke.exe'" 2 entry/src/main/ets/service/SmokeRunner.ets
 require_literal "DXVK performance excludes startup from sample" \
     "Sampling starts from a clean log buffer" \
     automation/Measure-WineHuaDxvkPerformance.ps1
@@ -237,6 +285,12 @@ require_literal "Frame-order parser accepts Direct transport summary" \
 require_literal "DXVK performance plan" \
     "# DXVK 1.10 / 2.6 性能差距分析与优化计划" \
     docs/graphics/DXVK_GENERATION_PERFORMANCE_PLAN.md
+require_literal "Media playback attribution boundary is documented" \
+    "媒体播放与图形路由：已确认的边界" \
+    docs/graphics/DXVK_GENERATION_PERFORMANCE_PLAN.md
+require_literal "Per-producer media presenter ownership is documented" \
+    "NativeImage consumer 的 presenter 类型由 producer surface 归属" \
+    docs/graphics/DIRECT_PRESENT_REFERENCE_AUDIT.md
 
 dxvk_shadow_selector="$(require_value defaults dxvk_shadow_selector)"
 require_literal "DXVK product Host policy" \

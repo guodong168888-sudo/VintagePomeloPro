@@ -15,7 +15,9 @@ struct ProgramOptions {
     std::string workingDirectory;
     std::string prefixMode = "reuse";
     std::string d3dBackend = "dxvk_legacy";
-    std::string presentBackend = "virgl_compositor";
+    // The graphics route is derived from d3dBackend.  Smoke tests only need
+    // to say whether the selected route should publish to a surface.
+    bool presentToSurface = true;
     bool automationMode = false;
 };
 

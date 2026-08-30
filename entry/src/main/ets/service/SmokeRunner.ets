@@ -221,11 +221,13 @@ export function syncManagedSmoke(prefixMode: string): boolean {
     'x64/winehua_audio_smoke.exe', 'x64/winehua_graphics_smoke.exe',
     'x64/winehua_vulkan_smoke.exe', 'x64/winehua_d3d11_smoke.exe',
     'x64/winehua_d3d8_smoke.exe', 'x64/winehua_d3d_switch_cube.exe',
+    'x64/winehua_media_smoke.exe',
     'x64/winehua_win32_driver.exe',
     'x64/winehua_network_probe.exe',
     'x86/winehua_audio_smoke.exe', 'x86/winehua_graphics_smoke.exe',
     'x86/winehua_vulkan_smoke.exe', 'x86/winehua_d3d11_smoke.exe',
     'x86/winehua_d3d8_smoke.exe', 'x86/winehua_d3d_switch_cube.exe',
+    'x86/winehua_media_smoke.exe',
     'x86/winehua_win32_driver.exe',
     'assets/venus_storage_write.spv', 'assets/venus_storage_read.spv',
     'assets/venus_image_fetch.spv', 'assets/venus_combined_sample.spv',
@@ -1328,7 +1330,7 @@ export class SmokeRunner {
         workingDirectory: `C:\\smoke\\${spec.architecture}`,
         prefixMode: this.request.prefixMode,
         d3dBackend: isDxvk ? 'dxvk_legacy' : 'wined3d',
-        presentBackend: isPresent ? 'venus_broker_present' : 'venus_offscreen',
+        presentToSurface: isPresent,
         automationMode: true
       }) as ProcessInfo;
     } else {
@@ -1348,7 +1350,7 @@ export class SmokeRunner {
         workingDirectory: `C:\\smoke\\${spec.architecture}`,
         prefixMode: this.request.prefixMode,
         d3dBackend: 'wined3d',
-        presentBackend: 'virgl_compositor',
+        presentToSurface: true,
         automationMode: true
       }) as ProcessInfo;
     }

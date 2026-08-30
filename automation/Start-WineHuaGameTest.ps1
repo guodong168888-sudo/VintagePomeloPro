@@ -37,7 +37,10 @@ if (-not $DeviceId) {
 }
 
 & $hdc -t $DeviceId shell power-shell wakeup | Out-Null
-& $hdc -t $DeviceId shell power-shell timeout -o 600000 | Out-Null
+# Keep the physical target awake throughout long graphics/media A/B runs.
+# Harmony's timeout override accepts a signed 32-bit millisecond value; use
+# the maximum instead of resetting every launch to the old ten-minute window.
+& $hdc -t $DeviceId shell power-shell timeout -o 2147483647 | Out-Null
 
 if ($GamePreset -eq 'heaven-dx11') {
     if ($GameArguments.Count -gt 0) {
@@ -119,7 +122,7 @@ foreach ($pair in $environmentPairs) {
         'BOX64_DYNAREC_STRONGMEM',
         'BOX64_AVX'
     )
-    if ($key -notmatch '^(WINEDEBUG|DXVK_|VN_|VKR_|WINEHUA_DXVK_|WINEHUA_VKR_)[A-Za-z0-9_]*$' -and
+    if ($key -notmatch '^(WINEDEBUG|GST_DEBUG|GST_DEBUG_NO_COLOR|DXVK_|VN_|VKR_|WINEHUA_DXVK_|WINEHUA_VKR_)[A-Za-z0-9_]*$' -and
         $allowedBox64Keys -notcontains $key) {
         throw "Unsupported D3D environment key: $key"
     }
@@ -143,7 +146,7 @@ for ($attempt = 0; $attempt -lt 25; ++$attempt) {
     # pidof only reports the main Ability. Native Wine/VirGL children have
     # suffixed process names and can keep the GPU workload alive after the
     # Ability has disappeared, contaminating the next A/B run.
-    $processLines = @(& $hdc -t $DeviceId shell ps -ef 2>$null |
+    $processLines = @(& $hdc -t $DeviceId shell ps -A -o PID,PPID,NAME 2>$null |
         Where-Object { $_ -match [regex]::Escape($bundle) })
     if ($processLines.Count -eq 0) {
         $stopped = $true

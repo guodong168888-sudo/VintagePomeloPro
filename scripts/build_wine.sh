@@ -9,6 +9,24 @@ WINE_CFLAGS="-g -O2 -D__MUSL__ -D_GNU_SOURCE -D__ANDROID__ -D__OHOS__ -DWINE_UNI
     -D_NTSYSTEM_ -D__WINESRC__ -DFAR= -D_ACRTIMP= -DWINBASEAPI= -DZ_SOLO \
     -fPIC -fasynchronous-unwind-tables"
 
+apply_wine_patches() {
+    local patch_dir="$ROOT/patches/wine"
+    local patch
+
+    [ -d "$patch_dir" ] || return 0
+    for patch in "$patch_dir"/*.patch; do
+        [ -e "$patch" ] || continue
+        if git -C "$WINE_SRC" apply --reverse --check "$patch" >/dev/null 2>&1; then
+            log "Wine 补丁已应用: $(basename "$patch")"
+        elif git -C "$WINE_SRC" apply --check "$patch"; then
+            log "应用 Wine 补丁: $(basename "$patch")"
+            git -C "$WINE_SRC" apply "$patch"
+        else
+            die "Wine 补丁无法应用或回退: $patch"
+        fi
+    done
+}
+
 build_native_tools() {
     log "--- Native 构建 (winegcc 等 host 工具) ---"
     mkdir -p "$BUILD_DIR/wine-native"
@@ -226,6 +244,8 @@ build_wineserver() {
 
 # ---- main ----
 log "=== 构建 Wine ==="
+
+apply_wine_patches
 
 # 从 configure.ac 重新生成 configure 到构建目录 (不污染源码树)
 # 我们的 configure.ac 新增了 wineohos.drv 等模块的 WINE_CONFIG_MAKEFILE

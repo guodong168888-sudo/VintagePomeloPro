@@ -85,6 +85,7 @@ private:
     uint64_t zeroCopyTimestampRegressions_ = 0;
     int64_t zeroCopyLastTimestamp_ = 0;
     uint64_t zeroCopySurfaceKey_ = 0;
+    uint32_t zeroCopySurfaceSerial_ = 0;
     uint64_t zeroCopyLastQueryUs_ = 0;
     uint32_t zeroCopyClientPid_ = 0;
     uint32_t zeroCopySurfaceId_ = 0;

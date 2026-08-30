@@ -30,6 +30,7 @@ CONFIG    := $(NATIVE_ARCH)
 BUILD_DIR := $(ROOT)/build
 STAMPS    := $(BUILD_DIR)/.stamps
 SCRIPTS   := $(ROOT)/scripts
+WINE_PATCH_DIR := $(ROOT)/patches/wine
 DXVK_ARTIFACTS := \
 	$(BUILD_DIR)/dxvk/legacy/x64/bin/d3d9.dll \
 	$(BUILD_DIR)/dxvk/legacy/x64/bin/d3d10core.dll \
@@ -275,6 +276,8 @@ wine: $(STAMPS)/wine-$(CONFIG)
 $(STAMPS)/wine-$(CONFIG): $(SCRIPTS)/build_wine.sh $(SCRIPTS)/env.sh $(STAMPS)/deps FORCE | $(STAMPS)
 	@if [ -f $@ ] && [ -f $(WINE_SENTINEL) ] && \
 	    ! [ "$(SCRIPTS)/build_wine.sh" -nt $@ ] && \
+	    ! find $(WINE_PATCH_DIR) -newer $@ -type f -name '*.patch' \
+	           2>/dev/null | grep -q . && \
 	    ! find $(ROOT)/thirdparty/wine \
 	           -newer $@ -type f \
 	           \( -name '*.c' -o -name '*.h' -o -name '*.cpp' -o -name '*.cc' \
@@ -365,6 +368,7 @@ $$(STAMPS)/$(1)/assemble: $(SCRIPTS)/assemble.sh $(SCRIPTS)/env.sh $(DXVK_ARTIFA
 	$(VKD3D_PROTON_ARTIFACTS) \
 	$(ROOT)/smoke/winehua_d3d8_smoke.c \
 	$(ROOT)/smoke/winehua_d3d_switch_cube.c \
+	$(ROOT)/smoke/winehua_media_smoke.cpp \
 	$(ROOT)/smoke/winehua_dxvk26_requirements.c \
 	$(ROOT)/smoke/winehua_win32_driver.c \
 	$(ROOT)/smoke/winehua_network_probe.c \

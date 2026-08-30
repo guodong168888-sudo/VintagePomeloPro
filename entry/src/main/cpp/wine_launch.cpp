@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <cctype>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -47,13 +48,53 @@ static bool DirExists(const char* path) {
     return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-bool IsWinePrefixInitialized(const std::string& prefixDir) {
+static bool FileContainsAsciiCaseInsensitive(const std::string& path, const char* needle) {
+    FILE* file = fopen(path.c_str(), "r");
+    if (!file) return false;
+
+    char line[4096];
+    const size_t needleLength = strlen(needle);
+    bool found = false;
+    while (!found && fgets(line, sizeof(line), file)) {
+        const size_t lineLength = strlen(line);
+        if (lineLength < needleLength) continue;
+        for (size_t offset = 0; offset + needleLength <= lineLength; ++offset) {
+            size_t index = 0;
+            while (index < needleLength &&
+                   static_cast<unsigned char>(line[offset + index]) < 0x80 &&
+                   static_cast<unsigned char>(needle[index]) < 0x80 &&
+                   std::tolower(static_cast<unsigned char>(line[offset + index])) ==
+                       std::tolower(static_cast<unsigned char>(needle[index]))) {
+                ++index;
+            }
+            if (index == needleLength) {
+                found = true;
+                break;
+            }
+        }
+    }
+    fclose(file);
+    return found;
+}
+
+static bool IsWinePrefixCorePresent(const std::string& prefixDir) {
     const std::string prefix = prefixDir.empty() ? WINE_PREFIX : prefixDir;
     return FileHasData((prefix + "/system.reg").c_str()) &&
            FileHasData((prefix + "/user.reg").c_str()) &&
            DirExists((prefix + "/drive_c/windows/system32").c_str()) &&
            DirExists((prefix + "/drive_c/windows/temp").c_str()) &&
            DirExists((prefix + "/drive_c/users").c_str());
+}
+
+bool IsWinePrefixInitialized(const std::string& prefixDir) {
+    const std::string prefix = prefixDir.empty() ? WINE_PREFIX : prefixDir;
+    // A partially written registry used to pass the directory-only checks and
+    // permanently skip wine.inf DefaultInstall. MMDeviceEnumerator is a core
+    // registration installed by that path and is also required before any
+    // application can enumerate the Wine audio endpoint.
+    return IsWinePrefixCorePresent(prefix) &&
+           FileContainsAsciiCaseInsensitive(
+               prefix + "/system.reg", "bcde0395-e52f-467c-8e3d-c4579291692e");
 }
 
 bool IsWinePrefixInitialized() {
@@ -91,6 +132,101 @@ static bool IsProcessAliveNotZombie(pid_t pid) {
     buf[n] = 0;
     char* rp = strrchr(buf, ')');               // state 字段在最后一个 ')' 之后
     return !(rp && rp[2] == 'Z');               // 僵尸 = 已退出
+}
+
+enum class WinebootWaitResult {
+    Completed,
+    NoProgress,
+    AbsoluteTimeout,
+};
+
+static bool IsWinebootWorker(const WineProcessEntry& entry) {
+    return entry.running && !strcasecmp(entry.exeBasename.c_str(), "wineboot.exe");
+}
+
+static bool HasRunningWinebootWorker() {
+    for (const auto& entry : GetProcessListSnapshot()) {
+        if (IsWinebootWorker(entry)) return true;
+    }
+    return false;
+}
+
+static void StopWinebootAttempt(pid_t launcherPid) {
+    // wine/box64 launcher 与 PROCESSBROKER 创建的 wineboot.exe 是 NCP 兄弟
+    // 进程，不一定构成可遍历的 /proc 父子树；两类 pid 都必须显式停止。
+    for (const auto& entry : GetProcessListSnapshot()) {
+        if (IsWinebootWorker(entry)) KillProcessTree(entry.pid);
+    }
+    KillProcessTree(launcherPid);
+}
+
+static const char* WinebootFailureReason(WinebootWaitResult result) {
+    return result == WinebootWaitResult::AbsoluteTimeout
+        ? "wineboot-cap" : "wineboot-no-progress";
+}
+
+static WinebootWaitResult WaitForWinebootCompletion(pid_t launcherPid,
+                                                     const std::string& prefixDir,
+                                                     int* waitedMsOut) {
+    constexpr int kPollMs = 500;
+    constexpr int kWorkerRegistrationGraceMs = 2000;
+    constexpr int kNoProgressGraceMs = 90 * 1000;
+    constexpr int kAbsoluteCapMs = 5 * 60 * 1000;
+    const std::string progressPaths[] = {
+        prefixDir + "/drive_c/windows",
+        prefixDir + "/drive_c/windows/mono",
+        prefixDir + "/drive_c/windows/system32",
+        prefixDir + "/system.reg",
+        prefixDir + "/user.reg",
+    };
+    auto progressStamp = [&progressPaths]() -> int64_t {
+        int64_t latest = 0;
+        for (const auto& path : progressPaths) {
+            struct stat st;
+            if (stat(path.c_str(), &st) == 0 && (int64_t)st.st_mtime > latest)
+                latest = (int64_t)st.st_mtime;
+        }
+        return latest;
+    };
+
+    int waitedMs = 0;
+    int lastProgressMs = 0;
+    int64_t lastStamp = progressStamp();
+    bool observedWorker = false;
+    while (waitedMs < kAbsoluteCapMs) {
+        const bool launcherRunning = IsProcessAliveNotZombie(launcherPid);
+        const bool workerRunning = HasRunningWinebootWorker();
+        observedWorker = observedWorker || workerRunning;
+        if (!launcherRunning && !workerRunning &&
+            (observedWorker || waitedMs >= kWorkerRegistrationGraceMs)) {
+            if (waitedMsOut) *waitedMsOut = waitedMs;
+            return WinebootWaitResult::Completed;
+        }
+
+        usleep(kPollMs * 1000);
+        waitedMs += kPollMs;
+        const int64_t nowStamp = progressStamp();
+        if (nowStamp != lastStamp) {
+            lastStamp = nowStamp;
+            lastProgressMs = waitedMs;
+        }
+        if (waitedMs % 10000 == 0) {
+            OH_LOG_INFO(LOG_APP,
+                        "[Launch-Async] wineboot still running (%{public}d s launcher=%{public}d worker=%{public}d)",
+                        waitedMs / 1000, launcherRunning ? 1 : 0, workerRunning ? 1 : 0);
+        }
+        if (waitedMs - lastProgressMs >= kNoProgressGraceMs) {
+            OH_LOG_ERROR(LOG_APP,
+                         "[Launch-Async] wineboot launcher/worker alive but no prefix progress for %{public}d s",
+                         kNoProgressGraceMs / 1000);
+            if (waitedMsOut) *waitedMsOut = waitedMs;
+            return WinebootWaitResult::NoProgress;
+        }
+    }
+    if (waitedMsOut) *waitedMsOut = waitedMs;
+    OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineboot exceeded %{public}d s absolute cap",
+                 kAbsoluteCapMs / 1000);
+    return WinebootWaitResult::AbsoluteTimeout;
 }
 
 // -- WoW64 syswow64 预填充辅助 --
@@ -564,13 +700,24 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
     StartBrokerServer();
     setenv("PROCESSBROKER", WINE_BROKER_SOCKET, 1);
 
-    // -- wineboot --init --
+    // -- wineboot init / incomplete-prefix repair --
     const std::string initMarker = p->prefixDir + "/.winehua-init-in-progress";
-    bool prefixReady = IsWinePrefixInitialized(p->prefixDir)
+    const bool prefixCorePresent = IsWinePrefixCorePresent(p->prefixDir);
+    bool prefixReady = prefixCorePresent && IsWinePrefixInitialized(p->prefixDir)
         && access(initMarker.c_str(), F_OK) != 0;
 
     if (!prefixReady) {
-        OH_LOG_INFO(LOG_APP, "[Launch-Async] prefix not initialized, preparing WoW64 and running wineboot --init...");
+        // --init intentionally honors .update-timestamp. That is correct for a
+        // fresh prefix, but cannot repair an old prefix which wrote the timestamp
+        // before wine.inf finished. Preserve the prefix and force DefaultInstall
+        // with --update only when the core registry/files already exist.
+        const bool repairIncompletePrefix = prefixCorePresent;
+        const char* winebootOption = repairIncompletePrefix ? "--update" : "--init";
+        OH_LOG_INFO(LOG_APP,
+                    "[Launch-Async] %{public}s; preparing WoW64 and running wineboot %{public}s...",
+                    repairIncompletePrefix ? "prefix core present but critical registrations missing"
+                                           : "prefix not initialized",
+                    winebootOption);
         auto* ws = WaylandServer::GetInstance();
         ws->SetDesktopRootRecognitionEnabled(false);
         // wineboot creates shell-owned helper windows while initializing a fresh
@@ -579,7 +726,7 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
         // session can leave Wayland/audio/graphics services half initialized.
         const char* desktopTag =
             (ws->IsDesktopMode() || p->automationMode) ? "__winehua_desktop__|" : "";
-        // 注意: wineboot --init 只需要初始化 prefix, 不传完整环境变量以节省 entryParams 长度
+        // wineboot only needs prefix/compat environment here; avoid inflating entryParams.
         // 首启 wineboot 失败允许从标记重跑一次 (慢设备/瞬时崩溃), 避免一次失败
         // 就把整条启动链打回; 只有重试耗尽才发 fail:。
         constexpr int kMaxWinebootAttempts = 2;
@@ -588,8 +735,9 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
         int winebootWaitMs = 0;
         for (int attempt = 1; attempt <= kMaxWinebootAttempts && !winebootOk; attempt++) {
             if (attempt > 1) {
-                OH_LOG_WARN(LOG_APP, "[Launch-Async] retrying wineboot --init (attempt %d/%d)",
-                            attempt, kMaxWinebootAttempts);
+                OH_LOG_WARN(LOG_APP,
+                            "[Launch-Async] retrying wineboot %{public}s (attempt %{public}d/%{public}d)",
+                            winebootOption, attempt, kMaxWinebootAttempts);
                 usleep(kWinebootRetryBackoffMs * 1000);
             }
             if (FILE* marker = fopen(initMarker.c_str(), "w")) {
@@ -603,10 +751,10 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
             }
 #ifdef __aarch64__
             std::string entryParams = p->homeDir + "|" + p->winehuaBin + "|" + desktopTag +
-                "wineboot|--init|__env=WINEPREFIX=" + p->prefixDir;
+                "wineboot|" + winebootOption + "|__env=WINEPREFIX=" + p->prefixDir;
 #else
             std::string entryParams = p->homeDir + "|" + p->winehuaBin + "|" + desktopTag +
-                "wine|wineboot|--init|__env=WINEPREFIX=" + p->prefixDir;
+                "wine|wineboot|" + winebootOption + "|__env=WINEPREFIX=" + p->prefixDir;
 #endif
 #ifdef __aarch64__
             AppendCompatEnvToEntryParams(entryParams, *p);
@@ -635,67 +783,22 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
             // 栈尚未就绪, 应用作为首个 GUI 进程 attach VirGL surface 失败 → 白屏。
             // wineboot 退出时 NCP 退出回调 RemoveProcess 置 running=false, 等待自然结束。
             AddProcess(childPid, "@engine/wineboot", -1, "@engine/wineboot");
-        /* 首次初始化 (wine.inf 的 PreInstall/DefaultInstall/Wow64Install + 可选 Mono)
-         * 耗时与设备性能强相关, 模拟器上可超过 30s — 固定死线会把仍在正常初始化的
-         * wineboot 误判为失败。改为"进展驱动"看门狗: prefix 关键路径的 mtime 持续
-         * 变化就视为仍在推进并继续等待; 进程活着但长时间零进展才判死; 绝对上限只
-         * 作挂死安全网, 正常情况下不会触发。 */
-            constexpr int kWinebootPollMs = 1000;
-            constexpr int kWinebootNoProgressGraceMs = 90 * 1000;
-            constexpr int kWinebootAbsoluteCapMs = 5 * 60 * 1000;
-            const std::string winebootProgressPaths[] = {
-                p->prefixDir + "/drive_c/windows",
-                p->prefixDir + "/drive_c/windows/mono",
-                p->prefixDir + "/drive_c/windows/system32",
-                p->prefixDir + "/system.reg",
-                p->prefixDir + "/user.reg",
-            };
-            auto winebootProgressStamp = [&winebootProgressPaths]() -> int64_t {
-                int64_t latest = 0;
-                for (const auto& path : winebootProgressPaths) {
-                    struct stat st;
-                    if (stat(path.c_str(), &st) == 0 && (int64_t)st.st_mtime > latest)
-                        latest = (int64_t)st.st_mtime;
-                }
-                return latest;
-            };
-            int64_t lastStamp = winebootProgressStamp();
-            int waitedMs = 0;
-            int lastProgressMs = 0;
-            while (IsProcessAliveNotZombie(childPid) && waitedMs < kWinebootAbsoluteCapMs) {
-                usleep(kWinebootPollMs * 1000);
-                waitedMs += kWinebootPollMs;
-                const int64_t nowStamp = winebootProgressStamp();
-                if (nowStamp != lastStamp) {
-                    lastStamp = nowStamp;
-                    lastProgressMs = waitedMs;
-                }
-                if (waitedMs % 10000 == 0)
-                    OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot still initializing (%{public}d s)",
-                                waitedMs / 1000);
-                if (waitedMs - lastProgressMs >= kWinebootNoProgressGraceMs) {
-                    OH_LOG_ERROR(LOG_APP,
-                                 "[Launch-Async] wineboot alive but no prefix progress for %{public}d s, abort (attempt %{public}d)",
-                                 kWinebootNoProgressGraceMs / 1000, attempt);
-                    winebootWaitMs = waitedMs;
-                    if (attempt >= kMaxWinebootAttempts) {
-                        EmitEngineFail("wineboot-no-progress");
-                        return false;
-                    }
-                    continue;
-                }
-            }
-            if (waitedMs >= kWinebootAbsoluteCapMs) {
-                OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineboot exceeded %{public}d s absolute cap, abort (attempt %{public}d)",
-                             kWinebootAbsoluteCapMs / 1000, attempt);
-                winebootWaitMs = waitedMs;
+            /* 等待外层 wine/box64 launcher 以及 PROCESSBROKER 实际创建的
+             * wineboot.exe。只等 launcher 会在 Windows worker 仍运行时提前
+             * 启动 Explorer，导致所有客户端永久卡在 boot event。 */
+            const WinebootWaitResult waitResult =
+                WaitForWinebootCompletion(childPid, p->prefixDir, &winebootWaitMs);
+            if (waitResult != WinebootWaitResult::Completed) {
+                StopWinebootAttempt(childPid);
+                OH_LOG_ERROR(LOG_APP,
+                             "[Launch-Async] wineboot attempt %{public}d/%{public}d did not complete",
+                             attempt, kMaxWinebootAttempts);
                 if (attempt >= kMaxWinebootAttempts) {
-                    EmitEngineFail("wineboot-cap");
+                    EmitEngineFail(WinebootFailureReason(waitResult));
                     return false;
                 }
                 continue;
             }
-            winebootWaitMs = waitedMs;
         /* wineboot 已退出: registry 仍在 wineserver flush 途中 (实测落盘延迟
          * 稳定 ~13s), 宽限窗口等文件就绪 — 文件到位即通过, 不会满等 */
             if (!WaitFor("wine prefix",
@@ -752,22 +855,22 @@ static bool LaunchPadMode(LaunchParams* p, int audioBootstrapFd,
         if (ret != NCP_NO_ERROR) {
             OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineboot --init FAILED ret=%{public}d",
                          (int)ret);
+            EmitEngineFail("wineboot-spawn");
+            return false;
         } else {
             OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot --init pid=%{public}d", childPid);
             // 登记 wineboot: NCP 模式存活判定依赖注册表, 未登记会 0ms 放行
             // (done 0 ms) → ready 提前 → PC 首启白屏 (与首启登记同理)。
             AddProcess(childPid, "@engine/wineboot", -1, "@engine/wineboot");
-            /* 与首启相同的等待纪律: wineboot 活着就继续等, 大超时仅作挂死
-             * 安全网。wineboot 退出即 SetEvent, explorer 即可放行。 */
-            char procPath[64];
-            snprintf(procPath, sizeof(procPath), "/proc/%d", childPid);
-            constexpr int kWinebootHangMs = 3 * 60 * 1000;
             int aliveMs = 0;
-            while (IsProcessAliveNotZombie(childPid) && aliveMs < kWinebootHangMs) {
-                usleep(500000);
-                aliveMs += 500;
+            const WinebootWaitResult waitResult =
+                WaitForWinebootCompletion(childPid, p->prefixDir, &aliveMs);
+            if (waitResult != WinebootWaitResult::Completed) {
+                StopWinebootAttempt(childPid);
+                EmitEngineFail(WinebootFailureReason(waitResult));
+                return false;
             }
-            OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot --init done (%{public}d ms)",
+            OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot launcher + worker completed (%{public}d ms)",
                         aliveMs);
             if (!WaitFor("wineserver socket after wineboot seed",
                          [p]() { return IsWineserverSocketReady(p->prefixDir); }, 5000, 100)) {

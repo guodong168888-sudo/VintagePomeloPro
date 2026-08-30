@@ -171,28 +171,70 @@ bool EglRenderer::TryAttachZeroCopySurface(uint32_t rendererToplevelId)
 
     std::vector<winehua::ZeroCopySurfaceInfo> surfaces;
     if (!broker.QueryZeroCopySurfaces(surfaces)) return zeroCopyRegistered_;
+    uint64_t promotedSurfaceKey = 0;
     if (zeroCopyRegistered_)
     {
-        for (const auto& surface : surfaces)
+        const auto currentSurface = std::find_if(
+            surfaces.begin(), surfaces.end(), [this](const auto& surface) {
+                return surface.surfaceKey == zeroCopySurfaceKey_;
+            });
+        if (currentSurface != surfaces.end())
         {
-            if (surface.surfaceKey != zeroCopySurfaceKey_) continue;
-            if (surface.vulkan != broker.IsVulkanPresentMode()) {
+            const auto& surface = *currentSurface;
+            if (surface.vulkan != zeroCopyVulkanSource_) {
                 ReleaseZeroCopyBinding();
-                break;
             }
-            zeroCopySourceW_ = static_cast<int>(surface.width);
-            zeroCopySourceH_ = static_cast<int>(surface.height);
-            zeroCopyVulkanSource_ = surface.vulkan;
-            return true;
+            else
+            {
+                zeroCopySourceW_ = static_cast<int>(surface.width);
+                zeroCopySourceH_ = static_cast<int>(surface.height);
+                zeroCopyVulkanSource_ = surface.vulkan;
+                zeroCopySurfaceSerial_ = surface.serial;
+
+                // Query() orders candidates by their most recent present time.
+                // Keep a binding once it has delivered or published a frame.
+                // A never-producing binding may yield only to a higher-ranked,
+                // compositor-visible producer; `serial` is surface-local and is
+                // deliberately not used as a cross-surface recency comparison.
+                const bool currentHasFrame = zeroCopyFrames_ != 0 || zeroCopyHasFrame_ ||
+                    zeroCopyReadyPublished_;
+                if (currentHasFrame) return true;
+
+                const uint64_t staleSurfaceKey = zeroCopySurfaceKey_;
+                const uint32_t staleSurfaceSerial = zeroCopySurfaceSerial_;
+                for (auto candidate = surfaces.begin(); candidate != currentSurface;
+                     ++candidate)
+                {
+                    if (!candidate->surfaceKey || candidate->attached) continue;
+                    WaylandServer::ZeroCopyLayerInfo candidateLayer;
+                    if (!server->GetZeroCopyLayerInfo(
+                            candidate->surfaceKey, rendererToplevelId,
+                            static_cast<int>(candidate->width),
+                            static_cast<int>(candidate->height), candidateLayer))
+                        continue;
+
+                    promotedSurfaceKey = candidate->surfaceKey;
+                    OH_LOG_INFO(
+                        LOG_APP,
+                        "[VIRGL-ZC][MAIN] promote stale surface tl=%{public}u "
+                        "old_key=%{public}llu old_serial=%{public}u "
+                        "new_key=%{public}llu new_serial=%{public}u",
+                        rendererToplevelId,
+                        static_cast<unsigned long long>(staleSurfaceKey), staleSurfaceSerial,
+                        static_cast<unsigned long long>(candidate->surfaceKey),
+                        candidate->serial);
+                    ReleaseZeroCopyBinding();
+                    break;
+                }
+            }
         }
-        return true;
+        if (zeroCopyRegistered_ || !promotedSurfaceKey) return true;
     }
 
-    const bool wantVulkanSurface = broker.IsVulkanPresentMode();
     for (const auto& surface : surfaces)
     {
+        if (promotedSurfaceKey && surface.surfaceKey != promotedSurfaceKey) continue;
         if (!surface.surfaceKey || surface.attached) continue;
-        if (surface.vulkan != wantVulkanSurface) continue;
         WaylandServer::ZeroCopyLayerInfo layer;
         if (!server->GetZeroCopyLayerInfo(surface.surfaceKey, rendererToplevelId,
                                           static_cast<int>(surface.width),
@@ -236,18 +278,20 @@ bool EglRenderer::TryAttachZeroCopySurface(uint32_t rendererToplevelId)
         if (!zeroCopyProducerWindow_ ||
             !broker.AttachZeroCopyTarget(
                 surface.surfaceKey, zeroCopyProducerWindow_,
-                static_cast<uint64_t>(vsyncPeriodNs_.load(std::memory_order_relaxed))))
+                static_cast<uint64_t>(vsyncPeriodNs_.load(std::memory_order_relaxed)),
+                surface.vulkan))
         {
             ReleaseZeroCopyBinding();
             continue;
         }
 
         zeroCopySurfaceKey_ = surface.surfaceKey;
+        zeroCopySurfaceSerial_ = surface.serial;
         zeroCopyClientPid_ = surface.clientPid;
         zeroCopySurfaceId_ = surface.surfaceId;
         zeroCopySourceW_ = static_cast<int>(surface.width);
         zeroCopySourceH_ = static_cast<int>(surface.height);
-        zeroCopyVulkanSource_ = surface.vulkan || broker.IsVulkanPresentMode();
+        zeroCopyVulkanSource_ = surface.vulkan;
         zeroCopyLayerX_ = layer.x;
         zeroCopyLayerY_ = layer.y;
         zeroCopyLayerW_ = layer.width;
@@ -516,6 +560,7 @@ void EglRenderer::ReleaseZeroCopyBinding()
     zeroCopyCoalescedSignals_ = 0;
     zeroCopyDuplicateTimestamps_ = 0;
     zeroCopySurfaceKey_ = 0;
+    zeroCopySurfaceSerial_ = 0;
     zeroCopyClientPid_ = 0;
     zeroCopySurfaceId_ = 0;
     zeroCopySourceW_ = 0;

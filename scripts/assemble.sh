@@ -12,7 +12,7 @@ assemble_pad() {
 
     local wine_data="$STAGING_DIR/wine-data"
     local guest_arch="${GUEST_ARCH:-x86_64}"
-    local smoke_suite_version="phase2-vulkan-dxvk-legacy-v6-d3d8-d3d9"
+    local smoke_suite_version="phase2-vulkan-dxvk-legacy-v7-media"
     rm -rf "$STAGING_DIR"
     rm -rf "$wine_data"
     mkdir -p "$wine_data/bin/x86_64-windows"
@@ -360,6 +360,18 @@ PY
     i686-w64-mingw32-gcc -O2 -s -mwindows -o \
         "$smoke_dir/x86/winehua_d3d8_smoke.exe" "$d3d8_source" \
         -luser32 -lgdi32
+    # Deterministic DirectShow/GStreamer probe.  Build both PE widths so media
+    # regressions can be separated from a game's own playback state machine.
+    local media_source="$WINEHUA/smoke/winehua_media_smoke.cpp"
+    # Keep the diagnostic self-contained.  The Wine runtime intentionally does
+    # not ship MinGW's libgcc/libstdc++ DLLs, and a dynamically linked probe
+    # would fail before wmain() with c0000135 instead of testing DirectShow.
+    x86_64-w64-mingw32-g++ -O2 -s -municode -static-libgcc -static-libstdc++ -o \
+        "$smoke_dir/x64/winehua_media_smoke.exe" "$media_source" \
+        -lstrmiids -lole32 -luuid -luser32
+    i686-w64-mingw32-g++ -O2 -s -municode -static-libgcc -static-libstdc++ -o \
+        "$smoke_dir/x86/winehua_media_smoke.exe" "$media_source" \
+        -lstrmiids -lole32 -luuid -luser32
     local win32_driver_source="$WINEHUA/smoke/winehua_win32_driver.c"
     x86_64-w64-mingw32-gcc -O2 -s -municode -mwindows -o \
         "$smoke_dir/x64/winehua_win32_driver.exe" "$win32_driver_source" \
@@ -445,8 +457,8 @@ PY
         cp "$smoke64" "$smoke_dir/x64/$smoke_program.exe"
         cp "$smoke32" "$smoke_dir/x86/$smoke_program.exe"
     done
-    local audio64_sha graphics64_sha vulkan64_sha d3d1164_sha d3d864_sha cube64_sha driver64_sha
-    local audio32_sha graphics32_sha vulkan32_sha d3d1132_sha d3d832_sha cube32_sha driver32_sha
+    local audio64_sha graphics64_sha vulkan64_sha d3d1164_sha d3d864_sha cube64_sha media64_sha driver64_sha
+    local audio32_sha graphics32_sha vulkan32_sha d3d1132_sha d3d832_sha cube32_sha media32_sha driver32_sha
     local storage_write_sha storage_read_sha image_fetch_sha combined_sample_sha separated_sample_sha
     audio64_sha="$(sha256sum "$smoke_dir/x64/winehua_audio_smoke.exe" | awk '{print $1}')"
     graphics64_sha="$(sha256sum "$smoke_dir/x64/winehua_graphics_smoke.exe" | awk '{print $1}')"
@@ -454,6 +466,7 @@ PY
     d3d1164_sha="$(sha256sum "$smoke_dir/x64/winehua_d3d11_smoke.exe" | awk '{print $1}')"
     d3d864_sha="$(sha256sum "$smoke_dir/x64/winehua_d3d8_smoke.exe" | awk '{print $1}')"
     cube64_sha="$(sha256sum "$smoke_dir/x64/winehua_d3d_switch_cube.exe" | awk '{print $1}')"
+    media64_sha="$(sha256sum "$smoke_dir/x64/winehua_media_smoke.exe" | awk '{print $1}')"
     driver64_sha="$(sha256sum "$smoke_dir/x64/winehua_win32_driver.exe" | awk '{print $1}')"
     audio32_sha="$(sha256sum "$smoke_dir/x86/winehua_audio_smoke.exe" | awk '{print $1}')"
     graphics32_sha="$(sha256sum "$smoke_dir/x86/winehua_graphics_smoke.exe" | awk '{print $1}')"
@@ -461,6 +474,7 @@ PY
     d3d1132_sha="$(sha256sum "$smoke_dir/x86/winehua_d3d11_smoke.exe" | awk '{print $1}')"
     d3d832_sha="$(sha256sum "$smoke_dir/x86/winehua_d3d8_smoke.exe" | awk '{print $1}')"
     cube32_sha="$(sha256sum "$smoke_dir/x86/winehua_d3d_switch_cube.exe" | awk '{print $1}')"
+    media32_sha="$(sha256sum "$smoke_dir/x86/winehua_media_smoke.exe" | awk '{print $1}')"
     driver32_sha="$(sha256sum "$smoke_dir/x86/winehua_win32_driver.exe" | awk '{print $1}')"
     storage_write_sha="$(sha256sum "$smoke_dir/assets/venus_storage_write.spv" | awk '{print $1}')"
     storage_read_sha="$(sha256sum "$smoke_dir/assets/venus_storage_read.spv" | awk '{print $1}')"
@@ -517,6 +531,7 @@ EOF
     "x64/winehua_d3d11_smoke.exe": "$d3d1164_sha",
     "x64/winehua_d3d8_smoke.exe": "$d3d864_sha",
     "x64/winehua_d3d_switch_cube.exe": "$cube64_sha",
+    "x64/winehua_media_smoke.exe": "$media64_sha",
     "x64/winehua_win32_driver.exe": "$driver64_sha",
     "x86/winehua_audio_smoke.exe": "$audio32_sha",
     "x86/winehua_graphics_smoke.exe": "$graphics32_sha",
@@ -524,6 +539,7 @@ EOF
     "x86/winehua_d3d11_smoke.exe": "$d3d1132_sha",
     "x86/winehua_d3d8_smoke.exe": "$d3d832_sha",
     "x86/winehua_d3d_switch_cube.exe": "$cube32_sha",
+    "x86/winehua_media_smoke.exe": "$media32_sha",
     "x86/winehua_win32_driver.exe": "$driver32_sha",
     "assets/venus_storage_write.spv": "$storage_write_sha",
     "assets/venus_storage_read.spv": "$storage_read_sha",
@@ -697,6 +713,13 @@ HKLM,%FontSubStr%,"Lucida Console",,"Noto Sans Mono"' "$wine_data/share/wine/win
     mkdir -p "$rawfile_dir"
     local zip_name="wine-data.zip"
     cd "$wine_data"
+    # Runtime identity must describe extracted file content, not ZIP containe
+    # metadata. zip records mtimes, so hashing the archive made two identical
+    # builds look different and forced a full 466 MB extract plus wineboot
+    # prefix update on every install.
+    local runtime_content_sha
+    runtime_content_sha="$(find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
+    [ -n "$runtime_content_sha" ] || err "failed to compute semantic wine runtime content hash"
     rm -f "$STAGING_DIR/$zip_name"
     zip -r "$STAGING_DIR/$zip_name" . -x '*.git*'
     cp "$STAGING_DIR/$zip_name" "$rawfile_dir/"
@@ -710,13 +733,11 @@ HKLM,%FontSubStr%,"Lucida Console",,"Noto Sans Mono"' "$wine_data/share/wine/win
   "smokeSuiteVersion": "$smoke_suite_version"
 }
 EOF
-    # 自动生成运行时版本标记：payload 内容哈希 + 影响 runtime/prefix 的子模块
-    # git SHA。任何 Wine 相关更新都会改变该串，设备端据此判断是否需要解压
-    # 新 runtime，再经 wineboot --init 增量重建 prefix 系统部分（保留
-    # user.reg / drive_c/users / 已安装程序等用户数据）。该文件是纯构建产物，
-    # 不要手动提交或手动 bump。
+    # 自动生成运行时版本标记：解压后的语义内容哈希 + 影响 runtime/prefix 的
+    # 子模块 git SHA。payloadSha256 仍校验实际 ZIP；设备端版本比较则不受 ZIP
+    # 时间戳影响，避免内容未变也重复解压。该文件是纯构建产物，不要手动提交。
     local runtime_version
-    runtime_version="payload=${payload_sha:0:16}"
+    runtime_version="content=${runtime_content_sha:0:16}"
     # 容器内以 root 跑 git 会因 dubious ownership 拒绝仓库；先幂等豁免。
     # 优先从 superproject 读 gitlink SHA（不依赖子模块自己的 .git，该 .git
     # 文件指向宿主绝对路径，容器内不可解析）。

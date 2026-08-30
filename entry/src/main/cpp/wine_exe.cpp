@@ -306,9 +306,12 @@ static int SpawnWineProgramImpl(const ProgramOptions& options)
     winehua::GraphicsBroker::GetInstance().SetWineRuntimeBinaryDir(binDir);
     winehua::GraphicsBroker::GetInstance().SetRequestedBackend(winehua::GraphicsBackend::Virgl);
     if (!winehua::GraphicsBroker::GetInstance().EnsureStarted(prefixDir)) return -1;
+    const winehua::D3dBackendKind backend =
+        winehua::ParseD3dBackend(options.d3dBackend);
+    const bool publishVulkanSurface =
+        options.presentToSurface && winehua::UsesVenusPresent(backend);
     winehua::GraphicsBroker::GetInstance().SetVulkanPresentMode(
-        options.presentBackend == "venus_broker_present" ||
-        options.presentBackend == "venus_direct_present");
+        publishVulkanSurface);
 
     std::vector<std::string> envStrs = BuildWineEnv(
         sockDir, sockName, libPath, binDir, -1, homeDir, prefixDir);
@@ -317,7 +320,6 @@ static int SpawnWineProgramImpl(const ProgramOptions& options)
     AppendD3dBackendEnv(envStrs, options.d3dBackend, binDir);
     for (const std::string& line : options.environment) UpsertEnv(&envStrs, line);
     UpsertEnv(&envStrs, "WINEHUA_D3D_BACKEND=" + options.d3dBackend);
-    UpsertEnv(&envStrs, "WINEHUA_PRESENT_BACKEND=" + options.presentBackend);
     if (IsVkd3dSmokeDemo(options.windowsExePath))
         AppendVkd3dDemoPresentEnv(envStrs, options.d3dBackend, binDir);
     UpsertEnv(&envStrs, std::string("WINEHUA_AUTOMATION=") + (options.automationMode ? "1" : "0"));
@@ -348,9 +350,13 @@ static int SpawnWineProgramImpl(const ProgramOptions& options)
     if (pid <= 0) return -1;
     AddProcess(pid, options.windowsExePath, -1);
     OH_LOG_INFO(LOG_APP,
-                "[WineProgram] pid=%{public}d exe=%{public}s prefix=%{public}s d3d=%{public}s present=%{public}s automation=%{public}s",
+                "[WineProgram] pid=%{public}d exe=%{public}s prefix=%{public}s d3d=%{public}s route=%{public}s output=%{public}s automation=%{public}s",
                 pid, exePath.c_str(), prefixDir.c_str(), options.d3dBackend.c_str(),
-                options.presentBackend.c_str(), options.automationMode ? "true" : "false");
+                winehua::UsesVenusPresent(backend) ?
+                    winehua::kProductVulkanRoute.data() :
+                    winehua::kProductVirglRoute.data(),
+                options.presentToSurface ? "surface" : "offscreen",
+                options.automationMode ? "true" : "false");
     if (gStateTsfn)
     {
         char state[64];
@@ -509,7 +515,7 @@ napi_value RunWineProgram(napi_env env, napi_callback_info info)
     options.workingDirectory = GetString(env, args[0], "workingDirectory");
     options.prefixMode = GetString(env, args[0], "prefixMode", "reuse");
     options.d3dBackend = GetString(env, args[0], "d3dBackend", "dxvk_legacy");
-    options.presentBackend = GetString(env, args[0], "presentBackend", "virgl_compositor");
+    options.presentToSurface = GetBool(env, args[0], "presentToSurface", true);
     options.automationMode = GetBool(env, args[0], "automationMode", false);
     ReadStringArray(env, args[0], "argv", &options.argv);
     ReadEnvironment(env, args[0], &options.environment);

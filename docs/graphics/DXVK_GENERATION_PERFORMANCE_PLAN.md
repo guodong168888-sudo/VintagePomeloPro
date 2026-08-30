@@ -53,6 +53,24 @@ VirGLRenderer、NativeWindow 与系统合成路径，但会产生不同的命令
 - 当前 API 26 设备上安装的是 1.2.8 历史版本，而源码候选为 1.2.9；历史包只能提供旧基线，不能
   证明本轮 API-trace 编译移除、range 在线合并或 WHIP v10 的动作。必须先产出并安装当前候选。
 
+### 媒体播放与图形路由：已确认的边界
+
+- WA2 Special Contents 的媒体窗口走 Wine 内建 `d3d9.dll` / `wined3d.dll`、Quartz 与
+  GStreamer；它不是 DXVK D3D9 runtime 的基准。因此“该游戏的影片显示差异”不能用于比较
+  DXVK 1.10 和 2.6 的 D3D11 性能，Heaven 的固定场景仍是代际性能结论的唯一基线。
+- 2.6 会话仍可能同时存在 Venus/Vulkan 游戏 surface 与 Quartz/WineD3D 的 GL surface。此前
+  `EglRenderer` 用会话级 `IsVulkanPresentMode()` 过滤 producer，错误地把 Quartz 的 GL source
+  当成 Venus source 交给 NCP；GL presenter 随后拒绝这个类型不匹配的 target，表现为音频正常、
+  画面黑。
+- 现改为把 `surface.vulkan` 作为 producer 属性随 `AttachZeroCopyTarget()` 传到 NCP，绑定后也只
+  与该 surface 自身的类型比较。一个 toplevel 仍只持有一个 NativeImage consumer；当旧绑定从未
+  产出帧时，候选只可按 NCP 的“最近 present 优先”顺序、且在合成器可见和未被绑定的前提下提升，
+  已产出帧的绑定绝不抖动切换。
+- 真机受控验证使用同一 `mv000.pak`，在 `dxvk_modern_2_6` 路由上显示了实际影片帧并以
+  `EC_COMPLETE` 结束（约 30.5 s）。这证明当前候选的 Quartz/GStreamer 解码和可视呈现可用。
+  若 WA2 重启后仍停在黑屏，先检查该进程是否真的创建了 Quartz/GStreamer graph：本轮重启后的
+  Legacy 与 Modern 都未创建 graph，属于游戏入口状态，不能归因到任一 DXVK runtime 或 presenter。
+
 ## 首轮瓶颈假设
 
 ### H1：Modern 产生更多或更碎的动态 mapped range

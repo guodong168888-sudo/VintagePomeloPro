@@ -105,6 +105,23 @@ Direct Present 合并与 2.6/1.10 性能差距是两个相交但独立的项目�
 18. WSI acquire 与 QueuePresent 共用同一 target-loss 分类；`OUT_OF_DATE`、`SURFACE_LOST` 及已知
     Harmony transient `UNKNOWN` 都锁定为 swapchain rebuild，而不是只在 acquire 阶段恢复、在
     present 阶段误报为永久 I/O 失败。
+19. NativeImage consumer 的 presenter 类型由 producer surface 归属，而不是会话选择决定。一个
+    `product-vulkan` 会话可同时带有 Venus 游戏 surface 和 Quartz/WineD3D 的 GL 视频 surface；
+    `GraphicsBroker::AttachZeroCopyTarget()` 因而显式传递 `surface.vulkan`，NCP 只创建匹配的
+    VirGL 或 Venus target。若当前 consumer 从未收到帧，主进程仅可提升 NCP 查询中排在当前
+    surface 之前、合成器可见且未附着的 producer；NCP 的排序键是最近 present 时间，不能把每个
+    surface 局部的 frame serial 当作全局时间戳。一旦已有首帧或 ready marker，绑定保持不变。
+
+### 媒体回归门禁
+
+媒体不是独立第三条产品线路。它沿现有 `product-vulkan` 或 `product-virgl` 路由运行，必须同时满足：
+
+1. 受控 DirectShow/Quartz probe 对固定媒体文件能完成 `RenderFile`、持续推进 PTS 并到达
+   `EC_COMPLETE`；真机须至少留一张非黑视频帧。
+2. 游戏复现只在日志确认已创建 Quartz/GStreamer graph 后才参与归因。未创建 graph 的黑屏是游戏
+   自身入口状态，不能据此回退 Direct Present、切换 DXVK runtime 或新增 profile。
+3. DXVK 性能仍由 D3D11 Heaven/Cube 等明确使用 DXGI/D3D11 的工作负载测量；D3D9/WineD3D 媒体
+   窗口用于 presenter 兼容性回归，不参与 1.10 与 2.6 的 FPS 归属。
 
 ## 参考提交的合并方式
 

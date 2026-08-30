@@ -46,7 +46,7 @@ export interface WineProgramOptions {
   workingDirectory: string;
   prefixMode: string;
   d3dBackend: string;
-  presentBackend: string;
+  presentToSurface: boolean;
   automationMode: boolean;
 }
 export interface WineProcessHandle {

@@ -337,6 +337,43 @@ export class AppSessionService {
     return session;
   }
 
+  /**
+   * Register a process launched by the diagnostics Want path with the normal
+   * desktop session lifecycle.  The launcher intentionally accepts extra
+   * per-process environment variables, so it cannot call launch() directly;
+   * without this registration, however, a newly-created Wine toplevel remains
+   * behind the desktop root and visual A/B tests capture a black desktop.
+   */
+  registerDiagnosticLaunch(executable: string, result: NativeLaunchResult,
+    mode: DisplayMode, presentationMode: WinePresentationMode): RuntimeSession | null {
+    if (!result || result.pid <= 0) return null;
+    const session: RuntimeSession = {
+      sessionId: result.sessionId || 'wine-' + result.pid,
+      appId: 'diagnostic-' + result.pid,
+      executable: executable,
+      pid: result.pid,
+      displayMode: mode,
+      presentationMode: presentationMode,
+      state: SessionState.RUNNING,
+      toplevelId: 0,
+      startedAt: Date.now()
+    };
+    this.sessions.set(session.sessionId, session);
+    this.resolvePendingToplevel(session);
+    if (session.toplevelId <= 0) {
+      try {
+        const nativeSession = testNapi.getWineSession(session.sessionId) as NativeWineSessionInfo | null;
+        if (nativeSession && nativeSession.toplevelId > 0) session.toplevelId = nativeSession.toplevelId;
+      } catch (_) {
+      }
+    }
+    if (session.toplevelId > 0) this.promoteDesktopSession(session);
+    hilog.info(DOMAIN, '[SESS]',
+      'diagnostic launch registered sid=%{public}s pid=%{public}d tl=%{public}d',
+      session.sessionId, session.pid, session.toplevelId);
+    return session;
+  }
+
   private pendingLaunches: Array<PendingLaunchRequest> = [];
   private pendingLaunchListenerInstalled: boolean = false;
   private drainingPendingLaunches: boolean = false;
@@ -602,30 +639,8 @@ export class AppSessionService {
       // "点卡片 → 自动跳到桌面/程序视图"。created 事件晚于 runWineExe，
       // 此时 fire-and-forget startAbility 不会阻塞启动链（冷启动卡死
       // 只在 launch 路径 await startAbility 时发生）。
-      if (sessionId !== DESKTOP_SESSION_ID && wasUnmapped && matched.toplevelId > 0 &&
-        matched.presentationMode === WinePresentationMode.DESKTOP &&
-        WineEngineService.getInstance().isReady()) {
-        hilog.info(DOMAIN, '[SESS]', 'auto-promote session=%{public}s tl=%{public}d',
-          matched.sessionId, matched.toplevelId);
-        const tl = matched.toplevelId;
-        const sid = matched.sessionId;
-        // DWA 已在前台显示桌面时，程序窗口会直接出现在桌面合成里，无需再
-        // startAbility（引擎就绪瞬间重复 startAbility 偶发 201 被拒），
-        // 只做轻量激活。DWA 不在前台（库页还开着）才切窗口并带重试兜底。
-        const rootId = WineWindowManager.getInstance().getDesktopRootId();
-        if (rootId > 0 && WineWindowManager.getInstance().isDesktopAbilityForeground(rootId)) {
-          try { testNapi.activateWineSession(sid); } catch (_) {}
-          try { testNapi.raiseToplevel(tl); } catch (_) {}
-        } else {
-          this.resume(matched).catch((err: Error) => {
-            hilog.warn(DOMAIN, '[SESS]', 'auto-promote resume failed sid=%{public}s name=%{public}s msg=%{public}s',
-              sid, err.name, err.message);
-          });
-          // 引擎刚就绪时 AMS 可能仍在处理桌面窗口启动，startAbility 偶发被拒；
-          // 短窗口内若 DWA 未切到该窗口则补一次（非阻塞，最多重试 2 次）。
-          this.schedulePromoteRetry(sid, tl, 0);
-        }
-      }
+      if (sessionId !== DESKTOP_SESSION_ID && wasUnmapped && matched.toplevelId > 0)
+        this.promoteDesktopSession(matched);
     } else if (toplevelId > 0) {
       this.pendingToplevels.push({ sessionId: sessionId, clientPid: clientPid, toplevelId: toplevelId });
       if (this.pendingToplevels.length > 16) this.pendingToplevels.shift();
@@ -644,6 +659,29 @@ export class AppSessionService {
       }
     }
     if (matchIndex >= 0) this.pendingToplevels.splice(matchIndex, 1);
+  }
+
+  private promoteDesktopSession(session: RuntimeSession): void {
+    if (session.presentationMode !== WinePresentationMode.DESKTOP ||
+      !WineEngineService.getInstance().isReady() || session.toplevelId <= 0) return;
+    hilog.info(DOMAIN, '[SESS]', 'auto-promote session=%{public}s tl=%{public}d',
+      session.sessionId, session.toplevelId);
+    const tl = session.toplevelId;
+    const sid = session.sessionId;
+    // DWA 已在前台显示桌面时，程序窗口会直接出现在桌面合成里，无需再
+    // startAbility（引擎就绪瞬间重复 startAbility 偶发 201 被拒），只做轻量激活。
+    const rootId = WineWindowManager.getInstance().getDesktopRootId();
+    if (rootId > 0 && WineWindowManager.getInstance().isDesktopAbilityForeground(rootId)) {
+      try { testNapi.activateWineSession(sid); } catch (_) {}
+      try { testNapi.raiseToplevel(tl); } catch (_) {}
+      return;
+    }
+    this.resume(session).catch((err: Error) => {
+      hilog.warn(DOMAIN, '[SESS]',
+        'auto-promote resume failed sid=%{public}s name=%{public}s msg=%{public}s',
+        sid, err.name, err.message);
+    });
+    this.schedulePromoteRetry(sid, tl, 0);
   }
 
   private isVenusExclusiveSmoke(appId: string): boolean {

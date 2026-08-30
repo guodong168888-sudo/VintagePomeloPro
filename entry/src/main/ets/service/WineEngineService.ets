@@ -29,6 +29,7 @@ const WINE_LIB = WINE_BIN + '/x86_64-unix';
 const BOX64 = WINE_BIN + '/box64';
 const SOCK = FILES_BASE + '/.wine/wine-wayland';
 const PREFIX_MARKER = WINE_ROOT + '/share/wine/wine.inf';
+const PREVIOUS_PREFIX_MARKER = FILES_BASE + '/.winehua-wine.inf.previous';
 const RUNTIME_VERSION_RAWFILE = 'wine_runtime.version';
 const RUNTIME_VERSION_MARKER = WINE_ROOT + '/.winehua-runtime-version';
 // Runtime extraction and prefix configuration are versioned independently.
@@ -58,6 +59,10 @@ interface RuntimePathRequirement {
 interface FontSubstitute {
   name: string;
   replacement: string;
+  // Wine's font installer canonicalizes a small set of legacy aliases after
+  // startup. Keep them in wine.inf/direct migration, but do not make those
+  // non-persistent aliases a perpetual runtime health failure.
+  persistent?: boolean;
 }
 
 // Keep this list aligned with the OHOS FontSubstitutes block assembled into
@@ -67,7 +72,7 @@ interface FontSubstitute {
 // --update.
 const MASTER_FONT_SUBSTITUTES: FontSubstitute[] = [
   { name: 'System', replacement: 'HarmonyOS Sans SC' },
-  { name: 'MS Sans Serif', replacement: 'HarmonyOS Sans SC' },
+  { name: 'MS Sans Serif', replacement: 'HarmonyOS Sans SC', persistent: false },
   { name: 'MS Shell Dlg', replacement: 'HarmonyOS Sans SC' },
   { name: 'MS Shell Dlg 2', replacement: 'HarmonyOS Sans SC' },
   { name: 'Arial', replacement: 'HarmonyOS Sans SC' },
@@ -81,13 +86,13 @@ const MASTER_FONT_SUBSTITUTES: FontSubstitute[] = [
   { name: 'Impact', replacement: 'HarmonyOS Sans SC' },
   { name: 'Palatino Linotype', replacement: 'Noto Serif' },
   { name: 'Segoe UI', replacement: 'HarmonyOS Sans SC' },
-  { name: 'Tahoma', replacement: 'HarmonyOS Sans SC' },
+  { name: 'Tahoma', replacement: 'HarmonyOS Sans SC', persistent: false },
   { name: 'Trebuchet MS', replacement: 'HarmonyOS Sans SC' },
   { name: 'Verdana', replacement: 'HarmonyOS Sans SC' },
   { name: 'Georgia', replacement: 'Noto Serif' },
   { name: 'Times New Roman', replacement: 'Noto Serif' },
-  { name: 'Microsoft JhengHei', replacement: 'HarmonyOS Sans TC' },
-  { name: 'Microsoft JhengHei UI', replacement: 'HarmonyOS Sans TC' },
+  { name: 'Microsoft JhengHei', replacement: 'HarmonyOS Sans TC', persistent: false },
+  { name: 'Microsoft JhengHei UI', replacement: 'HarmonyOS Sans TC', persistent: false },
   { name: 'Microsoft YaHei', replacement: 'HarmonyOS Sans SC' },
   { name: 'Microsoft YaHei UI', replacement: 'HarmonyOS Sans SC' },
   { name: 'SimSun', replacement: 'Noto Serif CJK SC' },
@@ -112,11 +117,11 @@ const MASTER_FONT_SUBSTITUTES: FontSubstitute[] = [
   { name: 'STBaoli', replacement: 'Noto Serif CJK SC' },
   { name: 'FZShuTi', replacement: 'HarmonyOS Sans SC' },
   { name: 'FZYaoti', replacement: 'HarmonyOS Sans SC' },
-  { name: 'MingLiU', replacement: 'HarmonyOS Sans TC' },
-  { name: 'PMingLiU', replacement: 'HarmonyOS Sans TC' },
+  { name: 'MingLiU', replacement: 'HarmonyOS Sans TC', persistent: false },
+  { name: 'PMingLiU', replacement: 'HarmonyOS Sans TC', persistent: false },
   { name: 'DFKai-SB', replacement: 'Noto Serif CJK TC' },
   { name: 'Consolas', replacement: 'Noto Sans Mono' },
-  { name: 'Courier', replacement: 'Noto Sans Mono' },
+  { name: 'Courier', replacement: 'Noto Sans Mono', persistent: false },
   { name: 'Courier New', replacement: 'Noto Sans Mono' },
   { name: 'Fixedsys', replacement: 'Noto Sans Mono' },
   { name: 'Lucida Console', replacement: 'Noto Sans Mono' }
@@ -325,6 +330,9 @@ export class WineEngineService {
   private pendingPrefixVersion: Uint8Array = new Uint8Array(0);
   private d3dBackend: string = 'dxvk_legacy';
   private hostGraphicsBackend: string = 'dxvk_legacy';
+  // Product sessions derive Host and Guest from the same D3D backend. Only
+  // the qualified VKD3D smoke path owns an explicit one-session override.
+  private hostGraphicsBackendOverride: string = '';
   private appliedHostGraphicsBackend: string = 'dxvk_legacy';
   private hostGraphicsLabExperiment: string = '';
   private appliedHostGraphicsLabExperiment: string = '';
@@ -417,6 +425,8 @@ export class WineEngineService {
     homeDirectory: string): Promise<boolean> {
     if (!this.context) return false;
     const requestedD3DBackend = this.selectedD3DBackend();
+    this.hostGraphicsBackend = this.hostGraphicsBackendOverride.length > 0 ?
+      this.hostGraphicsBackendOverride : requestedD3DBackend;
     if (this.state === EngineState.READY && this.mode === mode &&
       this.presentationMode === presentationMode && this.d3dBackend === requestedD3DBackend &&
       this.appliedHostGraphicsBackend === this.hostGraphicsBackend &&
@@ -598,8 +608,10 @@ export class WineEngineService {
     // A normal product launch owns the next engine policy. LAB overrides are
     // scoped to the explicit automation session that selected them.
     this.hostGraphicsLabExperiment = '';
-    this.hostGraphicsBackend = executableUsesVkd3dGraphics(executable) ?
-      'vkd3d_limited_500k' : this.selectedD3DBackend();
+    this.hostGraphicsBackendOverride = executableUsesVkd3dGraphics(executable) ?
+      'vkd3d_limited_500k' : '';
+    this.hostGraphicsBackend = this.hostGraphicsBackendOverride.length > 0 ?
+      this.hostGraphicsBackendOverride : this.selectedD3DBackend();
     return this.hostGraphicsBackend;
   }
 
@@ -842,10 +854,9 @@ export class WineEngineService {
     this.enginePhase = phase;
     this.phaseStartedAt = Date.now();
     if (phase === 'ready') {
-      if (this.state !== EngineState.READY) {
-        this.setState(EngineState.READY, 'Wine 引擎已就绪');
-        this.finishWaiters(true);
-      }
+      // phase:ready is informational. Only the following wine-ready terminal
+      // event may persist the prefix runtime marker and release callers; doing
+      // it here races past that durable finalization on upgraded prefixes.
       return;
     }
     const phaseMessage = '正在初始化 Wine：' + this.phaseText(phase);
@@ -933,6 +944,7 @@ export class WineEngineService {
     try {
       const registry = fs.readTextSync(PREFIX_SYSTEM_REG);
       return MASTER_FONT_SUBSTITUTES.every((item: FontSubstitute) =>
+        item.persistent === false ||
         registry.includes('"' + item.name + '"="' + item.replacement + '"'));
     } catch (_) {
       return false;
@@ -1007,7 +1019,44 @@ export class WineEngineService {
     }
   }
 
+  private textFilesMatch(left: string, right: string): boolean {
+    try {
+      const leftStat = fs.statSync(left);
+      const rightStat = fs.statSync(right);
+      return leftStat.size === rightStat.size &&
+        fs.readTextSync(left) === fs.readTextSync(right);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  private reconcilePreservedWineInf(): void {
+    if (!pathExists(PREVIOUS_PREFIX_MARKER)) return;
+    try {
+      if (!pathExists(PREFIX_MARKER)) {
+        fs.renameSync(PREVIOUS_PREFIX_MARKER, PREFIX_MARKER);
+        hilog.warn(DOMAIN, TAG, 'restored wine.inf left by an interrupted runtime refresh');
+      } else if (this.textFilesMatch(PREVIOUS_PREFIX_MARKER, PREFIX_MARKER)) {
+        // Restore the old inode, including its mtime. Wine compares wine.inf's
+        // mtime with .update-timestamp; replacing identical content would make
+        // every graphics-only/runtime-only build reinstall the whole prefix.
+        fs.unlinkSync(PREFIX_MARKER);
+        fs.renameSync(PREVIOUS_PREFIX_MARKER, PREFIX_MARKER);
+        hilog.info(DOMAIN, TAG, 'preserved unchanged wine.inf timestamp; prefix reinstall not required');
+      } else {
+        fs.unlinkSync(PREVIOUS_PREFIX_MARKER);
+        hilog.info(DOMAIN, TAG, 'wine.inf content changed; prefix refresh remains required');
+      }
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'wine.inf refresh reconciliation failed: %{public}s', JSON.stringify(error));
+      throw new Error('wine.inf refresh reconciliation failed: ' + JSON.stringify(error));
+    }
+  }
+
   private async ensureRuntimeInstalled(bundledVersion: Uint8Array): Promise<boolean> {
+    // Recover or reconcile a marker stashed by a previous interrupted extract
+    // before deciding whether this runtime is complete.
+    this.reconcilePreservedWineInf();
     const missingBefore = this.getMissingRuntimePaths();
     const versionMatches = this.runtimeVersionMatches(bundledVersion);
     const prefixMatches = this.prefixVersionMatches(bundledVersion);
@@ -1042,6 +1091,7 @@ export class WineEngineService {
       fontSubstitutesCurrent ? 'true' : 'false', missingBefore.join(','));
     const rawFd = this.context.resourceManager.getRawFdSync('wine-data.zip');
     const temporaryZip = FILES_BASE + '/wine-data.zip';
+    let wineInfPreserved = false;
     try {
       const output = fs.openSync(temporaryZip, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC);
       const chunkSize = 4 * 1024 * 1024;
@@ -1059,7 +1109,16 @@ export class WineEngineService {
       try {
         fs.mkdirSync(WINE_ROOT, true);
       } catch (_) {}
+      if (pathExists(PREFIX_MARKER)) {
+        try { fs.unlinkSync(PREVIOUS_PREFIX_MARKER); } catch (_) {}
+        fs.renameSync(PREFIX_MARKER, PREVIOUS_PREFIX_MARKER);
+        wineInfPreserved = true;
+      }
       await zlib.decompressFile(temporaryZip, WINE_ROOT, {});
+      if (wineInfPreserved) {
+        this.reconcilePreservedWineInf();
+        wineInfPreserved = false;
+      }
       const missingAfter = this.getMissingRuntimePaths();
       if (missingAfter.length > 0) {
         throw new Error('Wine runtime incomplete after extract: ' + missingAfter.join(', '));
@@ -1070,6 +1129,7 @@ export class WineEngineService {
     } finally {
       this.context.resourceManager.closeRawFdSync('wine-data.zip');
       try { fs.unlinkSync(temporaryZip); } catch (_) {}
+      if (wineInfPreserved) this.reconcilePreservedWineInf();
     }
     let prefixInitialized = false;
     try { prefixInitialized = testNapi.checkWinePrefix() as boolean; } catch (_) {}
