@@ -60,6 +60,31 @@ function Invoke-Hdc {
     return $result
 }
 
+function Wait-ForBundleProcessExit {
+    param(
+        [Parameter(Mandatory)][string]$Bundle,
+        [ValidateRange(1, 120)][int]$TimeoutSeconds = 30
+    )
+
+    $startedAt = [DateTimeOffset]::Now
+    do {
+        # Harmony's pidof returns success with no output when the named
+        # application is absent. Do not begin the next A/B condition until the
+        # process that owned its NativeWindow and broker children is gone.
+        $processes = @(& $HdcPath -t $DeviceId shell "pidof $Bundle" 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to query WineHua process exit (hdc=$LASTEXITCODE)"
+        }
+        if (-not ($processes -join '').Trim()) {
+            return [Math]::Round(
+                ([DateTimeOffset]::Now - $startedAt).TotalSeconds, 3)
+        }
+        Start-Sleep -Milliseconds 500
+    } while (([DateTimeOffset]::Now - $startedAt).TotalSeconds -lt $TimeoutSeconds)
+
+    throw "WineHua process did not exit within $TimeoutSeconds seconds after force-stop"
+}
+
 function Get-WineStderrLineCount {
     # DXVK's Logger writes this diagnostic to Wine stderr, not Hilog. Record a
     # per-run offset so a later collection cannot mistake an older run's
@@ -305,7 +330,7 @@ function Invoke-Measurement {
     New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
     $startedAt = [DateTimeOffset]::Now
     $result = [ordered]@{
-        schemaVersion = 5
+        schemaVersion = 6
         runId = $runId
         condition = $Condition.id
         d3dBackend = $Condition.backend
@@ -460,6 +485,8 @@ function Invoke-Measurement {
     } finally {
         try {
             Invoke-Hdc -Arguments @('shell', 'aa', 'force-stop', $bundle) | Out-Null
+            $result['forceStopSettledSeconds'] = Wait-ForBundleProcessExit `
+                -Bundle $bundle
         } catch {
             $result['forceStopError'] = $_.Exception.Message
         }

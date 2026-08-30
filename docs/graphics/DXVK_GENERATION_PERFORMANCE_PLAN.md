@@ -69,11 +69,13 @@ VirGLRenderer、NativeWindow 与系统合成路径，但会产生不同的命令
   而合并后的 byte 覆盖下降 64.75%，与“合并相邻/重叠 dirty range，减少 Venus 非 coherent flush
   及其 Host 处理”的预期一致；这解释了 A/B 方向，但不是其它游戏的性能承诺。
 - Legacy 1.10 源码也具备 command-list batching 实现，但其产品 capability 仍为关闭。专用的
-  `legacy-batch` 自动化以环境 override 仅作实验，两个有效的同场配对从 22.867→43.241 FPS
-  与 21.417→37.704 FPS，均值 22.142→40.472 FPS（+82.79%）。这说明此前 1.10 的主要瓶颈同样是
-  非合并 mapped flush，而不是“旧 runtime 天生更慢”。其中一次启动在两秒内发生原生 `SIGSEGV`、
-  尚未产生 Presenter 帧；它不进入 FPS 均值，也使 Legacy batching 暂不具备提升为产品默认的资格。
-  还需消除/复现该启动异常并完成多轮、smoke、帧序和长稳门禁。
+  `legacy-batch` 自动化以环境 override 仅作实验，三个有效的同场配对为 22.867→43.241 FPS、
+  21.417→37.704 FPS 与 18.559→38.172 FPS；有效配对均显示约 76--100% 提升。这说明此前 1.10 的
+  主要瓶颈同样是非合并 mapped flush，而不是“旧 runtime 天生更慢”。较早一次启动在两秒内发生原生
+  `SIGSEGV`、尚未产生 Presenter 帧；之后测量已增加 `force-stop` 后 `pidof` 进程回收门禁，最新
+  配对两边均在约 0.2 秒完成回收且无异常。Legacy batch-on 的 DX11 cube 也已通过 40/40 帧序门禁，
+  `direct-native-buffer` 动作契约成立。下一步可作为产品 capability 候选打包验证，但仍需长稳与
+  其它 smoke 门禁后才可视为正式默认。
 
 ### 媒体播放与图形路由：已确认的边界
 
@@ -179,7 +181,9 @@ hilog，避免首次 runtime 解压、Wine 初始化和 Heaven Loading 混入正
 空 timeline 或 FPS 样本会将单轮标记为 `INCONCLUSIVE`，但不会中断整组 A/B 会话。它使用现有
 `observe-frame-timeline` LAB 观察实验；该实验从产品策略派生，保持 precise-dirty、
 inline GPU upload、coverage sort 和 FIFO 动作，只增加每 120 帧一次的阶段观测。产物仅包含每轮
-一张截图、筛选后的图形日志和 JSON，不复制 HAP、runtime 或源码。
+一张截图、筛选后的图形日志和 JSON，不复制 HAP、runtime 或源码。每轮结束先 `force-stop`，再用
+`pidof` 确认应用进程已退出，才进入条件间冷却；这避免 NativeWindow/broker 回收尚未完成时启动下一轮，
+并将超时明确记录为基础设施错误，而不是渲染性能或 batch 开关结论。
 
 示例：
 
