@@ -236,6 +236,7 @@ struct SystemSettingsPage {
   @State private breakpoint: BreakpointType = 'lg';
   @State private section: SettingsSection = 'display';
   @State private logBusy: boolean = false;
+  @State private unityDiagnosticText: string = '运行游戏至黑屏退出后，点击“刷新 Unity 诊断”。';
   @State private engineMessage: string = 'Wine 引擎未启动';
   @State private engineBusy: boolean = false;
   @State private engineOperationMessage: string = '';
@@ -543,6 +544,25 @@ struct SystemSettingsPage {
         }
       }
     });
+  }
+
+  private refreshUnityDiagnostics(): void {
+    try {
+      this.unityDiagnosticText = AppLog.readUnityDiagnostics();
+      promptAction.showToast({ message: 'Unity 诊断已刷新' });
+    } catch (error) {
+      this.unityDiagnosticText = '读取诊断失败：' + JSON.stringify(error);
+    }
+  }
+
+  private copyUnityDiagnostics(): void {
+    try {
+      const clip = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.unityDiagnosticText);
+      pasteboard.getSystemPasteboard().setData(clip);
+      promptAction.showToast({ message: '诊断文本已复制' });
+    } catch (_) {
+      promptAction.showToast({ message: '复制失败，请长按诊断文本选择复制' });
+    }
   }
 
   private update(mode: DisplayMode = this.settings.defaultDisplayMode,
@@ -2075,6 +2095,28 @@ struct SystemSettingsPage {
               .id('log-clear')
               .onClick((): void => { this.clearLogs(); })
           }.width('100%')
+
+          Column({ space: 10 }) {
+            Text('Unity 黑屏诊断').fontSize(16).fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.text_primary')).width('100%')
+            Text('复现 99% 黑屏退出后返回此处刷新。页面会显示应用日志、Wine stderr 与 Unity Player.log 的末尾内容。')
+              .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+            Row({ space: 10 }) {
+              Button('刷新 Unity 诊断').layoutWeight(1).height(44).borderRadius(12)
+                .backgroundColor($r('app.color.accent')).fontColor('#FFFFFFFF')
+                .onClick((): void => { this.refreshUnityDiagnostics(); })
+              Button('复制诊断文本').layoutWeight(1).height(44).borderRadius(12)
+                .backgroundColor($r('app.color.search_background'))
+                .fontColor($r('app.color.text_primary'))
+                .onClick((): void => { this.copyUnityDiagnostics(); })
+            }.width('100%')
+            Text(this.unityDiagnosticText)
+              .fontSize(10).fontFamily('monospace').fontColor($r('app.color.text_primary'))
+              .width('100%').maxLines(80).textOverflow({ overflow: TextOverflow.Ellipsis })
+              .padding(10).backgroundColor($r('app.color.search_background')).borderRadius(10)
+          }
+          .width('100%').padding(14).borderRadius(16)
+          .backgroundColor($r('app.color.search_background'))
         }
         .width('100%')
         .padding(this.cardPadding())
