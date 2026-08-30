@@ -21,6 +21,8 @@ import {
   resolveBox64PresetEnv,
   resolveLaunchDisplayMode,
   resolveUnityCompatLaunchArgs,
+  resolveUnityDxvkLaunchArgs,
+  BOX64_PRESET_UNITY_DXVK,
   resolveWinePresentationMode
 } from '../model/AppModels';
 import { WineEngineService } from './WineEngineService';
@@ -280,10 +282,11 @@ export class AppSessionService {
     const envOverrides = resolveBox64PresetEnv(presetId);
     hilog.info(DOMAIN, '[SESS]', 'launch: app=%{public}s preset=%{public}s env=%{public}s',
       app.id, presetId, JSON.stringify(envOverrides));
-    // Unity 兼容档使用 DX11/DXVK + 窗口化合成作为默认路径；如果用户已经
-    // 为特定游戏指定 OpenGL/Vulkan/D3D 后端，则保留其选择，只补齐通用参数。
+    // 默认 Unity 档使用 OpenGL 安全路径；DXVK 作为同一 HAP 内的备用档。
     const launchArguments = isUnityCompatPreset(presetId)
-      ? resolveUnityCompatLaunchArgs(app.launchTarget.arguments)
+      ? (presetId === BOX64_PRESET_UNITY_DXVK
+        ? resolveUnityDxvkLaunchArgs(app.launchTarget.arguments)
+        : resolveUnityCompatLaunchArgs(app.launchTarget.arguments))
       : app.launchTarget.arguments.slice();
     const result = WineEngineService.getInstance().launchExecutable(
       app.launchTarget.executable, launchArguments,
