@@ -376,9 +376,24 @@ export class AppLog {
         }
       } catch (_) {}
     }
-    const stderrPath = '/data/storage/el2/base/temp/wine_stderr_' + localDateKey() + '.log';
-    const stderrText = AppLog.tailText(stderrPath, 12000);
-    if (stderrText.length > 0) sections.push('=== Wine stderr（末尾）===\n' + stderrText);
+    // Wine 可能跨过午夜仍沿用启动日文件；只按“今天”拼路径会漏掉
+    // 正在黑屏的那次会话。扫描 temp 中最近命名的 stderr/DXVK 日志。
+    const tempRoot = '/data/storage/el2/base/temp';
+    try {
+      const tempLogs = fs.listFileSync(tempRoot)
+        .filter((name: string): boolean => {
+          const lower = name.toLowerCase();
+          return lower.endsWith('.log') &&
+            (lower.startsWith('wine_stderr_') || lower.indexOf('dxvk') >= 0 ||
+              lower.endsWith('_d3d11.log') || lower.endsWith('_dxgi.log'));
+        })
+        .sort()
+        .slice(-8);
+      for (let index = 0; index < tempLogs.length; index += 1) {
+        const text = AppLog.tailText(tempRoot + '/' + tempLogs[index], 16000);
+        if (text.length > 0) sections.push('=== ' + tempLogs[index] + '（末尾）===\n' + text);
+      }
+    } catch (_) {}
 
     const playerLogs: string[] = [];
     AppLog.findPlayerLogs('/data/storage/el2/base/files/.wine/drive_c/users', 6, playerLogs, [4000]);
@@ -386,7 +401,7 @@ export class AppLog {
       const text = AppLog.tailText(playerLogs[index], 16000);
       if (text.length > 0) sections.push('=== Unity Player.log\n' + playerLogs[index] + ' ===\n' + text);
     }
-    if (sections.length === 1) sections.push('尚未找到日志。请先运行游戏至黑屏退出，再返回此页刷新。');
+    if (sections.length === 1) sections.push('尚未找到本次启动日志。请先运行游戏至黑屏，再返回此页刷新。');
     return sections.join('\n\n');
   }
 
