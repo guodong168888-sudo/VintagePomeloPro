@@ -229,6 +229,13 @@ require_literal "Legacy batch experiment is explicit off-side control" \
 require_literal "Legacy batch experiment keeps off-side as a per-run override" \
     "batchMappedFlushOverride = '0'" \
     automation/Measure-WineHuaDxvkPerformance.ps1
+require_literal "Smoke inherits product batching by default" \
+    "batchMappedFlush: undefined" entry/src/main/ets/service/SmokeRunner.ets
+require_literal "Smoke uses batch-off only as an explicit override" \
+    "else if (this.request.batchMappedFlush === false)" \
+    entry/src/main/ets/service/SmokeRunner.ets
+require_literal "Automation omits batch override unless requested" \
+    "ContainsKey('BatchMappedFlush')" automation/Invoke-WineHuaAutomation.ps1
 require_literal "DXVK performance product-equivalent observation" \
     "observe-frame-timeline" \
     automation/Measure-WineHuaDxvkPerformance.ps1
