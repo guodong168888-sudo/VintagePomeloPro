@@ -1,5 +1,6 @@
 #include "plugin_manager.h"
 #include "wayland_server.h"
+#include "fps_counter.h"
 #include <native_window/external_window.h>
 
 #undef LOG_TAG
@@ -134,6 +135,9 @@ void PluginManager::MoveRendererToToplevel(uint32_t oldId, uint32_t newId) {
         return;
     }
     OH_LOG_INFO(LOG_APP, "[MW-Plug] MoveRenderer tl #%{public}u -> #%{public}u", oldId, newId);
-    toplevelRenderers_[newId] = std::move(it->second);
+    auto renderer = std::move(it->second);
     toplevelRenderers_.erase(it);
+    if (renderer) renderer->SetToplevelId(newId);
+    toplevelRenderers_[newId] = std::move(renderer);
+    DisplayFpsRegistry::Instance().Move(oldId, newId);
 }

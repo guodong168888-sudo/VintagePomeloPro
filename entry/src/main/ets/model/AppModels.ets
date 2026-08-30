@@ -339,10 +339,14 @@ export interface GlobalSettings {
   virtualMouseConfig: VirtualMouseConfig;
   controlOpacity: number;
   gamepadDeadzone: number;
+  /** Wine pad via Controller Hub (DInput/XInput + rumble) or keyboard/mouse emulation. */
+  controllerOutputMode: 'dinput' | 'keyboard_legacy';
   outputScale: number;
   d3dRendererPreference: D3DRendererPreference;
   /** 重置 Wine prefix 时默认保留文档目录与注册表，只重建沙盒。 */
   preserveUserDataOnReset: boolean;
+  /** 在 Wine 画面上显示宿主 compositor FPS。 */
+  showFpsHud: boolean;
 }
 
 export interface RuntimeSession {
@@ -950,9 +954,11 @@ export function createDefaultGlobalSettings(): GlobalSettings {
     virtualMouseConfig: cloneVirtualMouseConfig(DEFAULT_VIRTUAL_MOUSE_CONFIG),
     controlOpacity: 72,
     gamepadDeadzone: 18,
+    controllerOutputMode: 'dinput',
     outputScale: 100,
     d3dRendererPreference: D3DRendererPreference.DXVK,
-    preserveUserDataOnReset: true
+    preserveUserDataOnReset: true,
+    showFpsHud: false
   };
 }
 

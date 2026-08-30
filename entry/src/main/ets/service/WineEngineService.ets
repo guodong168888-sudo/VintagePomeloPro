@@ -39,6 +39,10 @@ const PREFIX_SYSTEM_REG = FILES_BASE + '/.wine/system.reg';
 // ArkTS 不再用固定阶段死线: native 协调者会发 phase:/fail:/wine-ready 事件,
 // 等待只由事件结束。下面的安全网仅在"长时间完全无事件"时兜底, 正常不会触发。
 const ENGINE_NO_EVENT_SAFETY_MS = 30 * 60 * 1000;
+// 对齐 native drain 上限 (约 30s) + tsfn 余量。NCP 退出靠 appspawn 回调,
+// 回调丢失时提前放行会让新会话与旧 drain 抢跑 (winehua d256317e)。
+const NATIVE_SHUTDOWN_TIMEOUT_MS = 35000;
+const NATIVE_SHUTDOWN_POLL_MS = 100;
 const PREFIX_DIR = FILES_BASE + '/.wine';
 const RESET_KEEP_DIR = '/data/storage/el2/base/cache/wine-reset-keep';
 const PREFIX_USER_KEEP_FOLDERS: string[] = [
@@ -421,7 +425,13 @@ export class WineEngineService {
     this.listeners.delete(listener);
   }
 
-  async ensureReady(mode: DisplayMode, presentationMode: WinePresentationMode,
+  /**
+   * 会话生命周期三原语（对齐 WineHua d256317e 命名；行为保持本仓既有路径）。
+   * startSession = 幂等拉起引擎。首启/二启仍由 native prefix 状态决定，
+   * 不上游 WineEnvService、不引入前台 overlay / opBusy。
+   * 产品入口 ensureReady 转发到本方法，AppSessionService 无需改调用方。
+   */
+  async startSession(mode: DisplayMode, presentationMode: WinePresentationMode,
     homeDirectory: string): Promise<boolean> {
     if (!this.context) return false;
     const requestedD3DBackend = this.selectedD3DBackend();
@@ -463,7 +473,7 @@ export class WineEngineService {
       this.setState(EngineState.SWITCHING,
         switchingHost ? '正在切换图形主机配置' :
         (this.d3dBackend !== requestedD3DBackend ? '正在切换 Direct3D 渲染策略' : '正在切换显示模式'));
-      await this.stopAll();
+      await this.stopSession();
     }
 
     this.mode = mode;
@@ -531,6 +541,11 @@ export class WineEngineService {
     }
   }
 
+  async ensureReady(mode: DisplayMode, presentationMode: WinePresentationMode,
+    homeDirectory: string): Promise<boolean> {
+    return this.startSession(mode, presentationMode, homeDirectory);
+  }
+
   launchExecutable(executable: string, argumentsValue: string[] = [],
     workingDirectory: string = '', envOverrides: string[] = []): NativeLaunchResult {
     if (this.state !== EngineState.READY) {
@@ -573,11 +588,11 @@ export class WineEngineService {
   private selectedD3DBackend(): string {
     const stored = AppSettingsStore.getInstance().getRenderMode();
     const mode = stored.length > 0 ? stored :
-      (AppStorage.get<string>('winehua.render.mode') ?? 'auto');
+      (AppStorage.get<string>('winehua.render.mode') ?? 'dxvk_1_10');
     let backend = 'dxvk_legacy';
     if (mode === 'virgl') {
       backend = 'wined3d';
-    } else if ((mode === 'auto' || mode === 'dxvk_2_6') && this.gpuSupportsDxvk26()) {
+    } else if (mode === 'dxvk_2_6' && this.gpuSupportsDxvk26()) {
       backend = 'dxvk_modern_2_6';
     }
     AppStorage.setOrCreate<string>('winehua.render.resolved', backend);
@@ -641,7 +656,7 @@ export class WineEngineService {
 
   /**
    * Desktop root 被用户关闭后，只重启 Wine explorer shell。
-   * 不调用 stopAll，因而不会中断桌面模式中仍在运行的其它 Windows 程序。
+   * 不调用 stopSession，因而不会中断桌面模式中仍在运行的其它 Windows 程序。
    */
   restartDesktopShell(): NativeLaunchResult {
     if (this.state !== EngineState.READY ||
@@ -656,7 +671,12 @@ export class WineEngineService {
     ]);
   }
 
-  async stopAll(): Promise<void> {
+  /**
+   * 停止全部登记进程并等待 native drain。无论当前是否 READY 都执行：
+   * 无会话时主 wineserver 仍可能常驻，跳过停止会在活引擎脚下 wipe。
+   * 产品入口 stopAll 转发到本方法。NAPI 仍是 testNapi.stopAll。
+   */
+  async stopSession(): Promise<void> {
     try {
       testNapi.stopAll();
     } catch (_) {
@@ -672,9 +692,13 @@ export class WineEngineService {
     await new Promise<void>((resolve: () => void) => setTimeout(resolve, 300));
   }
 
+  async stopAll(): Promise<void> {
+    return this.stopSession();
+  }
+
   /**
-   * Rebuild Wine/Wayland services without deleting the prefix. Concurrent UI
-   * requests share one operation so two taps cannot start competing servers.
+   * 重启 = stopSession + startSession。不删 prefix。
+   * Concurrent UI requests share one operation so two taps cannot start competing servers.
    */
   async restart(mode: DisplayMode, presentationMode: WinePresentationMode,
     homeDirectory: string): Promise<boolean> {
@@ -691,16 +715,17 @@ export class WineEngineService {
     if (this.state !== EngineState.STOPPED) {
       this.setState(EngineState.SWITCHING, '正在重新启动 Wine 引擎');
     }
-    await this.stopAll();
-    return this.ensureReady(mode, presentationMode, homeDirectory);
+    await this.stopSession();
+    return this.startSession(mode, presentationMode, homeDirectory);
   }
 
   private async waitForNativeShutdown(): Promise<void> {
-    for (let attempt = 0; attempt < 50; attempt++) {
+    const deadline = Date.now() + NATIVE_SHUTDOWN_TIMEOUT_MS;
+    while (Date.now() < deadline) {
       let processes: NativeProcessInfo[] = [];
       try { processes = testNapi.getProcessList() as NativeProcessInfo[]; } catch (_) {}
       if (processes.length === 0) return;
-      await new Promise<void>((resolve: () => void) => setTimeout(resolve, 100));
+      await new Promise<void>((resolve: () => void) => setTimeout(resolve, NATIVE_SHUTDOWN_POLL_MS));
     }
     hilog.warn(DOMAIN, TAG, 'native process list did not settle before restart timeout');
   }
@@ -709,14 +734,28 @@ export class WineEngineService {
     if (this.state === EngineState.READY || this.state === EngineState.PREPARING) {
       this.setState(EngineState.SWITCHING, '正在切换显示模式');
     }
-    await this.stopAll();
+    await this.stopSession();
   }
 
+  /**
+   * 清空 Wine prefix 并重装 bundled runtime。调用前必须已经 stopSession，
+   * 否则活着的 wineserver 可能把内存 registry 回写进新 prefix。
+   * 本仓不清 WINE_ROOT 整树（forceRefreshRuntime 解绑版本标记后按缺失路径重装）。
+   */
+  async wipeEnvironment(): Promise<void> {
+    testNapi.resetWinePrefix();
+    await this.forceRefreshRuntime();
+  }
+
+  /**
+   * 重置 = stopSession + wipeEnvironment + startSession。
+   * 文档/注册表备份还原是本仓产品逻辑，包在 wipe 前后，不改变三原语语义。
+   */
   async resetPrefix(preserveUserData?: boolean, homeDirectory?: string): Promise<void> {
     const preserve = preserveUserData ??
       AppSettingsStore.getInstance().getGlobalSettings().preserveUserDataOnReset;
     const home = homeDirectory ?? '';
-    await this.stopAll();
+    await this.stopSession();
     if (preserve) {
       try {
         backupPrefixUserData(RESET_KEEP_DIR);
@@ -726,8 +765,7 @@ export class WineEngineService {
         throw new Error('备份文档或注册表失败: ' + JSON.stringify(error));
       }
     }
-    testNapi.resetWinePrefix();
-    await this.forceRefreshRuntime();
+    await this.wipeEnvironment();
     if (preserve) {
       try {
         restorePrefixUserData(RESET_KEEP_DIR);
@@ -745,7 +783,7 @@ export class WineEngineService {
       const presentation = resolveWinePresentationMode(
         LaunchKind.WINE_EXE, settings.defaultDisplayMode,
         AppSettingsStore.getInstance().usesManagedWineWindows());
-      await this.ensureReady(settings.defaultDisplayMode, presentation, home);
+      await this.startSession(settings.defaultDisplayMode, presentation, home);
       return;
     }
     this.setState(EngineState.STOPPED, 'Wine 环境已重置');

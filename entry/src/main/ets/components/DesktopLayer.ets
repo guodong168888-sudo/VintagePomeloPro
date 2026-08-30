@@ -22,6 +22,7 @@ import { InputProfileService } from '../service/InputProfileService';
 import { InputOverlayWindowCoordinator } from '../service/InputOverlayWindowCoordinator';
 import { InputEventGate } from '../service/InputEventGate';
 import { WineEngineBlockingOverlay } from '../components/WineEngineBlockingOverlay';
+import { FpsHud } from '../components/FpsHud';
 
 const DOMAIN = 0x0000;
 
@@ -191,7 +192,8 @@ export struct DesktopLayer {
       this.inputProfile = profile;
       GamepadManager.getInstance().setButtonMappings(profile.gamepadMappings);
     });
-    GamepadManager.getInstance().initialize(this.settings.gamepadDeadzone);
+    GamepadManager.getInstance().initialize(this.settings.gamepadDeadzone,
+      this.settings.controllerOutputMode ?? 'dinput');
     this.gamepadConnectionCallback = (connected: boolean): void => {
       if (!connected && this.settings.autoHideVirtualControls && this.settings.showVirtualControls) {
         InputOverlayWindowCoordinator.getInstance().setControlsVisible(true);
@@ -649,6 +651,10 @@ export struct DesktopLayer {
         if (horiz !== 0) testNapi.sendScrollEvent(tl, 1, horiz, step, wpx, wpy);
       })
       .onKeyEvent((ev: KeyEvent): void => this.handleHardwareKey(ev))
+
+      FpsHud({ toplevelId: 0, hide: this.floating })
+        .position({ x: 10, y: 10 })
+        .hitTestBehavior(HitTestMode.None)
 
       WineEngineBlockingOverlay()
     }

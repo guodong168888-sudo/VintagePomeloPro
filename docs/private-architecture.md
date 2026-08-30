@@ -25,4 +25,4 @@
 
 ## 后续边界
 
-首期 Game Controller Kit 把实体手柄映射为键盘/鼠标，并保留 `GamepadSink`。Wine 内可见的虚拟 HID、XInput 和 DirectInput 不在本阶段实现；只有确认必须修改 Wine 时才 fork 对应子工程。
+首期默认经 Controller Hub → WHGP → `winebus bus_ohos` 以 DirectInput / XInput 虚拟手柄进入 Wine，并将游戏 rumble 转发到实体手柄马达；可选 `keyboard_legacy` 回退到 Game Controller Kit → 键鼠/evdev 映射。多玩家热插拔不在本阶段。

@@ -35,7 +35,7 @@ export class AppSettingsStore {
   private recentLaunches: string[] = [];
   private libraryPath: string = '';
   private managedWineWindowsHost: boolean = false;
-  private renderMode: string = 'auto';
+  private renderMode: string = 'dxvk_1_10';
 
   static getInstance(): AppSettingsStore {
     if (!AppSettingsStore.instance) AppSettingsStore.instance = new AppSettingsStore();
@@ -64,21 +64,40 @@ export class AppSettingsStore {
     if (value === 'dxvk_legacy') {
       return 'dxvk_1_10';
     }
-    return 'auto';
+    // 旧版 "auto" 与未知值一律落到 1.10，不再按 GPU 自动挑 2.6。
+    return 'dxvk_1_10';
+  }
+
+  private dxvkPreferenceOf(mode: string): string {
+    if (mode === 'dxvk_2_6') {
+      return 'dxvk_modern_2_6';
+    }
+    if (mode === 'virgl') {
+      return 'wined3d';
+    }
+    return 'dxvk_legacy';
+  }
+
+  private publishRenderMode(mode: string): void {
+    AppStorage.setOrCreate<string>('winehua.render.mode', mode);
+    const preference = this.dxvkPreferenceOf(mode);
+    AppStorage.setOrCreate<string>('winehua.dxvk.preference', preference);
+    AppStorage.setOrCreate<string>('winehua.dxvk.backend', preference);
   }
 
   private loadRenderMode(): void {
     if (!this.store) {
-      AppStorage.setOrCreate<string>('winehua.render.mode', this.renderMode);
+      this.publishRenderMode(this.renderMode);
       return;
     }
-    this.renderMode = this.normalizeRenderMode(
-      this.store.getSync(RENDER_MODE_KEY, 'auto') as string);
-    AppStorage.setOrCreate<string>('winehua.render.mode', this.renderMode);
-    const preference = this.renderMode === 'dxvk_2_6' ? 'dxvk_modern_2_6' :
-      this.renderMode === 'dxvk_1_10' ? 'dxvk_legacy' : 'auto';
-    AppStorage.setOrCreate<string>('winehua.dxvk.preference', preference);
-    AppStorage.setOrCreate<string>('winehua.dxvk.backend', preference);
+    const raw = this.store.getSync(RENDER_MODE_KEY, 'dxvk_1_10') as string;
+    this.renderMode = this.normalizeRenderMode(raw);
+    this.publishRenderMode(this.renderMode);
+    if (raw !== this.renderMode) {
+      void this.store.put(RENDER_MODE_KEY, this.renderMode).then((): void => {
+        void this.store?.flush();
+      });
+    }
   }
 
   getRenderMode(): string {
@@ -88,11 +107,7 @@ export class AppSettingsStore {
   async setRenderMode(mode: string): Promise<void> {
     const selected = this.normalizeRenderMode(mode);
     this.renderMode = selected;
-    AppStorage.setOrCreate<string>('winehua.render.mode', selected);
-    const preference = selected === 'dxvk_2_6' ? 'dxvk_modern_2_6' :
-      selected === 'dxvk_1_10' ? 'dxvk_legacy' : 'auto';
-    AppStorage.setOrCreate<string>('winehua.dxvk.preference', preference);
-    AppStorage.setOrCreate<string>('winehua.dxvk.backend', preference);
+    this.publishRenderMode(selected);
     if (!this.store) return;
     await this.store.put(RENDER_MODE_KEY, selected);
     await this.store.flush();
@@ -130,9 +145,11 @@ export class AppSettingsStore {
       virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
+      controllerOutputMode: current.controllerOutputMode ?? 'dinput',
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
-      preserveUserDataOnReset: current.preserveUserDataOnReset
+      preserveUserDataOnReset: current.preserveUserDataOnReset,
+      showFpsHud: current.showFpsHud
     };
     await this.store.put(GLOBAL_KEY, JSON.stringify(this.globalSettings));
     await this.store.put(PLATFORM_DEFAULTS_KEY, '1');
@@ -191,9 +208,12 @@ export class AppSettingsStore {
         virtualMouseConfig: cloneVirtualMouseConfig(stored.virtualMouseConfig ?? defaults.virtualMouseConfig),
         controlOpacity: stored.controlOpacity ?? defaults.controlOpacity,
         gamepadDeadzone: stored.gamepadDeadzone ?? defaults.gamepadDeadzone,
+        controllerOutputMode: (stored.controllerOutputMode === 'keyboard_legacy')
+          ? 'keyboard_legacy' : 'dinput',
         outputScale: stored.outputScale ?? defaults.outputScale,
         d3dRendererPreference: stored.d3dRendererPreference ?? D3DRendererPreference.DXVK,
-        preserveUserDataOnReset: stored.preserveUserDataOnReset ?? defaults.preserveUserDataOnReset
+        preserveUserDataOnReset: stored.preserveUserDataOnReset ?? defaults.preserveUserDataOnReset,
+        showFpsHud: stored.showFpsHud ?? false
       };
     } catch (_) {
       this.globalSettings = createDefaultGlobalSettings();
@@ -269,9 +289,11 @@ export class AppSettingsStore {
       virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
+      controllerOutputMode: current.controllerOutputMode ?? 'dinput',
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
-      preserveUserDataOnReset: current.preserveUserDataOnReset
+      preserveUserDataOnReset: current.preserveUserDataOnReset,
+      showFpsHud: current.showFpsHud
     });
   }
 
@@ -298,9 +320,11 @@ export class AppSettingsStore {
       virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
+      controllerOutputMode: current.controllerOutputMode ?? 'dinput',
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
-      preserveUserDataOnReset: current.preserveUserDataOnReset
+      preserveUserDataOnReset: current.preserveUserDataOnReset,
+      showFpsHud: current.showFpsHud
     });
   }
 
@@ -327,9 +351,11 @@ export class AppSettingsStore {
       virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
+      controllerOutputMode: current.controllerOutputMode ?? 'dinput',
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
-      preserveUserDataOnReset: current.preserveUserDataOnReset
+      preserveUserDataOnReset: current.preserveUserDataOnReset,
+      showFpsHud: current.showFpsHud
     });
   }
 
@@ -357,9 +383,11 @@ export class AppSettingsStore {
       virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
+      controllerOutputMode: current.controllerOutputMode ?? 'dinput',
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
-      preserveUserDataOnReset: current.preserveUserDataOnReset
+      preserveUserDataOnReset: current.preserveUserDataOnReset,
+      showFpsHud: current.showFpsHud
     });
   }
 
@@ -386,9 +414,11 @@ export class AppSettingsStore {
       virtualMouseConfig: cloneVirtualMouseConfig(current.virtualMouseConfig),
       controlOpacity: current.controlOpacity,
       gamepadDeadzone: current.gamepadDeadzone,
+      controllerOutputMode: current.controllerOutputMode ?? 'dinput',
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
-      preserveUserDataOnReset: current.preserveUserDataOnReset
+      preserveUserDataOnReset: current.preserveUserDataOnReset,
+      showFpsHud: current.showFpsHud
     });
   }
 

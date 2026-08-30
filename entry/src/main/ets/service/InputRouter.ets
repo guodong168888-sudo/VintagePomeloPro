@@ -1,5 +1,11 @@
 import testNapi from 'libentry.so';
 
+export interface PointerPosition {
+  x: number;
+  y: number;
+  valid: boolean;
+}
+
 export class InputRouter {
   private static instance: InputRouter | null = null;
   private activeToplevelId: number = 0;
@@ -7,6 +13,7 @@ export class InputRouter {
   private pressedButtons: Set<number> = new Set<number>();
   private pointerX: number = 0;
   private pointerY: number = 0;
+  private hasPointer: boolean = false;
 
   static getInstance(): InputRouter {
     if (!InputRouter.instance) InputRouter.instance = new InputRouter();
@@ -31,8 +38,7 @@ export class InputRouter {
 
   sendPointer(action: number, x: number, y: number, button: number): void {
     if (this.activeToplevelId <= 0) return;
-    this.pointerX = x;
-    this.pointerY = y;
+    this.rememberPointer(x, y);
     if (action === MouseAction.Press && button > 0) this.pressedButtons.add(button);
     if (action === MouseAction.Release && button > 0) this.pressedButtons.delete(button);
     testNapi.sendPointerEvent(this.activeToplevelId, action, x, y, button);
@@ -45,6 +51,11 @@ export class InputRouter {
   rememberPointer(x: number, y: number): void {
     this.pointerX = x;
     this.pointerY = y;
+    this.hasPointer = true;
+  }
+
+  getPointer(): PointerPosition {
+    return { x: this.pointerX, y: this.pointerY, valid: this.hasPointer };
   }
 
   sendPointerButton(action: number, button: number): void {

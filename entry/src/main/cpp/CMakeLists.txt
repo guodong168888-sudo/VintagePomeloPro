@@ -27,11 +27,19 @@ add_library(entry SHARED
     graphics_broker.cpp
     graphics_profile.cpp
     game_controller_bridge.cpp
+    controller/controller_hub.cpp
+    controller/controller_napi.cpp
+    controller/controller_runtime.cpp
+    controller/gamepad_bridge.cpp
+    controller/physical_gamepad.cpp
     virgl_host_config.cpp
     napi_init.cpp
     experiment_payload.cpp
     wine_process.cpp
     wine_env.cpp
+    env_spec.cpp
+    env_profiles.cpp
+    spawner.cpp
     wine_launch.cpp
     wine_exe.cpp
     font_zip.cpp

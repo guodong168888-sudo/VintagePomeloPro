@@ -95,6 +95,8 @@ export const resetWinePrefix: (prefixMode?: string) => boolean;
 export const runHostVulkanProbe: (surfaceId: bigint, runId: string) => boolean;
 export const stopHostVulkanProbe: () => boolean;
 export const getHostGpuName: () => string;
+/** Host compositor displayed FPS for the renderer bound to toplevelId (0 = best active). */
+export const getDisplayFps: (toplevelId: number) => number;
 export const setOutputSize: (w: number, h: number) => void;
 export const setDisplayScale: (scale: number) => void;
 export const setDesktopMode: (enabled: boolean) => void;
@@ -133,6 +135,24 @@ export const setGamepadButtonCallback: (
 export const setGamepadAxisCallback: (
   callback: (axisType: number, x: number, y: number) => void) => void;
 export const setGamepadDeviceCallback: (callback: (connected: boolean) => void) => void;
+export const setGamepadRumbleCallback: (
+  callback: (low: number, high: number, durationMs: number) => void) => void;
+/** Controller Hub (Touch source + WHGP). source: 0=Touch 1=Physical 2=Keyboard */
+export const controllerSetEnabled: (enabled: boolean) => void;
+export const controllerSetButton: (source: number, slot: number, button: number, pressed: boolean) => void;
+export const controllerSetAxis: (source: number, slot: number, axis: number, value: number) => void;
+export const controllerSetHat: (source: number, slot: number, x: number, y: number) => void;
+export const controllerResetSource: (source: number) => void;
+export const controllerGetState: (slot: number) => {
+  buttons: number; lx: number; ly: number; rx: number; ry: number;
+  lt: number; rt: number; hatX: number; hatY: number; sequence: number;
+};
+export const controllerGetStateText: (slot: number) => string;
+export const controllerStartBridge: (socketPath?: string) => boolean;
+export const controllerStopBridge: () => void;
+export const controllerGetSocketPath: () => string;
+export const controllerSetOutputMode: (mode: string) => void;
+export const controllerGetOutputMode: () => string;
 export const runMmapTests: () => string;
 export const termRun: (cols: number, rows: number, cb: (data: ArrayBuffer) => void, onExit: () => void) => number;
 export const termSend: (data: ArrayBuffer) => void;

@@ -17,6 +17,7 @@
 #include "wine_process.h"
 // 由 LaunchPadMode 在启动 Broker 前设置
 std::string gBrokerHomeDir;
+std::string gBrokerPrefixDir;
 
 // -- 从 entryParams 解析进程名 (登记到任务列表用) --
 // entryParams 形如 "homeDir|binDir|[wine]|argv0|argv1|...|__env=K=V|..."
@@ -66,7 +67,6 @@ static std::string ParseProcessName(const char* entryParams) {
 #include <atomic>
 #include <utility>
 #include <vector>
-#include <memory>
 #include <AbilityKit/native_child_process.h>
 
 #undef LOG_DOMAIN
@@ -80,29 +80,17 @@ static const char* kBrokerSocketPath = WINE_BROKER_SOCKET;
 static std::atomic<bool> gBrokerRunning{false};
 static std::atomic<bool> gBrokerListening{false};
 
-static bool IsBrokerWineserverRequest(const char* entryParamsRaw)
+static bool BrokerSocketConnectable()
 {
-    if (!entryParamsRaw || !entryParamsRaw[0]) return false;
-
-    std::unique_ptr<char, decltype(&free)> entryCopy(strdup(entryParamsRaw), &free);
-    if (!entryCopy) return false;
-
-    char* saveptr = nullptr;
-    char* token = strtok_r(entryCopy.get(), "|", &saveptr);  // skip binDir
-    if (!token) return false;
-
-    while ((token = strtok_r(nullptr, "|", &saveptr)) != nullptr) {
-        if (!strncmp(token, "__env__=", 8) || !strcmp(token, "__winehua_desktop__")) {
-            continue;
-        }
-        if (!strcasecmp(token, "wine")) {
-            char* next = strtok_r(nullptr, "|", &saveptr);
-            return next && !strcasecmp(next, "wineserver");
-        }
-        return !strcasecmp(token, "wineserver");
-    }
-
-    return false;
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strcpy(addr.sun_path, kBrokerSocketPath);
+    const bool ok = connect(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0;
+    close(fd);
+    return ok;
 }
 
 /**
@@ -158,7 +146,11 @@ static void HandleRequest(int conn_fd)
 
     ssize_t n = recvmsg(conn_fd, &msg, 0);
     if (n <= 0) {
-        OH_LOG_ERROR(LOG_APP, "[Broker] recvmsg failed: %{public}s", strerror(errno));
+        // n==0: 对端 connect 后立即 close (StartBrokerServer 就绪探测), 非错误
+        if (n == 0)
+            OH_LOG_INFO(LOG_APP, "[Broker] probe connection (readiness check), ignoring");
+        else
+            OH_LOG_ERROR(LOG_APP, "[Broker] recvmsg failed: %{public}s", strerror(errno));
         close(conn_fd);
         return;
     }
@@ -232,10 +224,16 @@ static void HandleRequest(int conn_fd)
         }
     }
 
-    // 5) 构造 NativeChildProcess 参数
-    // 复制 entryParams 并加上 homeDir 前缀 (与 LaunchPadMode 新格式一致)
+    // 5) 构造 NativeChildProcess 参数。
+    // Wine 服务进程会把创建者的环境重新序列化给 broker，但 NCP 不会继承
+    // LaunchPad 的环境。把会话 prefix 放在最后，使 clean smoke 的
+    // .wine-smoke 覆盖可能残留的默认 .wine 值。
     std::string fullParams = gBrokerHomeDir.empty() ? entryParamsRaw
                             : (gBrokerHomeDir + "|" + entryParamsRaw);
+    if (!gBrokerPrefixDir.empty())
+        fullParams += "|__env=WINEPREFIX=" + gBrokerPrefixDir;
+    OH_LOG_INFO(LOG_APP, "[Broker] dispatch prefix=%{public}s",
+                gBrokerPrefixDir.empty() ? "(inherited)" : gBrokerPrefixDir.c_str());
     char* entryParamsCopy = strdup(fullParams.c_str());
 
     // 建 fd 链表: 名字取自 FDS 行; 无 FDS 行且恰好 1 个 fd 时回退旧命名 wineserver_sock
@@ -280,14 +278,12 @@ static void HandleRequest(int conn_fd)
     NativeChildProcess_Options options = {};
     options.isolationMode = NCP_ISOLATION_MODE_NORMAL;
 
-    // 5) 调用 StartNativeChildProcess (在主进程上下文，可以调用多次)
-    const char* childEntry = IsBrokerWineserverRequest(entryParamsRaw)
-        ? "libwine_child.so:WineserverMain"
-        : "libwine_child.so:Main";
-    OH_LOG_INFO(LOG_APP, "[Broker] child entry=%{public}s", childEntry);
+    // 5) 调用 StartNativeChildProcess (在主进程上下文，可以调用多次)。
+    // 全部走 Main: wineserver 由 wine_child Main 截获 argv[0] 转入本体
+    // (纯 Unix ELF 不能走 wine loader 的 PE 解析)。
     int32_t childPid = -1;
     int32_t ret = OH_Ability_StartNativeChildProcess(
-        childEntry, args, options, &childPid);
+        "libwine_child.so:Main", args, options, &childPid);
 
     OH_LOG_INFO(LOG_APP, "[Broker] StartNativeChildProcess ret=%{public}d childPid=%{public}d",
                 ret, childPid);
@@ -392,7 +388,8 @@ int StartBrokerServer()
 {
     if (gBrokerRunning.load(std::memory_order_acquire)) {
         const bool ready = WaitFor("broker listening", []() {
-            return gBrokerListening.load(std::memory_order_acquire);
+            return gBrokerListening.load(std::memory_order_acquire) &&
+                   BrokerSocketConnectable();
         }, 2000, 20);
         OH_LOG_WARN(LOG_APP, "[Broker] already running, listening=%{public}s",
                     ready ? "yes" : "no");
@@ -407,10 +404,11 @@ int StartBrokerServer()
     gBrokerRunning.store(true, std::memory_order_release);
     std::thread(BrokerThreadFunc).detach();
 
-    // Readiness means listen() completed, not merely that a socket pathname
-    // exists. This makes the WineEngine READY callback safe to act on.
+    // listen() 完成仍不够: bind 成功后 socket 文件已存在, listen 未完成时
+    // connect 会 ECONNREFUSED。再加真实 connect, 与 winehua f9aaaaed 对齐。
     if (!WaitFor("broker listening", []() {
-        return gBrokerListening.load(std::memory_order_acquire);
+        return gBrokerListening.load(std::memory_order_acquire) &&
+               BrokerSocketConnectable();
     }, 2000, 20)) {
         OH_LOG_ERROR(LOG_APP, "[Broker] failed to become ready");
         return -1;

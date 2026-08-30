@@ -6,6 +6,7 @@
 #include "text_input.h"
 #include "pointer_extras.h"
 #include "egl_renderer.h"
+#include "fps_counter.h"
 #include "audio_broker.h"
 #include "audio_ipc_protocol.h"
 #include "graphics_broker.h"
@@ -19,6 +20,7 @@
 #include "font_zip.h"
 #include "host_vulkan_probe.h"
 #include "game_controller_bridge.h"
+#include "controller/controller_napi.h"
 #include "phone_adapter/phone_adapter.h"
 #include "app_log.h"
 
@@ -868,6 +870,18 @@ static napi_value GetDesktopRootId(napi_env env, napi_callback_info) {
     return r;
 }
 
+static napi_value GetDisplayFps(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    uint32_t id = 0;
+    if (argc >= 1) napi_get_value_uint32(env, args[0], &id);
+    const double fps = static_cast<double>(DisplayFpsRegistry::Instance().Get(id));
+    napi_value result;
+    napi_create_double(env, fps, &result);
+    return result;
+}
+
 // -- NAPI: takeWindowMask -- (ARGB 异型窗口剪影掩码, ArkTS 轮询拉取)
 static napi_value TakeWindowMask(napi_env env, napi_callback_info info) {
     size_t argc = 1;
@@ -1291,6 +1305,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"runHostVulkanProbe", nullptr, RunHostVulkanProbe, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"stopHostVulkanProbe", nullptr, StopHostVulkanProbeNapi, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getHostGpuName", nullptr, GetHostGpuNameNapi, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getDisplayFps", nullptr, GetDisplayFps, nullptr, nullptr, nullptr, napi_default, nullptr},
         // surfaceId 驱动的渲染器管理 (XComponentController 回调)
         {"createRenderer",  nullptr, CreateRenderer,  nullptr, nullptr, nullptr, napi_default, nullptr},
         {"resizeRenderer",  nullptr, ResizeRenderer,  nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -1332,6 +1347,19 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setGamepadButtonCallback", nullptr, SetGamepadButtonCallback, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setGamepadAxisCallback", nullptr, SetGamepadAxisCallback, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setGamepadDeviceCallback", nullptr, SetGamepadDeviceCallback, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setGamepadRumbleCallback", nullptr, SetGamepadRumbleCallback, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"controllerSetEnabled", nullptr, ControllerSetEnabled, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"controllerSetButton", nullptr, ControllerSetButton, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"controllerSetAxis", nullptr, ControllerSetAxis, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"controllerSetHat", nullptr, ControllerSetHat, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"controllerResetSource", nullptr, ControllerResetSource, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"controllerGetState", nullptr, ControllerGetState, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"controllerGetStateText", nullptr, ControllerGetStateText, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"controllerStartBridge", nullptr, ControllerStartBridge, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"controllerStopBridge", nullptr, ControllerStopBridge, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"controllerGetSocketPath", nullptr, ControllerGetSocketPath, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"controllerSetOutputMode", nullptr, ControllerSetOutputMode, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"controllerGetOutputMode", nullptr, ControllerGetOutputMode, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
 

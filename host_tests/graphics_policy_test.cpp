@@ -111,9 +111,9 @@ void TestBackendPolicy()
     Check(runtime.directory == "legacy" && runtime.version == "1.10.3" &&
               runtime.relaxedFeatureCompatibility &&
               runtime.commandQueryReset && runtime.dynamicMappedFlush &&
-              !runtime.batchMappedFlush &&
+              runtime.batchMappedFlush &&
               !runtime.disableSemaphoreFeedback,
-          "DXVK 1.10 runtime contract");
+          "DXVK 1.10 high-performance runtime contract");
     Check(winehua::ResolveDxvkRuntimeProfile(D3dBackendKind::DxvkModern26, &runtime),
           "resolve DXVK 2.6 runtime");
     Check(runtime.directory == "modern-2.6" && runtime.version == "2.6.2" &&

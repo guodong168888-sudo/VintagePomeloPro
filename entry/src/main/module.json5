@@ -33,6 +33,10 @@
           ],
           "when": "always"
         }
+      },
+      {
+        "name": "ohos.permission.VIBRATE",
+        "reason": "$string:vibrate_permission"
       }
     ],
     "deliveryWithInstall": true,

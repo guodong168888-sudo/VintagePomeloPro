@@ -4,7 +4,79 @@
 
 基线：WineHua `VintagePomeloMaster` @ `ba7218a`
 
-> **同步基线标记**：最新核对到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `90edaae`，本地镜像 `mirror_master`）。下次同步先 `git fetch winehua && git branch -f mirror_master winehua/master && git log 90edaae..mirror_master --oneline`，避免重复合并。
+> **同步基线标记**：最新核对到的上游 SHA 见 [UPSTREAM_SYNC_POINT.md](UPSTREAM_SYNC_POINT.md)（当前为 WineHua `master` @ `d256317e`，本地镜像 `mirror_master`）。下次同步先 `git fetch winehua && git branch -f mirror_master winehua/master && git log d256317e..mirror_master --oneline`，避免重复合并。
+
+### 2026-08-28 对齐会话生命周期三原语命名（d256317e 结构层）
+
+- 分支：产品线 `main`（叠在启动/环境栈第 1–5 步之上）。
+- 镜像：`winehua/master` @ `d256317e`。
+- 原则：只在 `WineEngineService` 上挂齐 `startSession` / `stopSession` / `wipeEnvironment` 三个名字，方便后续上游重构落到同一结构。不上游 `WineEnvService` 类、不引入前台 overlay / `opBusy` / `EngineGuide`、不改 `AppSessionService` / 设置页调用方。
+- 映射（行为与改前相同）：
+
+  | 上游原语 | 本仓实现 | 产品入口（保留） |
+  | --- | --- | --- |
+  | `startSession` | 原 `ensureReady` 体（幂等；首启/二启仍由 native prefix 决定） | `ensureReady` 转发 |
+  | `stopSession` | 原 `stopAll` 体（NAPI `stopAll` + 35s drain + 300ms socket settle） | `stopAll` 转发 |
+  | `wipeEnvironment` | `resetWinePrefix` + `forceRefreshRuntime`（不清整棵 `WINE_ROOT`） | `resetPrefix` 的清空半段 |
+
+- 组合未改：`restart` = `stopSession` + `startSession`；`resetPrefix` = `stopSession` +（可选文档/注册表备份）+ `wipeEnvironment` +（还原）+ `startSession`。ERROR + 仍有活进程时仍等待、不双开。
+- 验证：`make hap`（winehua-dev / vp-build，arm64-v8a，API 23）CompileArkTS + 签名通过。调用方与 UI 未改，未做真机动作回归。
+
+### 2026-08-27 对齐 WineHua master 启动/环境栈第 5 步
+
+- 分支：`feature/align-env-spawn-1-4`（叠在第 1–4 步之上；真机已验证 1–4 可玩后再做本步）。
+- 镜像：`winehua/master` @ `d256317e`。
+- 原则：按上游 `f9aaaaed` 把 wineserver/wineboot 也改走 broker 单一通道，删除 Spawner 的 NCP 直启与 `libwine_child.so:WineserverMain` 入口。ArkTS 仍是 `WineEngineService` + `launchClient` 9 参；不上游 `WineEnvService` / `Box64Dynarec.ets` / `dxvkBackend`/`wineLang`。
+- 已落地（对照上游 SHA，本地适配而非整 commit cherry-pick）：
+
+  | 上游 SHA | 说明 |
+  | --- | --- |
+  | `f9aaaaed` | Spawner 全部 kind 经 `SpawnViaBroker`；broker 先于 wineserver 启动并尾部追加会话 `WINEPREFIX`；`wine_child Main` 截获 `argv[0]==wineserver` 转入 `RunWineserver`；删除 `WineserverMain` NCP 导出 |
+
+- 私有不变量：`@engine/wineserver` / `@engine/wineboot` 登记仍在 `wine_launch` 拿到 pid 之后覆盖 broker 的 basename 登记；virgl host / 手机 fork 不进 Spawner；Box64 policy 仍在 `AppModels.resolveBox64PresetEnv`；wineboot 进展看门狗与首启重试保留。
+- 已知副作用（与上游相同）：wineboot 经 broker 登记会短暂出现在任务列表，随后被 `@engine/wineboot` 覆盖。
+- 验证：`make test`；`make hap`（winehua-dev / vp-build，arm64-v8a，API 23）。第 1–4 步真机已过；本步需再做一次冷启动/二启。
+- 子模块 gitlink：未跟随上游。
+
+### 2026-08-27 对齐 WineHua master 启动/环境栈第 1–4 步
+
+- 分支：`feature/align-env-spawn-1-4`（从 `feature/host-fps-hud` 切出，含 broker connect 探测、wineserver `Main` 截获、35s drain）。
+- 镜像：`winehua/master` @ `d256317e`。
+- 原则：按上游 `b04e3410` / `18b6f5a5` / `f3370b05` / `fed07ecf` 落地 EnvSpec / 基线单源 / Profile 管线 / Spawner，行为保持。第 5 步见上一节。ArkTS 仍是 `WineEngineService` + `launchClient` 9 参；不上游 `WineEnvService` / `Box64Dynarec.ets` / `dxvkBackend`/`wineLang`。
+- 已落地（对照上游 SHA，本地适配而非整 commit cherry-pick）：
+
+  | 上游 SHA | 本仓提交 | 说明 |
+  | --- | --- | --- |
+  | `b04e3410` | `175ed930` | EnvSpec 收口 entryParams 序列化；`ohos_broker.c` 只互指、不改 wine gitlink |
+  | `18b6f5a5` | `af871191` | `wine_env_baseline.h` 公共键；Box64 出厂表仍用本仓 `SetBox64PerfEnv` |
+  | `f3370b05` | `3725dfb5` | `BuildSessionEnv` 单一策略点；私有 host-shadow / `WINEHUA_PERF_PROFILE` overlay 迁入 Profile |
+  | `fed07ecf` | `d00df45b` | Spawner：Wineserver/Wineboot → NCP；DesktopShell/WineExe/GuestElf/HostElf → broker |
+
+- **第 5 步**：已在同日后续提交落地，见上一节。
+- 私有不变量：`@engine/wineserver` 登记仍在 `wine_launch` 拿到 pid 之后；virgl host / 手机 fork 不进 Spawner；Box64 policy 仍在 `AppModels.resolveBox64PresetEnv`。
+- 验证：`make test`（geometry/blit/env_spec/env_baseline）；`make hap`（winehua-dev / vp-build，arm64-v8a，API 23）。**未做真机冷启动回归**（桌面 + 开一个 exe）。
+- 子模块 gitlink：未跟随上游。
+
+### 2026-08-27 WineHua master 增量（90edaae..d256317e）
+
+- 分支：`feature/host-fps-hud`（基于 VintagePomeloPro `origin/main` `d73f299f` + 宿主 FPS overlay）。
+- 镜像：`winehua/master` @ `d256317e`。
+- 原则：不整包吸收 EnvSpec / Profile 管线 / SpawnRequest+Spawner / 会话三原语重命名；只移植有独立行为价值的修复。私有 `launchClient` 仍为 8 参 + `compatEnvStr`；不上游 `WineEnvService` / `Box64Dynarec.ets` / 品牌 / 版本号。
+- 已手工移植（上游 SHA → 本地适配）：
+
+  | 上游 SHA | 说明 |
+  | --- | --- |
+  | `f9aaaaed` 行为子集 | broker 就绪改真实 `connect` 探测 + probe EOF 降 INFO；`IsBrokerWineserverRequest` 跳过 homeDir+binDir 两段路径；`Main` 截获 `argv[0]==wineserver` 交给 `WineserverMain`（不删 NCP `WineserverMain` 入口） |
+  | `18b6f5a5` 行为子集 | `WineserverMain` Box64 基线先于 `__env` apply，删除 `BOX64_DYNAREC_*` 二次重放 |
+  | `d256317e` 行为子集 | `waitForNativeShutdown` 5s→35s，覆盖 native drain 30s + tsfn 余量 |
+
+- 跳过（架构/文档/已由私有路径覆盖）：
+  - `3b589770` `95d03f95` `ade24e0f`（docs）
+  - `b04e3410` `18b6f5a5` `f3370b05` `fed07ecf` `f9aaaaed` 的 EnvSpec/Spawner/「全部 wineserver 改走 broker、删除 NCP 直启」
+  - `3720e13a`（`Box64Dynarec.ets` 单源化；本仓 `FilterCompatLines` 已用 `BOX64_DYNAREC_` 前缀门）
+  - `d256317e` 的 `WineEnvService` 类本身（本仓仍用 `WineEngineService`；三原语名字已于 2026-08-28 挂到该类上，见上一节）
+- 子模块 gitlink：未跟随上游。
+- 验证：`make hap`（winehua-dev / vp-build，arm64-v8a，API 23）。
 
 ### 2026-08-25 WineHua master 增量（e16d79b..90edaae）
 

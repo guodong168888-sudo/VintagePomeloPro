@@ -138,9 +138,12 @@ require_literal "NAPI product route resolver" "ResolveProductGraphicsPolicy" \
 require_literal "Wine env product Guest resolver" \
     "BuildProductGuestGraphicsEnvironment" \
     entry/src/main/cpp/wine_env.cpp
-require_literal "Wine launch product route resolver" \
+require_literal "Wine session product route resolver" \
     "ResolveProductGraphicsPolicy" \
-    entry/src/main/cpp/wine_launch.cpp
+    entry/src/main/cpp/env_profiles.cpp
+require_literal "Wine session applies product DXVK capability" \
+    "AppendProductDxvkEnv(env, d3dBackend, graphicsExperiment);" \
+    entry/src/main/cpp/env_profiles.cpp
 require_literal "Product Host route follows selected Guest backend" \
     "hostGraphicsBackendOverride : requestedD3DBackend" \
     entry/src/main/ets/service/WineEngineService.ets
@@ -435,15 +438,18 @@ require_literal "LAB automation experiment resolver" \
 require_literal "Applied Host experiment propagated per launch" \
     'WINEHUA_GRAPHICS_PROFILE=${this.appliedHostGraphicsLabExperiment}' \
     entry/src/main/ets/service/WineEngineService.ets
-require_literal "Direct Wine child extracts graphics experiment" \
-    'FindEnvValue(envOverrides, "WINEHUA_GRAPHICS_PROFILE")' \
+require_literal "Direct Wine child forwards graphics experiment to session policy" \
+    "policy.extraEnv = options.environment;" \
     entry/src/main/cpp/wine_exe.cpp
-require_literal "Direct Wine child resolves Guest experiment" \
+require_literal "Session environment extracts graphics experiment" \
+    'FindEnvValue(probeBase, "WINEHUA_GRAPHICS_PROFILE")' \
+    entry/src/main/cpp/env_profiles.cpp
+require_literal "Session environment resolves Guest experiment" \
     "ResolveLabGraphicsExperiment" \
-    entry/src/main/cpp/wine_exe.cpp
-require_literal "Direct Wine child applies resolved experiment" \
-    "AppendProductDxvkEnv(wineEnv, d3dBackend, graphicsExperiment)" \
-    entry/src/main/cpp/wine_exe.cpp
+    entry/src/main/cpp/env_profiles.cpp
+require_literal "Session environment applies resolved experiment" \
+    "AppendProductDxvkEnv(env, d3dBackend, graphicsExperiment)" \
+    entry/src/main/cpp/env_profiles.cpp
 vkd3d_dxvk_companion="$(require_value defaults vkd3d_dxvk_companion)"
 require_literal "VKD3D DXVK companion" \
     "AppendD3dBackendEnv(env, \"dxvk_modern_2_6\", binDir);" \

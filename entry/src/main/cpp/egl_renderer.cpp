@@ -1065,11 +1065,12 @@ void EglRenderer::RenderLoop() {
             perf.Add(useToplevel, takeUs, uploadUs, frameEndedUs - swapStartedUs,
                      frameEndedUs - frameStartedUs, cpuFrame ? px.size() : 0, swapOk);
         }
-        fps.Tick();
+        if (swapOk) fps.Tick(toplevelId_);
         loopCount++;
         if (!waitForFrameTick()) break;
     }
 
+    DisplayFpsRegistry::Instance().Remove(toplevelId_);
     ShutdownZeroCopyConsumer();
     if (nativeVsync) OH_NativeVSync_Destroy(nativeVsync);
 }

@@ -251,11 +251,12 @@ struct SystemSettingsPage {
   // host GPU 名称 + DXVK2.6 支持判定 (马良 920 以下不支持, 经 testNapi.getHostGpuName)
   @State private gpuName: string = '';
   @State private gpuSupportDxvk26: boolean = true;
-  // 渲染模式 (auto/dxvk_2_6/dxvk_1_10/virgl): @State 保证按钮选中态即时刷新
-  @State private renderMode: string = 'auto';
+  // 渲染模式 (dxvk_1_10/dxvk_2_6/virgl): @State 保证按钮选中态即时刷新
+  @State private renderMode: string = 'dxvk_1_10';
   @State private fontImporting: boolean = false;
   @State private fontImportStage: string = '';
   @State private fontImportProgress: number = 0;
+  @State private hubStateText: string = '等待手柄输入…';
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private settingsScroller: Scroller = new Scroller();
   private callback: ((value: BreakpointType) => void) | null = null;
@@ -263,6 +264,7 @@ struct SystemSettingsPage {
   private sidebarTarget: SettingsSection | null = null;
   private disposeWindowInsetObserver: (() => void) | null = null;
   private inputProfilePickerController: CustomDialogController | null = null;
+  private hubPollTimer: number = -1;
 
   private isNarrowPhone(): boolean {
     return this.breakpoint === 'xs';
@@ -346,7 +348,8 @@ struct SystemSettingsPage {
     this.loadGpuInfo();
     this.renderMode = AppSettingsStore.getInstance().getRenderMode()
       || AppStorage.get<string>('winehua.render.mode')
-      || 'auto';
+      || 'dxvk_1_10';
+    this.startHubPoll();
   }
 
   onPageShow(): void {
@@ -428,6 +431,7 @@ struct SystemSettingsPage {
     if (this.callback) BreakpointSystem.unsubscribe(this.callback);
     if (this.engineCallback) WineEngineService.getInstance().unsubscribe(this.engineCallback);
     this.stopWindowInsetObserver();
+    this.stopHubPoll();
   }
 
   onBackPress(): boolean {
@@ -566,7 +570,8 @@ struct SystemSettingsPage {
       d3dRendererPreference: D3DRendererPreference = this.settings.d3dRendererPreference,
       desktopWindowMode: DesktopWindowMode = this.settings.desktopWindowMode,
       keepScreenOn: boolean = this.settings.keepScreenOn,
-      preserveUserDataOnReset: boolean = this.settings.preserveUserDataOnReset): void {
+      preserveUserDataOnReset: boolean = this.settings.preserveUserDataOnReset,
+      showFpsHud: boolean = this.settings.showFpsHud): void {
     const virtualInputChanged = this.settings.virtualInputEnabled !== virtualInputEnabled;
     this.settings = {
       defaultDisplayMode: mode,
@@ -589,9 +594,11 @@ struct SystemSettingsPage {
       virtualMouseConfig: cloneVirtualMouseConfig(virtualMouseConfig),
       controlOpacity: opacity,
       gamepadDeadzone: deadzone,
+      controllerOutputMode: this.settings.controllerOutputMode ?? 'dinput',
       outputScale: scale,
       d3dRendererPreference: d3dRendererPreference,
-      preserveUserDataOnReset: preserveUserDataOnReset
+      preserveUserDataOnReset: preserveUserDataOnReset,
+      showFpsHud: showFpsHud
     };
     GamepadManager.getInstance().setDeadzone(deadzone);
     WineWindowManager.getInstance().setOutputScalePercent(scale);
@@ -646,6 +653,20 @@ struct SystemSettingsPage {
       this.settings.controlBarPositionX, this.settings.controlBarPositionY,
       this.settings.d3dRendererPreference, this.settings.desktopWindowMode,
       enabled);
+  }
+
+  private updateShowFpsHud(enabled: boolean): void {
+    this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
+      this.settings.useGlassEffect, this.settings.usePageBackground,
+      this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
+      this.settings.controlOpacity, this.settings.gamepadDeadzone,
+      this.settings.outputScale, this.settings.themeMode,
+      this.settings.controlBarDirection, this.settings.virtualMouseConfig,
+      this.settings.desktopInputProfileId, this.settings.pageBackgroundUri,
+      this.settings.virtualInputEnabled, this.settings.desktopOrientation,
+      this.settings.controlBarPositionX, this.settings.controlBarPositionY,
+      this.settings.d3dRendererPreference, this.settings.desktopWindowMode,
+      this.settings.keepScreenOn, this.settings.preserveUserDataOnReset, enabled);
   }
 
   /**
@@ -954,14 +975,12 @@ struct SystemSettingsPage {
     }
   }
 
-  /** 渲染模式: auto / dxvk_2_6 / dxvk_1_10 / virgl。
-   *  自动: 支持的 GPU 使用 DXVK 2.6；Maleoon 920 以下回退 DXVK 1.10。
-   *  写入 Preferences 后再重启引擎，避免下次冷启动回退 auto。 */
+  /** 渲染模式: dxvk_1_10 / dxvk_2_6 / virgl。默认 1.10；2.6 仅 920+ 可选（实验）。 */
   private updateRenderMode(mode: string): void {
-    const selected = mode === 'dxvk_2_6' || mode === 'dxvk_1_10' || mode === 'virgl' ? mode : 'auto';
+    const selected = mode === 'dxvk_2_6' || mode === 'dxvk_1_10' || mode === 'virgl' ? mode : 'dxvk_1_10';
     const current = AppSettingsStore.getInstance().getRenderMode()
       || AppStorage.get<string>('winehua.render.mode')
-      || 'auto';
+      || 'dxvk_1_10';
     if (current === selected) return;
     this.renderMode = selected;
     promptAction.showToast({ message: '渲染模式已切换，正在重启引擎…' });
@@ -1012,12 +1031,74 @@ struct SystemSettingsPage {
       virtualMouseConfig: cloneVirtualMouseConfig(this.settings.virtualMouseConfig),
       controlOpacity: this.settings.controlOpacity,
       gamepadDeadzone: this.settings.gamepadDeadzone,
+      controllerOutputMode: this.settings.controllerOutputMode ?? 'dinput',
       outputScale: this.settings.outputScale,
       d3dRendererPreference: this.settings.d3dRendererPreference,
-      preserveUserDataOnReset: this.settings.preserveUserDataOnReset
+      preserveUserDataOnReset: this.settings.preserveUserDataOnReset,
+      showFpsHud: this.settings.showFpsHud
     };
     void ThemeSettingsService.getInstance().update(this.settings);
     promptAction.showToast({ message: '兼容性预设已保存，新启动的程序生效' });
+  }
+
+  private startHubPoll(): void {
+    this.stopHubPoll();
+    this.refreshHubState();
+    this.hubPollTimer = setInterval((): void => this.refreshHubState(), 250);
+  }
+
+  private stopHubPoll(): void {
+    if (this.hubPollTimer >= 0) {
+      clearInterval(this.hubPollTimer);
+      this.hubPollTimer = -1;
+    }
+  }
+
+  private refreshHubState(): void {
+    try {
+      this.hubStateText = testNapi.controllerGetStateText(0) + '  ' +
+        GamepadManager.getInstance().getRumbleStatusText();
+    } catch (_) {
+      this.hubStateText = 'Hub 不可用';
+    }
+  }
+
+  private updateControllerOutputMode(mode: 'dinput' | 'keyboard_legacy'): void {
+    if (this.settings.controllerOutputMode === mode) return;
+    this.settings = {
+      defaultDisplayMode: this.settings.defaultDisplayMode,
+      desktopOrientation: this.settings.desktopOrientation,
+      desktopWindowMode: this.settings.desktopWindowMode,
+      keepScreenOn: this.settings.keepScreenOn,
+      box64Preset: this.settings.box64Preset,
+      desktopInputProfileId: this.settings.desktopInputProfileId,
+      viewMode: this.settings.viewMode,
+      themeMode: this.settings.themeMode,
+      useGlassEffect: this.settings.useGlassEffect,
+      usePageBackground: this.settings.usePageBackground,
+      pageBackgroundUri: this.settings.pageBackgroundUri,
+      virtualInputEnabled: this.settings.virtualInputEnabled,
+      showVirtualControls: this.settings.showVirtualControls,
+      autoHideVirtualControls: this.settings.autoHideVirtualControls,
+      controlBarDirection: this.settings.controlBarDirection,
+      controlBarPositionX: this.settings.controlBarPositionX,
+      controlBarPositionY: this.settings.controlBarPositionY,
+      virtualMouseConfig: cloneVirtualMouseConfig(this.settings.virtualMouseConfig),
+      controlOpacity: this.settings.controlOpacity,
+      gamepadDeadzone: this.settings.gamepadDeadzone,
+      controllerOutputMode: mode,
+      outputScale: this.settings.outputScale,
+      d3dRendererPreference: this.settings.d3dRendererPreference,
+      preserveUserDataOnReset: this.settings.preserveUserDataOnReset,
+      showFpsHud: this.settings.showFpsHud
+    };
+    GamepadManager.getInstance().setOutputMode(mode);
+    void ThemeSettingsService.getInstance().update(this.settings);
+    promptAction.showToast({
+      message: mode === 'dinput'
+        ? '已切换 Wine 手柄（XInput/DirectInput）；请重新启动 Wine 会话后生效'
+        : '已切换键盘模拟；请重新启动 Wine 会话后生效'
+    });
   }
 
   private updateDesktopWindowMode(mode: DesktopWindowMode): void {
@@ -1396,7 +1477,9 @@ struct SystemSettingsPage {
   }
 
   private renderModeActive(mode: string): boolean {
-    return this.renderMode === mode;
+    const effective = (this.renderMode === 'dxvk_2_6' && !this.gpuSupportDxvk26)
+      ? 'dxvk_1_10' : this.renderMode;
+    return effective === mode;
   }
 
   @Builder
@@ -1404,12 +1487,12 @@ struct SystemSettingsPage {
     Button() {
       if (this.isNarrowPhone() && (mode === 'dxvk_2_6' || mode === 'dxvk_1_10')) {
         Column({ space: 0 }) {
-          Text('DXVK')
+          Text(mode === 'dxvk_2_6' ? 'DXVK 2.6' : 'DXVK')
             .fontSize(10)
             .fontWeight(FontWeight.Medium)
             .fontColor(!enabled ? '#666' : (this.renderModeActive(mode) ? '#FFFFFFFF' : $r('app.color.text_primary')))
             .maxLines(1)
-          Text(mode === 'dxvk_2_6' ? '2.6' : '1.10')
+          Text(mode === 'dxvk_2_6' ? '实验' : '1.10')
             .fontSize(13)
             .fontWeight(FontWeight.Bold)
             .fontColor(!enabled ? '#666' : (this.renderModeActive(mode) ? '#FFFFFFFF' : $r('app.color.text_primary')))
@@ -1872,6 +1955,27 @@ struct SystemSettingsPage {
                  }
                })
           }
+          Text('手柄兼容模式').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
+          Row({ space: 10 }) {
+            Button(this.settings.controllerOutputMode === 'dinput' ? 'Wine 手柄 ✓' : 'Wine 手柄')
+              .fontSize(13)
+              .onClick((): void => this.updateControllerOutputMode('dinput'))
+            Button(this.settings.controllerOutputMode === 'keyboard_legacy' ? '键盘模拟 ✓' : '键盘模拟')
+              .fontSize(13)
+              .onClick((): void => this.updateControllerOutputMode('keyboard_legacy'))
+            Button('测试震动')
+              .fontSize(13)
+              .onClick((): void => {
+                const ok: boolean = GamepadManager.getInstance().testRumble();
+                promptAction.showToast({
+                  message: ok ? '正在测试手柄震动' : '未找到手柄马达（不会使用平板震动）'
+                });
+              })
+          }.width('100%')
+          Text('Wine 手柄经 Controller Hub 进入 DirectInput 与 XInput，并转发震动到实体手柄；键盘模拟保持旧版键鼠映射。切换后需重启会话。')
+            .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
+          Text(this.hubStateText)
+            .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
           Text('手柄死区 ' + this.settings.gamepadDeadzone + '%').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
            Slider({ value: this.settings.gamepadDeadzone, min: 0, max: 40, step: 1 })
              .sliderInteractionMode(2)
@@ -1913,22 +2017,22 @@ struct SystemSettingsPage {
           Text('渲染模式').fontSize(12).fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_secondary')).width('100%')
           Row({ space: 6 }) {
-            this.RenderModeChip('自动', 'auto')
-            this.RenderModeChip('DXVK 2.6', 'dxvk_2_6', this.gpuSupportDxvk26)
             this.RenderModeChip('DXVK 1.10', 'dxvk_1_10')
+            if (this.gpuSupportDxvk26) {
+              this.RenderModeChip('DXVK 2.6（实验）', 'dxvk_2_6')
+            }
             this.RenderModeChip('VirGL', 'virgl')
           }.width('100%')
-          if (this.renderMode === 'auto') {
-            Text(`当前适配：${this.gpuSupportDxvk26 ? 'DXVK 2.6' : 'DXVK 1.10'}（${this.gpuName || '探测中'}）`)
-              .fontSize(11).fontColor($r('app.color.accent')).width('100%')
-          } else if (!this.gpuSupportDxvk26) {
-            Text(`GPU (${this.gpuName}) 不支持 DXVK 2.6，已自动用 1.10。`)
-              .fontSize(11).fontColor('#C47A20').width('100%')
-          }
-          Text('自动模式在支持的 GPU 上使用 DXVK 2.6；Maleoon 920 以下自动回退 DXVK 1.10。')
+          Text(this.gpuSupportDxvk26
+            ? '默认使用 DXVK 1.10。当前 GPU 支持开启 DXVK 2.6（实验）。'
+            : `默认使用 DXVK 1.10。当前 GPU（${this.gpuName || '未知'}）低于 920，不提供 DXVK 2.6。`)
             .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
           Text('更改后需要重启 Wine 引擎；运行中的游戏不会被立即中断。')
             .fontSize(11).fontColor('#C47A20').width('100%')
+          this.SwitchRow('显示 FPS',
+            '在 Wine 画面左上角显示宿主合成帧率，DXVK 与 VirGL 均可看到',
+            this.settings.showFpsHud, (value: boolean): void => this.updateShowFpsHud(value),
+            'engine-show-fps-hud')
 
           Text('Box64 兼容性预设').fontSize(12).fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_secondary')).width('100%')
