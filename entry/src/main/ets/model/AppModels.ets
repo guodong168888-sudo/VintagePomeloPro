@@ -108,6 +108,8 @@ export const BOX64_PRESET_PERFORMANCE = 'performance';
 export const BOX64_PRESET_UNITY = 'unity';
 /** Unity 的 D3D11/DXVK 备用档；默认 Unity 档改走 OpenGL 安全路径。 */
 export const BOX64_PRESET_UNITY_DXVK = 'unity_dxvk';
+/** Unity D3D11 单线程救援档：用于进程存活但长期没有首帧的游戏。 */
+export const BOX64_PRESET_UNITY_RESCUE = 'unity_rescue';
 
 export const BOX64_PRESET_IDS: string[] = [
   BOX64_PRESET_DEFAULT,
@@ -124,7 +126,8 @@ export const BOX64_PRESET_IDS: string[] = [
 export const BOX64_APP_PRESET_IDS: string[] = [
   ...BOX64_PRESET_IDS,
   BOX64_PRESET_UNITY,
-  BOX64_PRESET_UNITY_DXVK
+  BOX64_PRESET_UNITY_DXVK,
+  BOX64_PRESET_UNITY_RESCUE
 ];
 
 export function box64PresetLabel(presetId: string): string {
@@ -135,6 +138,8 @@ export function box64PresetLabel(presetId: string): string {
       return 'Unity 安全（OpenGL）';
     case BOX64_PRESET_UNITY_DXVK:
       return 'Unity DXVK（备用）';
+    case BOX64_PRESET_UNITY_RESCUE:
+      return 'Unity D3D11（单线程救援）';
     case BOX64_PRESET_CONSERVATIVE:
       return '兼容模式';
     case BOX64_PRESET_INTERMEDIATE:
@@ -154,6 +159,8 @@ export function box64PresetDescription(presetId: string): string {
       return 'Unity 安全方案：强制 OpenGL Core、窗口化 1280×720，并禁用容易导致黑屏的 gfx-direct；适合加载至 99% 后黑屏退出的游戏。';
     case BOX64_PRESET_UNITY_DXVK:
       return 'Unity DXVK 备用方案：使用 D3D11/DXVK、窗口化 1280×720，但不启用 gfx-direct；OpenGL 不兼容时可切换此档。';
+    case BOX64_PRESET_UNITY_RESCUE:
+      return 'Unity 黑屏救援方案：D3D11 单线程、窗口化 960×540，关闭 Wine ESYNC/FSYNC，并取消极慢的信号解释器。适合进程仍存活但迟迟没有首帧的游戏。';
     case BOX64_PRESET_CONSERVATIVE:
       return '兼容与性能之间偏保守，适合大部分老游戏。';
     case BOX64_PRESET_INTERMEDIATE:
@@ -190,6 +197,23 @@ export function resolveBox64PresetEnv(presetId: string): string[] {
         'BOX64_DYNAREC_WAIT=0',
         'BOX64_DYNAREC_NATIVEFLAGS=0',
         'BOX64_DYNAREC_INTERP_SIGNAL=1'
+      ];
+    case BOX64_PRESET_UNITY_RESCUE:
+      return [
+        'BOX64_DYNAREC_SAFEFLAGS=2',
+        'BOX64_DYNAREC_FASTNAN=0',
+        'BOX64_DYNAREC_FASTROUND=0',
+        'BOX64_DYNAREC_X87DOUBLE=1',
+        'BOX64_DYNAREC_BIGBLOCK=1',
+        'BOX64_DYNAREC_STRONGMEM=1',
+        'BOX64_DYNAREC_FORWARD=256',
+        'BOX64_DYNAREC_CALLRET=0',
+        'BOX64_DYNAREC_WAIT=1',
+        'BOX64_DYNAREC_NATIVEFLAGS=0',
+        'WINEESYNC=0',
+        'WINEFSYNC=0',
+        'DXVK_LOG_LEVEL=info',
+        'DXVK_LOG_PATH=C:\\windows\\temp'
       ];
     case BOX64_PRESET_STABILITY:
       return [
@@ -261,6 +285,7 @@ export function box64PresetEnvString(presetId: string): string {
 const UNITY_GFX_BACKEND_ARGS: string[] = [
   '-force-d3d9',
   '-force-d3d11',
+  '-force-d3d11-singlethreaded',
   '-force-d3d11-no-singlethreaded',
   '-force-d3d12',
   '-force-opengl',
@@ -287,13 +312,23 @@ export function resolveUnityDxvkLaunchArgs(argumentsIn: string[]): string[] {
   return resolveUnityLaunchArgsForBackend(argumentsIn, '-force-d3d11');
 }
 
-function resolveUnityLaunchArgsForBackend(argumentsIn: string[], backend: string): string[] {
+/** D3D11 单线程救援路径：降低首帧尺寸并避开 Unity 图形工作线程死锁。 */
+export function resolveUnityRescueLaunchArgs(argumentsIn: string[]): string[] {
+  const result = resolveUnityLaunchArgsForBackend(argumentsIn, '-force-d3d11', 960, 540);
+  result.push('-force-gfx-st');
+  result.push('-force-d3d11-singlethreaded');
+  return result;
+}
+
+function resolveUnityLaunchArgsForBackend(argumentsIn: string[], backend: string,
+  width: number = 1280, height: number = 720): string[] {
   const pairedOptions: string[] = ['-screen-fullscreen', '-screen-width', '-screen-height'];
   const result: string[] = [];
   for (let index = 0; index < argumentsIn.length; index += 1) {
     const argument = argumentsIn[index];
     const lower = argument.toLowerCase();
-    if (UNITY_GFX_BACKEND_ARGS.includes(lower) || lower === '-force-gfx-direct') {
+    if (UNITY_GFX_BACKEND_ARGS.includes(lower) || lower === '-force-gfx-direct' ||
+      lower === '-force-gfx-st') {
       continue;
     }
     if (pairedOptions.includes(lower)) {
@@ -304,14 +339,15 @@ function resolveUnityLaunchArgsForBackend(argumentsIn: string[], backend: string
   }
   result.push(backend);
   result.push('-screen-fullscreen', '0');
-  result.push('-screen-width', '1280');
-  result.push('-screen-height', '720');
+  result.push('-screen-width', '' + width);
+  result.push('-screen-height', '' + height);
   return result;
 }
 
 /** 判断某预设是否启用了 Unity 兼容模式（决定是否注入启动参数）。 */
 export function isUnityCompatPreset(presetId: string): boolean {
-  return presetId === BOX64_PRESET_UNITY || presetId === BOX64_PRESET_UNITY_DXVK;
+  return presetId === BOX64_PRESET_UNITY || presetId === BOX64_PRESET_UNITY_DXVK ||
+    presetId === BOX64_PRESET_UNITY_RESCUE;
 }
 
 export interface VirtualMouseConfig {
