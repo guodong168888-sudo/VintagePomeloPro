@@ -33,6 +33,9 @@ $runId = 'frame-order-{0}{1}-{2}' -f $D3DBackend, $batchLabel,
 $output = Join-Path $OutputRoot $runId
 $frames = Join-Path $output 'frames'
 $remoteRoot = '/data/local/tmp/winehua-frame-order'
+# Keep in sync with FRAME_MARKER_STEP_FRAMES in winehua_d3d_switch_cube.c.
+# The probe encodes a marker step, while the report exposes actual frames.
+$markerFramesPerStep = 8
 
 if (-not (Test-Path -LiteralPath $hdc)) { throw "Windows HDC not found: $hdc" }
 if (-not (Test-Path -LiteralPath $startScript)) { throw "Launcher not found: $startScript" }
@@ -69,8 +72,13 @@ function Get-FrameMarker {
             [Math]::Max(180, [Math]::Min(320, [int]($bitmap.Height * 0.22))))
         # Older tablet transforms placed the marker at lower-left, while the
         # current phone transform preserves the original upper-left position.
+        # Start below the Wine title bar: its blue chrome otherwise qualifies
+        # as a second marker region and contaminates the encoded colour read.
         $regions = @(
-            [pscustomobject]@{ minY = 20; maxY = $upperMaxY },
+            [pscustomobject]@{
+                minY = [Math]::Max(64, [int]($bitmap.Height * 0.05))
+                maxY = $upperMaxY
+            },
             [pscustomobject]@{
                 minY = [Math]::Max(90, [int]($bitmap.Height * 0.60))
                 maxY = [Math]::Min($bitmap.Height - 1, [int]($bitmap.Height * 0.90))
@@ -320,8 +328,8 @@ try {
         $currentAt = [DateTimeOffset]::Parse($valid[$i].capturedAt)
         $elapsedMs = ($currentAt - $previousAt).TotalMilliseconds
         if ($elapsedMs -le 0) { continue }
-        $forwardFrames += $delta
-        $frameTimeMs.Add($elapsedMs / $delta)
+        $forwardFrames += $delta * $markerFramesPerStep
+        $frameTimeMs.Add($elapsedMs / ($delta * $markerFramesPerStep))
     }
     $measurementSeconds = if ($valid.Count -gt 1) {
         ([DateTimeOffset]::Parse($valid[-1].capturedAt) -
@@ -331,13 +339,14 @@ try {
         [Math]::Round($forwardFrames / $measurementSeconds, 3)
     } else { $null }
     $summary = [ordered]@{
-        schemaVersion = 2
+        schemaVersion = 3
         runId = $runId
         status = $status
         d3dBackend = $D3DBackend
         graphicsExperiment = $GraphicsExperiment
         batchMappedFlushMode = $BatchMappedFlushMode
         gamePath = $GamePath
+        markerFramesPerStep = $markerFramesPerStep
         samplesRequested = $Samples
         samplesValid = $valid.Count
         duplicates = $duplicates

@@ -190,6 +190,17 @@ batch-off 单变量，避免重复消耗 Legacy 轮次；`-ConditionSet all` 则
 `product-virgl`，DXVK 两代必须观察到 `product-vulkan`；三者使用相同的帧标记、截图采样
 和 FPS 估算，不能把 cube 的结果与 Heaven 的结果直接横向比较。
 
+当前手机上的 WineD3D 自动路径应使用 cube 的 `--d3d9` 参数：D3D9/WineD3D/VirGL 已在 40/40
+有效截图中通过帧序门禁（无重复、无倒退），按采样时间还原的展示 FPS 为 123.996，P95 帧时间为
+8.570 ms。默认 D3D11 变体在 WineD3D 路线于 `CreateVertexShader` 返回 `E_INVALIDARG`，它是
+WineD3D D3D11 shader 能力缺口，不能被标记为 VirGL presenter、Direct Present 或 DXVK 代际回归。
+为抵消 HDC 截图约 1.3 s 的采样成本，D3D9/D3D11 cube 的视觉 marker 每 8 个渲染帧推进一次，脚本
+再按此倍率还原 FPS；读取区域也排除了 Wine 标题栏的蓝色，避免 UI chrome 污染 marker。
+
+FurMark 若作为下一阶段 VirGL 真实负载，只能固定分辨率、预热时间、采样时长、温度/充电状态与
+顺序，并同时保存画面正确性和帧时间；它不能替代 D3D9 帧序门禁，也不能用来推导 DXVK 1.10/2.6
+的性能结论。
+
 - Presenter FPS、frames、failure、throttled/deferred。
 - present CPU、wait fence、acquire、submit、queue present 的平均值与稀疏 P50/P95/P99。
 - GPU final present copy 时间。
