@@ -57,22 +57,24 @@ void PhysicalFeedAxis(int axisType, double x, double y)
 {
     if (!ControllerHub::Instance().IsEnabled()) return;
     auto& hub = ControllerHub::Instance();
-    // Kit: +Y often Down; Hub wants +Y=Up — flip once here.
     const float fx = static_cast<float>(x);
-    const float fy = static_cast<float>(-y);
+    const float fy = static_cast<float>(y);
+    auto feedThumb = [&](LogicalAxis axisX, LogicalAxis axisY) {
+        hub.SetAxis(ControllerSourceId::Physical, 0, axisX, fx);
+        hub.SetAxis(ControllerSourceId::Physical, 0, axisY, fy);
+    };
     switch (axisType) {
         case 0: // left stick
-            hub.SetAxis(ControllerSourceId::Physical, 0, LogicalAxis::LX, fx);
-            hub.SetAxis(ControllerSourceId::Physical, 0, LogicalAxis::LY, fy);
+            feedThumb(LogicalAxis::LX, LogicalAxis::LY);
             break;
         case 1: // right stick
-            hub.SetAxis(ControllerSourceId::Physical, 0, LogicalAxis::RX, fx);
-            hub.SetAxis(ControllerSourceId::Physical, 0, LogicalAxis::RY, fy);
+            feedThumb(LogicalAxis::RX, LogicalAxis::RY);
             break;
         case 2: { // hat / dpad axis — values typically -1..1
             const int8_t hx = (x < -0.5) ? -1 : (x > 0.5 ? 1 : 0);
-            // Kit Y: down positive → Hub up positive after flip
-            const int8_t hy = (fy < -0.5f) ? -1 : (fy > 0.5f ? 1 : 0);
+            // Hat: Kit +Y is Down → Hub +Y=Up. Analog thumbs are not flipped:
+            // left and right share feedThumb; winebus already inverts stick Y.
+            const int8_t hy = (y > 0.5) ? -1 : (y < -0.5 ? 1 : 0);
             hub.SetHat(ControllerSourceId::Physical, 0, hx, hy);
             break;
         }

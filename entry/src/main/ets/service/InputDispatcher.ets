@@ -1,6 +1,6 @@
 import testNapi from 'libentry.so';
 import { DisplayMode, InputDiagnostics, WineInputSession } from '../model/AppModels';
-import { InputRouter } from './InputRouter';
+import { InputRouter, PointerPosition } from './InputRouter';
 import { InputStateTracker, ReleasedInputState } from './InputStateTracker';
 
 export type InputDiagnosticsListener = (diagnostics: InputDiagnostics) => void;
@@ -58,18 +58,18 @@ export class InputDispatcher {
 
   pressKey(source: string, evdevCode: number): void {
     if (!this.session.active || !this.tracker.pressKey(source, evdevCode)) return;
-    if (!this.feedHubKey(evdevCode, true)) {
-      InputRouter.getInstance().sendKey(evdevCode, true);
-    }
+    // Hub buttons are additive. Keyboard is always sent so overlay coexist
+    // with a physical pad (do not steal WASD / arrows into exclusive dinput).
+    this.feedHubKey(evdevCode, true);
+    InputRouter.getInstance().sendKey(evdevCode, true);
     this.injectedEvents++;
     this.publishDiagnostics();
   }
 
   releaseKey(source: string, evdevCode: number): void {
     if (!this.tracker.releaseKey(source, evdevCode)) return;
-    if (!this.feedHubKey(evdevCode, false)) {
-      InputRouter.getInstance().sendKey(evdevCode, false);
-    }
+    this.feedHubKey(evdevCode, false);
+    InputRouter.getInstance().sendKey(evdevCode, false);
     this.injectedEvents++;
     this.publishDiagnostics();
   }
@@ -97,6 +97,38 @@ export class InputDispatcher {
     }
     this.injectedEvents++;
     this.publishDiagnostics();
+  }
+
+  lastPointer(): PointerPosition {
+    return InputRouter.getInstance().getPointer();
+  }
+
+  rememberPointer(x: number, y: number): void {
+    InputRouter.getInstance().rememberPointer(x, y);
+  }
+
+  /**
+   * Overlay mouse keys: press/release at the last remembered pointer.
+   * Does not resolveToplevel at a widget. If no pointer exists yet, inject
+   * on the current session toplevel without warping to (0, 0) via findToplevelAt.
+   */
+  pointerButton(source: string, button: number, pressed: boolean): void {
+    const last = this.lastPointer();
+    if (last.valid) {
+      if (pressed) this.pointerDown(source, last.x, last.y, button);
+      else this.pointerUp(source, last.x, last.y, button);
+      return;
+    }
+    if (pressed) {
+      if (!this.session.active) return;
+      this.tracker.markPointer(source);
+      this.buttonDown(source, button);
+      this.publishDiagnostics();
+    } else {
+      this.buttonUp(source, button);
+      this.tracker.clearPointer(source);
+      this.publishDiagnostics();
+    }
   }
 
   pointerDown(source: string, x: number, y: number, button: number = 272): void {
@@ -200,21 +232,14 @@ export class InputDispatcher {
     }
   }
 
-  /** Overlay evdev → LogicalButton. Shift/Ctrl stay keyboard (common overlay modifiers). */
+  /** Overlay evdev → LogicalButton. Movement keys stay keyboard (D-pad / stick). */
   private mapEvdevToLogical(code: number): number {
     switch (code) {
       case 57: return 0;  // Space → A
       case 45: return 1;  // KEY_X → B
-      case 30: return 2;  // KEY_A → X
-      case 31: return 3;  // KEY_S → Y
       case 16: return 4;  // KEY_Q → LB
-      case 17: return 5;  // KEY_W → RB
       case 1: return 6;   // Esc → Back
       case 28: return 7;  // Enter → Start
-      case 103: return 10; // DpadUp
-      case 106: return 11; // DpadRight
-      case 108: return 12; // DpadDown
-      case 105: return 13; // DpadLeft
       case 63: return 14;  // Home → Guide
       default: return -1;
     }
@@ -233,9 +258,8 @@ export class InputDispatcher {
 
   private releaseTracked(released: ReleasedInputState): void {
     released.keys.forEach((code: number): void => {
-      if (!this.feedHubKey(code, false)) {
-        InputRouter.getInstance().sendKey(code, false);
-      }
+      this.feedHubKey(code, false);
+      InputRouter.getInstance().sendKey(code, false);
       this.injectedEvents++;
     });
     released.buttons.forEach((button: number): void => {
