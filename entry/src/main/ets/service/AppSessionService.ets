@@ -288,6 +288,12 @@ export class AppSessionService {
         ? resolveUnityDxvkLaunchArgs(app.launchTarget.arguments)
         : resolveUnityCompatLaunchArgs(app.launchTarget.arguments))
       : app.launchTarget.arguments.slice();
+    if (isUnityCompatPreset(presetId)) {
+      hilog.info(DOMAIN, 'UNITY-DIAG',
+        'launch app=%{public}s preset=%{public}s exe=%{public}s args=%{public}s env=%{public}s',
+        app.id, presetId, app.launchTarget.executable,
+        JSON.stringify(launchArguments), JSON.stringify(envOverrides));
+    }
     const result = WineEngineService.getInstance().launchExecutable(
       app.launchTarget.executable, launchArguments,
       app.launchTarget.workingDirectory, envOverrides) as NativeLaunchResult;
@@ -823,6 +829,11 @@ export class AppSessionService {
       const stale = this.sessions.get(id);
       hilog.info(DOMAIN, '[SESS]', 'reconcile removes session=%{public}s pid=%{public}d state=%{public}s',
         id, stale ? stale.pid : -1, stale ? stale.state : 'gone');
+      if (stale) {
+        hilog.warn(DOMAIN, 'UNITY-DIAG',
+          'process disappeared app=%{public}s session=%{public}s pid=%{public}d elapsedMs=%{public}d state=%{public}s',
+          stale.appId, stale.sessionId, stale.pid, Date.now() - stale.startedAt, stale.state);
+      }
       this.sessions.delete(id);
     });
   }
