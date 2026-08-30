@@ -106,6 +106,8 @@ export const BOX64_PRESET_INTERMEDIATE = 'intermediate';
 export const BOX64_PRESET_PERFORMANCE = 'performance';
 /** 按游戏启用的 Unity 专用兼容档：仅对选中的应用注入信号解释器等降速项。 */
 export const BOX64_PRESET_UNITY = 'unity';
+/** Unity 的 D3D11/DXVK 备用档；默认 Unity 档改走 OpenGL 安全路径。 */
+export const BOX64_PRESET_UNITY_DXVK = 'unity_dxvk';
 
 export const BOX64_PRESET_IDS: string[] = [
   BOX64_PRESET_DEFAULT,
@@ -121,7 +123,8 @@ export const BOX64_PRESET_IDS: string[] = [
  */
 export const BOX64_APP_PRESET_IDS: string[] = [
   ...BOX64_PRESET_IDS,
-  BOX64_PRESET_UNITY
+  BOX64_PRESET_UNITY,
+  BOX64_PRESET_UNITY_DXVK
 ];
 
 export function box64PresetLabel(presetId: string): string {
@@ -129,7 +132,9 @@ export function box64PresetLabel(presetId: string): string {
     case BOX64_PRESET_STABILITY:
       return '稳定模式';
     case BOX64_PRESET_UNITY:
-      return 'Unity 兼容';
+      return 'Unity 安全（OpenGL）';
+    case BOX64_PRESET_UNITY_DXVK:
+      return 'Unity DXVK（备用）';
     case BOX64_PRESET_CONSERVATIVE:
       return '兼容模式';
     case BOX64_PRESET_INTERMEDIATE:
@@ -146,7 +151,9 @@ export function box64PresetDescription(presetId: string): string {
     case BOX64_PRESET_STABILITY:
       return '优先保证兼容与稳定，适合新引擎、Unity 或频繁崩溃的程序。';
     case BOX64_PRESET_UNITY:
-      return 'Unity 兼容方案：默认使用 DX11，并以窗口模式接入鸿蒙合成器；保留游戏手动指定的图形后端。信号处理走稳定路径，仅对当前游戏生效。';
+      return 'Unity 安全方案：强制 OpenGL Core、窗口化 1280×720，并禁用容易导致黑屏的 gfx-direct；适合加载至 99% 后黑屏退出的游戏。';
+    case BOX64_PRESET_UNITY_DXVK:
+      return 'Unity DXVK 备用方案：使用 D3D11/DXVK、窗口化 1280×720，但不启用 gfx-direct；OpenGL 不兼容时可切换此档。';
     case BOX64_PRESET_CONSERVATIVE:
       return '兼容与性能之间偏保守，适合大部分老游戏。';
     case BOX64_PRESET_INTERMEDIATE:
@@ -167,6 +174,7 @@ export function box64PresetDescription(presetId: string): string {
 export function resolveBox64PresetEnv(presetId: string): string[] {
   switch (presetId) {
     case BOX64_PRESET_UNITY:
+    case BOX64_PRESET_UNITY_DXVK:
       // 稳定档参数 + 信号处理强制走解释器：Unity 频繁触发 wine unix-call
       // trap（SIGSEGV 信号回调），dynarec 信号路径偶发竞态导致调用返回
       // E_OUTOFMEMORY。仅此档注入，不影响其他游戏的性能。
@@ -271,29 +279,39 @@ const UNITY_GFX_BACKEND_ARGS: string[] = [
  * 参数合并是幂等的，并尊重游戏卡片里已有的图形后端与全屏设置。
  */
 export function resolveUnityCompatLaunchArgs(argumentsIn: string[]): string[] {
-  const result = argumentsIn.slice();
-  const lower = result.map((arg: string): string => arg.toLowerCase());
-  const hasArgument = (name: string): boolean => lower.includes(name);
-  const hasExplicitBackend = UNITY_GFX_BACKEND_ARGS.some((name: string): boolean => hasArgument(name));
+  return resolveUnityLaunchArgsForBackend(argumentsIn, '-force-glcore');
+}
 
-  if (!hasExplicitBackend) {
-    result.push('-force-d3d11');
-    lower.push('-force-d3d11');
+/** Unity D3D11/DXVK 备用路径，与安全档一同打包，供单应用设置切换。 */
+export function resolveUnityDxvkLaunchArgs(argumentsIn: string[]): string[] {
+  return resolveUnityLaunchArgsForBackend(argumentsIn, '-force-d3d11');
+}
+
+function resolveUnityLaunchArgsForBackend(argumentsIn: string[], backend: string): string[] {
+  const pairedOptions: string[] = ['-screen-fullscreen', '-screen-width', '-screen-height'];
+  const result: string[] = [];
+  for (let index = 0; index < argumentsIn.length; index += 1) {
+    const argument = argumentsIn[index];
+    const lower = argument.toLowerCase();
+    if (UNITY_GFX_BACKEND_ARGS.includes(lower) || lower === '-force-gfx-direct') {
+      continue;
+    }
+    if (pairedOptions.includes(lower)) {
+      index += 1;
+      continue;
+    }
+    result.push(argument);
   }
-  if (!hasArgument('-force-gfx-direct')) {
-    result.push('-force-gfx-direct');
-    lower.push('-force-gfx-direct');
-  }
-  if (!hasArgument('-screen-fullscreen')) {
-    result.push('-screen-fullscreen');
-    result.push('0');
-  }
+  result.push(backend);
+  result.push('-screen-fullscreen', '0');
+  result.push('-screen-width', '1280');
+  result.push('-screen-height', '720');
   return result;
 }
 
 /** 判断某预设是否启用了 Unity 兼容模式（决定是否注入启动参数）。 */
 export function isUnityCompatPreset(presetId: string): boolean {
-  return presetId === BOX64_PRESET_UNITY;
+  return presetId === BOX64_PRESET_UNITY || presetId === BOX64_PRESET_UNITY_DXVK;
 }
 
 export interface VirtualMouseConfig {
