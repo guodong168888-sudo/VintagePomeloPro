@@ -514,8 +514,9 @@ $modernBatchOffCondition = [pscustomobject]@{
     }
 $legacyBatchOnCondition = [pscustomobject]@{
         # Legacy contains the same command-list ownership implementation, but
-        # its product capability is intentionally still off. Keep this as a
-        # test-only environment override until it passes the full gate.
+        # stability qualification has not yet cleared its product capability.
+        # Keep this a test-only override until the Box64 startup fault is
+        # independently reproduced and resolved.
         id = 'legacy-1.10-batch-flush-on'
         backend = 'dxvk_legacy'
         batchMappedFlushMode = 'product'
