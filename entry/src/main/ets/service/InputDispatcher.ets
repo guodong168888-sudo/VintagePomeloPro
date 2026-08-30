@@ -1,6 +1,6 @@
 import testNapi from 'libentry.so';
 import { DisplayMode, InputDiagnostics, WineInputSession } from '../model/AppModels';
-import { InputRouter } from './InputRouter';
+import { InputRouter, PointerPosition } from './InputRouter';
 import { InputStateTracker, ReleasedInputState } from './InputStateTracker';
 
 export type InputDiagnosticsListener = (diagnostics: InputDiagnostics) => void;
@@ -58,6 +58,9 @@ export class InputDispatcher {
 
   pressKey(source: string, evdevCode: number): void {
     if (!this.session.active || !this.tracker.pressKey(source, evdevCode)) return;
+    // Hub buttons are additive. Keyboard is always sent so overlay coexist
+    // with a physical pad (do not steal WASD / arrows into exclusive dinput).
+    this.feedHubKey(evdevCode, true);
     InputRouter.getInstance().sendKey(evdevCode, true);
     this.injectedEvents++;
     this.publishDiagnostics();
@@ -65,9 +68,67 @@ export class InputDispatcher {
 
   releaseKey(source: string, evdevCode: number): void {
     if (!this.tracker.releaseKey(source, evdevCode)) return;
+    this.feedHubKey(evdevCode, false);
     InputRouter.getInstance().sendKey(evdevCode, false);
     this.injectedEvents++;
     this.publishDiagnostics();
+  }
+
+  /** Overlay analog stick. stick 0 = left, 1 = right. +Y = Up, [-1, 1]. */
+  setLogicalStick(stick: number, x: number, y: number): void {
+    if (!this.isDinputHub()) return;
+    const axisX = stick === 1 ? 2 : 0;
+    const axisY = stick === 1 ? 3 : 1;
+    try {
+      testNapi.controllerSetAxis(0, 0, axisX, x);
+      testNapi.controllerSetAxis(0, 0, axisY, y);
+    } catch (_) {
+    }
+    this.injectedEvents++;
+    this.publishDiagnostics();
+  }
+
+  /** Overlay D-Pad. +Y = Up, values -1 / 0 / +1. */
+  setLogicalHat(x: number, y: number): void {
+    if (!this.isDinputHub()) return;
+    try {
+      testNapi.controllerSetHat(0, 0, x, y);
+    } catch (_) {
+    }
+    this.injectedEvents++;
+    this.publishDiagnostics();
+  }
+
+  lastPointer(): PointerPosition {
+    return InputRouter.getInstance().getPointer();
+  }
+
+  rememberPointer(x: number, y: number): void {
+    InputRouter.getInstance().rememberPointer(x, y);
+  }
+
+  /**
+   * Overlay mouse keys: press/release at the last remembered pointer.
+   * Does not resolveToplevel at a widget. If no pointer exists yet, inject
+   * on the current session toplevel without warping to (0, 0) via findToplevelAt.
+   */
+  pointerButton(source: string, button: number, pressed: boolean): void {
+    const last = this.lastPointer();
+    if (last.valid) {
+      if (pressed) this.pointerDown(source, last.x, last.y, button);
+      else this.pointerUp(source, last.x, last.y, button);
+      return;
+    }
+    if (pressed) {
+      if (!this.session.active) return;
+      this.tracker.markPointer(source);
+      this.buttonDown(source, button);
+      this.publishDiagnostics();
+    } else {
+      this.buttonUp(source, button);
+      this.tracker.clearPointer(source);
+      this.publishDiagnostics();
+    }
   }
 
   pointerDown(source: string, x: number, y: number, button: number = 272): void {
@@ -137,6 +198,9 @@ export class InputDispatcher {
     this.releaseTracked(this.tracker.releaseAll());
     // 兼容主窗口的实体输入路径：即使它没有经过 tracker，也必须收尾。
     InputRouter.getInstance().releaseAllKeys();
+    if (this.isDinputHub()) {
+      try { testNapi.controllerResetSource(0); } catch (_) {}
+    }
     this.publishDiagnostics();
   }
 
@@ -160,8 +224,41 @@ export class InputDispatcher {
     };
   }
 
+  private isDinputHub(): boolean {
+    try {
+      return testNapi.controllerGetOutputMode() === 'dinput';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /** Overlay evdev → LogicalButton. Movement keys stay keyboard (D-pad / stick). */
+  private mapEvdevToLogical(code: number): number {
+    switch (code) {
+      case 57: return 0;  // Space → A
+      case 45: return 1;  // KEY_X → B
+      case 16: return 4;  // KEY_Q → LB
+      case 1: return 6;   // Esc → Back
+      case 28: return 7;  // Enter → Start
+      case 63: return 14;  // Home → Guide
+      default: return -1;
+    }
+  }
+
+  private feedHubKey(evdevCode: number, pressed: boolean): boolean {
+    if (!this.isDinputHub()) return false;
+    const button = this.mapEvdevToLogical(evdevCode);
+    if (button < 0) return false;
+    try {
+      testNapi.controllerSetButton(0, 0, button, pressed);
+    } catch (_) {
+    }
+    return true;
+  }
+
   private releaseTracked(released: ReleasedInputState): void {
     released.keys.forEach((code: number): void => {
+      this.feedHubKey(code, false);
       InputRouter.getInstance().sendKey(code, false);
       this.injectedEvents++;
     });

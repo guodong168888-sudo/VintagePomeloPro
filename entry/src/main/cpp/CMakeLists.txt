@@ -26,6 +26,11 @@ add_library(entry SHARED
     audio_stream.cpp
     graphics_broker.cpp
     game_controller_bridge.cpp
+    controller/controller_hub.cpp
+    controller/controller_napi.cpp
+    controller/controller_runtime.cpp
+    controller/gamepad_bridge.cpp
+    controller/physical_gamepad.cpp
     virgl_host_config.cpp
     napi_init.cpp
     experiment_payload.cpp

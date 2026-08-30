@@ -192,7 +192,8 @@ export struct DesktopLayer {
       this.inputProfile = profile;
       GamepadManager.getInstance().setButtonMappings(profile.gamepadMappings);
     });
-    GamepadManager.getInstance().initialize(this.settings.gamepadDeadzone);
+    GamepadManager.getInstance().initialize(this.settings.gamepadDeadzone,
+      this.settings.controllerOutputMode ?? 'dinput');
     this.gamepadConnectionCallback = (connected: boolean): void => {
       if (!connected && this.settings.autoHideVirtualControls && this.settings.showVirtualControls) {
         InputOverlayWindowCoordinator.getInstance().setControlsVisible(true);

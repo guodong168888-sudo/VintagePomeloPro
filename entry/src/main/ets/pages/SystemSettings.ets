@@ -256,6 +256,7 @@ struct SystemSettingsPage {
   @State private fontImporting: boolean = false;
   @State private fontImportStage: string = '';
   @State private fontImportProgress: number = 0;
+  @State private hubStateText: string = '等待手柄输入…';
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private settingsScroller: Scroller = new Scroller();
   private callback: ((value: BreakpointType) => void) | null = null;
@@ -263,6 +264,7 @@ struct SystemSettingsPage {
   private sidebarTarget: SettingsSection | null = null;
   private disposeWindowInsetObserver: (() => void) | null = null;
   private inputProfilePickerController: CustomDialogController | null = null;
+  private hubPollTimer: number = -1;
 
   private isNarrowPhone(): boolean {
     return this.breakpoint === 'xs';
@@ -347,6 +349,7 @@ struct SystemSettingsPage {
     this.renderMode = AppSettingsStore.getInstance().getRenderMode()
       || AppStorage.get<string>('winehua.render.mode')
       || 'dxvk_1_10';
+    this.startHubPoll();
   }
 
   onPageShow(): void {
@@ -428,6 +431,7 @@ struct SystemSettingsPage {
     if (this.callback) BreakpointSystem.unsubscribe(this.callback);
     if (this.engineCallback) WineEngineService.getInstance().unsubscribe(this.engineCallback);
     this.stopWindowInsetObserver();
+    this.stopHubPoll();
   }
 
   onBackPress(): boolean {
@@ -590,6 +594,7 @@ struct SystemSettingsPage {
       virtualMouseConfig: cloneVirtualMouseConfig(virtualMouseConfig),
       controlOpacity: opacity,
       gamepadDeadzone: deadzone,
+      controllerOutputMode: this.settings.controllerOutputMode ?? 'dinput',
       outputScale: scale,
       d3dRendererPreference: d3dRendererPreference,
       preserveUserDataOnReset: preserveUserDataOnReset,
@@ -1026,6 +1031,7 @@ struct SystemSettingsPage {
       virtualMouseConfig: cloneVirtualMouseConfig(this.settings.virtualMouseConfig),
       controlOpacity: this.settings.controlOpacity,
       gamepadDeadzone: this.settings.gamepadDeadzone,
+      controllerOutputMode: this.settings.controllerOutputMode ?? 'dinput',
       outputScale: this.settings.outputScale,
       d3dRendererPreference: this.settings.d3dRendererPreference,
       preserveUserDataOnReset: this.settings.preserveUserDataOnReset,
@@ -1033,6 +1039,66 @@ struct SystemSettingsPage {
     };
     void ThemeSettingsService.getInstance().update(this.settings);
     promptAction.showToast({ message: '兼容性预设已保存，新启动的程序生效' });
+  }
+
+  private startHubPoll(): void {
+    this.stopHubPoll();
+    this.refreshHubState();
+    this.hubPollTimer = setInterval((): void => this.refreshHubState(), 250);
+  }
+
+  private stopHubPoll(): void {
+    if (this.hubPollTimer >= 0) {
+      clearInterval(this.hubPollTimer);
+      this.hubPollTimer = -1;
+    }
+  }
+
+  private refreshHubState(): void {
+    try {
+      this.hubStateText = testNapi.controllerGetStateText(0) + '  ' +
+        GamepadManager.getInstance().getRumbleStatusText();
+    } catch (_) {
+      this.hubStateText = 'Hub 不可用';
+    }
+  }
+
+  private updateControllerOutputMode(mode: 'dinput' | 'keyboard_legacy'): void {
+    if (this.settings.controllerOutputMode === mode) return;
+    this.settings = {
+      defaultDisplayMode: this.settings.defaultDisplayMode,
+      desktopOrientation: this.settings.desktopOrientation,
+      desktopWindowMode: this.settings.desktopWindowMode,
+      keepScreenOn: this.settings.keepScreenOn,
+      box64Preset: this.settings.box64Preset,
+      desktopInputProfileId: this.settings.desktopInputProfileId,
+      viewMode: this.settings.viewMode,
+      themeMode: this.settings.themeMode,
+      useGlassEffect: this.settings.useGlassEffect,
+      usePageBackground: this.settings.usePageBackground,
+      pageBackgroundUri: this.settings.pageBackgroundUri,
+      virtualInputEnabled: this.settings.virtualInputEnabled,
+      showVirtualControls: this.settings.showVirtualControls,
+      autoHideVirtualControls: this.settings.autoHideVirtualControls,
+      controlBarDirection: this.settings.controlBarDirection,
+      controlBarPositionX: this.settings.controlBarPositionX,
+      controlBarPositionY: this.settings.controlBarPositionY,
+      virtualMouseConfig: cloneVirtualMouseConfig(this.settings.virtualMouseConfig),
+      controlOpacity: this.settings.controlOpacity,
+      gamepadDeadzone: this.settings.gamepadDeadzone,
+      controllerOutputMode: mode,
+      outputScale: this.settings.outputScale,
+      d3dRendererPreference: this.settings.d3dRendererPreference,
+      preserveUserDataOnReset: this.settings.preserveUserDataOnReset,
+      showFpsHud: this.settings.showFpsHud
+    };
+    GamepadManager.getInstance().setOutputMode(mode);
+    void ThemeSettingsService.getInstance().update(this.settings);
+    promptAction.showToast({
+      message: mode === 'dinput'
+        ? '已切换 Wine 手柄（XInput/DirectInput）；请重新启动 Wine 会话后生效'
+        : '已切换键盘模拟；请重新启动 Wine 会话后生效'
+    });
   }
 
   private updateDesktopWindowMode(mode: DesktopWindowMode): void {
@@ -1889,6 +1955,27 @@ struct SystemSettingsPage {
                  }
                })
           }
+          Text('手柄兼容模式').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
+          Row({ space: 10 }) {
+            Button(this.settings.controllerOutputMode === 'dinput' ? 'Wine 手柄 ✓' : 'Wine 手柄')
+              .fontSize(13)
+              .onClick((): void => this.updateControllerOutputMode('dinput'))
+            Button(this.settings.controllerOutputMode === 'keyboard_legacy' ? '键盘模拟 ✓' : '键盘模拟')
+              .fontSize(13)
+              .onClick((): void => this.updateControllerOutputMode('keyboard_legacy'))
+            Button('测试震动')
+              .fontSize(13)
+              .onClick((): void => {
+                const ok: boolean = GamepadManager.getInstance().testRumble();
+                promptAction.showToast({
+                  message: ok ? '正在测试手柄震动' : '未找到手柄马达（不会使用平板震动）'
+                });
+              })
+          }.width('100%')
+          Text('Wine 手柄经 Controller Hub 进入 DirectInput 与 XInput，并转发震动到实体手柄；键盘模拟保持旧版键鼠映射。切换后需重启会话。')
+            .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
+          Text(this.hubStateText)
+            .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
           Text('手柄死区 ' + this.settings.gamepadDeadzone + '%').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
            Slider({ value: this.settings.gamepadDeadzone, min: 0, max: 40, step: 1 })
              .sliderInteractionMode(2)

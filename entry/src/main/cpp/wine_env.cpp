@@ -5,6 +5,7 @@
 #include "audio_ipc_protocol.h"
 #include "graphics_broker.h"
 #include "wayland_server.h"
+#include "controller/controller_runtime.h"
 
 #include <unistd.h>
 #include <cstdlib>
@@ -74,6 +75,9 @@ std::vector<std::string> BuildWineEnv(const std::string& sockDir,
         "XDG_RUNTIME_DIR=" + sockDir,
         "WAYLAND_DISPLAY=" + sockName,
     });
+    /* Front-load WHGP so NativeChildProcess truncation cannot drop it. */
+    winehua::controller::EnsureBridgeForWineLaunch(prefix);
+    winehua::controller::AppendWineGamepadEnv(env);
     env.push_back("WINEDEBUG=-all");
     env.push_back("LANG=zh_CN.UTF-8");
     env.push_back("GST_PLUGIN_PATH=" + binDir + "/x86_64-unix/gstreamer-1.0");

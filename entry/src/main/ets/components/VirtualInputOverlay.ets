@@ -37,6 +37,7 @@ interface TrackpadState {
   lastX: number;
   lastY: number;
   moved: boolean;
+  startTime: number;
 }
 
 interface StickVisualState {
@@ -155,6 +156,7 @@ export struct VirtualInputOverlay {
   private static readonly DOUBLE_TAP_DIST: number = 24;      // 双击允许光标位移 (px)
   private static readonly TWO_FINGER_TAP_MS: number = 250;   // 双指轻点=右键 判定窗口
   private static readonly SCROLL_STEP_PX: number = 30;       // 滚动步进 (px)
+  private static readonly TRACKPAD_LONG_PRESS_MS: number = 600; // 视角板长按=右键
   private vcX: number = 0;        // 虚拟光标 (物理 px)
   private vcY: number = 0;
   private vcInit: boolean = false;
@@ -188,6 +190,8 @@ export struct VirtualInputOverlay {
   private lastToolbarButtonTouchAt: number = 0;
   private toolbarAutoHideTimer: number = -1;
   private mouseElementId: string = '';
+  /** Mouse-binding Down/Up must share one point so a release does not warp to the widget. */
+  private mouseBindingPoints: Map<string, OverlayPoint> = new Map<string, OverlayPoint>();
 
   // ---- 通用几何与颜色 ----
 
@@ -555,13 +559,59 @@ export struct VirtualInputOverlay {
     return 'el-' + element.id + '-' + slot + '-' + sourceId;
   }
 
+  private ensureVirtualCursor(): void {
+    this.ensureScreenPx();
+    if (!this.vcInit && this.scrWPx > 0 && this.scrHPx > 0) {
+      this.vcInit = true;
+      this.vcX = this.scrWPx / 2;
+      this.vcY = this.scrHPx / 2;
+      this.syncCursorIndicator();
+      InputDispatcher.getInstance().rememberPointer(this.vcX, this.vcY);
+    }
+  }
+
+  /** Overlay mouse keys click at the cursor, never at the widget. */
+  private mouseInjectionPoint(): OverlayPoint | null {
+    if (this.touchpadModeVisual) {
+      this.ensureVirtualCursor();
+      return { x: this.vcX, y: this.vcY };
+    }
+    const last = InputDispatcher.getInstance().lastPointer();
+    if (last.valid) return { x: last.x, y: last.y };
+    this.ensureScreenPx();
+    if (this.scrWPx > 0 && this.scrHPx > 0) {
+      return { x: this.scrWPx / 2, y: this.scrHPx / 2 };
+    }
+    return null;
+  }
+
+  private injectMouseBinding(source: string, code: number, pressed: boolean): void {
+    if (pressed) {
+      const point = this.mouseInjectionPoint();
+      if (point) {
+        this.mouseBindingPoints.set(source, point);
+        InputDispatcher.getInstance().pointerDown(source, point.x, point.y, code);
+        return;
+      }
+      InputDispatcher.getInstance().pointerButton(source, code, true);
+      return;
+    }
+    const held = this.mouseBindingPoints.get(source);
+    this.mouseBindingPoints.delete(source);
+    if (held) {
+      InputDispatcher.getInstance().pointerUp(source, held.x, held.y, code);
+      return;
+    }
+    InputDispatcher.getInstance().pointerButton(source, code, false);
+  }
+
   private pressBinding(element: ControlElement, slot: string, bindingIndex: number, touchId: number,
     pointerX: number, pointerY: number): void {
     const binding = (element.bindings ?? [])[bindingIndex];
     if (!binding || binding.kind === InputBindingKind.NONE || binding.code <= 0) return;
     const source = this.bindingSource(element, slot, touchId);
     if (binding.kind === InputBindingKind.MOUSE) {
-      InputDispatcher.getInstance().pointerDown(source, pointerX, pointerY, binding.code);
+      this.injectMouseBinding(source, binding.code, true);
     } else {
       InputDispatcher.getInstance().pressKey(source, binding.code);
     }
@@ -573,7 +623,7 @@ export struct VirtualInputOverlay {
     if (!binding || binding.kind === InputBindingKind.NONE || binding.code <= 0) return;
     const source = this.bindingSource(element, slot, touchId);
     if (binding.kind === InputBindingKind.MOUSE) {
-      InputDispatcher.getInstance().pointerUp(source, pointerX, pointerY, binding.code);
+      this.injectMouseBinding(source, binding.code, false);
     } else {
       InputDispatcher.getInstance().releaseKey(source, binding.code);
     }
@@ -601,7 +651,28 @@ export struct VirtualInputOverlay {
     }
   }
 
+  private hubGamepadActive(): boolean {
+    try {
+      return testNapi.controllerGetOutputMode() === 'dinput';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /** Arrow-bound sticks are the right analog; WASD / everything else is left. */
+  private stickIsRight(element: ControlElement): boolean {
+    const binding = (element.bindings ?? [])[0];
+    return !!binding && binding.kind === InputBindingKind.KEY && binding.code === 103;
+  }
+
   private applyStickDirection(element: ControlElement, dx: number, dy: number, touchId: number): void {
+    if (this.hubGamepadActive()) {
+      const radius = this.stickRadius(element);
+      const nx = radius > 0 ? Math.max(-1, Math.min(1, dx / radius)) : 0;
+      const ny = radius > 0 ? Math.max(-1, Math.min(1, -dy / radius)) : 0;
+      InputDispatcher.getInstance().setLogicalStick(this.stickIsRight(element) ? 1 : 0, nx, ny);
+    }
+    // Analog is additive. Bound keys (WASD / arrows) still fire.
     const direction = resolveVirtualJoystickDirection(dx, dy, this.stickRadius(element), 15, true);
     this.setDirectionSlot(element, 0, direction.up, touchId);
     this.setDirectionSlot(element, 1, direction.right, touchId);
@@ -610,6 +681,13 @@ export struct VirtualInputOverlay {
   }
 
   private releaseStickBindings(element: ControlElement, touchId: number): void {
+    if (this.hubGamepadActive()) {
+      if (element.type === ControlElementType.STICK && element.outputMode !== 'mouse') {
+        InputDispatcher.getInstance().setLogicalStick(this.stickIsRight(element) ? 1 : 0, 0, 0);
+      } else if (element.type === ControlElementType.D_PAD) {
+        InputDispatcher.getInstance().setLogicalHat(0, 0);
+      }
+    }
     for (let slot = 0; slot < 4; slot++) {
       this.setDirectionSlot(element, slot, false, touchId);
     }
@@ -681,6 +759,7 @@ export struct VirtualInputOverlay {
     this.pressedTokens = '';
     this.stickStates = [];
     this.rangeTokens = '';
+    this.mouseBindingPoints.clear();
   }
 
   // ---- 触摸处理 ----
@@ -848,6 +927,12 @@ export struct VirtualInputOverlay {
       if (dy > 0) down = true;
       else up = true;
     }
+    if (this.hubGamepadActive()) {
+      const hx = right ? 1 : (left ? -1 : 0);
+      const hy = up ? 1 : (down ? -1 : 0);
+      InputDispatcher.getInstance().setLogicalHat(hx, hy);
+    }
+    // Hat is additive. Bound keys still fire (and drive highlight).
     this.setDpadSlot(element, 0, up, touchId);
     this.setDpadSlot(element, 1, right, touchId);
     this.setDpadSlot(element, 2, down, touchId);
@@ -896,7 +981,8 @@ export struct VirtualInputOverlay {
       this.setElementPressed(id, true);
       this.trackpadStates.set(id, {
         startX: Number(touch.x), startY: Number(touch.y),
-        lastX: Number(touch.x), lastY: Number(touch.y), moved: false
+        lastX: Number(touch.x), lastY: Number(touch.y), moved: false,
+        startTime: Date.now()
       });
       this.updateTrackpadThumb(element, Number(touch.x), Number(touch.y));
       return;
@@ -916,8 +1002,11 @@ export struct VirtualInputOverlay {
       }
       if (state.moved) {
         const speed = Math.max(0.1, Math.min(5, this.profile.cursorSpeed));
+        const dxPx = vp2px(dx) * speed;
+        const dyPx = vp2px(dy) * speed;
         InputDispatcher.getInstance().pointerDelta(
-          'trackpad-' + id + '-' + touch.id.toString(), vp2px(dx) * speed, vp2px(dy) * speed);
+          'trackpad-' + id + '-' + touch.id.toString(), dxPx, dyPx);
+        if (this.touchpadModeVisual) this.applyCursorDelta(dxPx, dyPx);
       }
       return;
     }
@@ -929,9 +1018,12 @@ export struct VirtualInputOverlay {
       this.setElementPressed(id, false);
       this.setStickState(id, 0, 0, false);
       if (type === TouchType.Up && state && !state.moved) {
+        const elapsed = Date.now() - state.startTime;
+        const button = elapsed >= VirtualInputOverlay.TRACKPAD_LONG_PRESS_MS ?
+          MOUSE_RIGHT_BUTTON : MOUSE_LEFT_BUTTON;
         const source = 'trackpad-tap-' + id + '-' + touch.id.toString();
-        InputDispatcher.getInstance().pointerDown(source, vp2px(Number(touch.x)), vp2px(Number(touch.y)), 272);
-        InputDispatcher.getInstance().pointerUp(source, vp2px(Number(touch.x)), vp2px(Number(touch.y)), 272);
+        this.injectMouseBinding(source, button, true);
+        this.injectMouseBinding(source, button, false);
       }
     }
   }
@@ -1016,6 +1108,7 @@ export struct VirtualInputOverlay {
     this.vcX = Math.min(Math.max(this.vcX + dx, 0), this.scrWPx);
     this.vcY = Math.min(Math.max(this.vcY + dy, 0), this.scrHPx);
     this.syncCursorIndicator();
+    InputDispatcher.getInstance().rememberPointer(this.vcX, this.vcY);
   }
 
   private fallbackToplevelId(): number {
@@ -1050,6 +1143,7 @@ export struct VirtualInputOverlay {
     testNapi.raiseToplevel(tl);
     const x = Math.round(this.vcX);
     const y = Math.round(this.vcY);
+    InputDispatcher.getInstance().rememberPointer(x, y);
     testNapi.sendPointerEvent(tl, MouseAction.Press, x, y, btn);
     testNapi.sendPointerEvent(tl, MouseAction.Release, x, y, btn);
   }
@@ -1077,6 +1171,7 @@ export struct VirtualInputOverlay {
       this.vcX = this.scrWPx / 2;
       this.vcY = this.scrHPx / 2;
       this.syncCursorIndicator();
+      InputDispatcher.getInstance().rememberPointer(this.vcX, this.vcY);
     }
 
     // 双指: 轻点=右键 (本地语义), 滑动=滚动作用于光标处 (触控板语义)
@@ -1725,6 +1820,7 @@ export struct VirtualInputOverlay {
         this.vcY = this.scrHPx / 2;
       }
       this.clampCursor();
+      InputDispatcher.getInstance().rememberPointer(this.vcX, this.vcY);
     }
   }
 
@@ -1765,6 +1861,7 @@ export struct VirtualInputOverlay {
     this.vcX = this.scrWPx / 2;
     this.vcY = this.scrHPx / 2;
     this.syncCursorIndicator();
+    InputDispatcher.getInstance().rememberPointer(this.vcX, this.vcY);
   }
 
   private onCrosshairStateChanged(): void {
