@@ -22,7 +22,9 @@ import {
   resolveLaunchDisplayMode,
   resolveUnityCompatLaunchArgs,
   resolveUnityDxvkLaunchArgs,
+  resolveUnityRescueLaunchArgs,
   BOX64_PRESET_UNITY_DXVK,
+  BOX64_PRESET_UNITY_RESCUE,
   resolveWinePresentationMode
 } from '../model/AppModels';
 import { WineEngineService } from './WineEngineService';
@@ -284,9 +286,11 @@ export class AppSessionService {
       app.id, presetId, JSON.stringify(envOverrides));
     // 默认 Unity 档使用 OpenGL 安全路径；DXVK 作为同一 HAP 内的备用档。
     const launchArguments = isUnityCompatPreset(presetId)
-      ? (presetId === BOX64_PRESET_UNITY_DXVK
-        ? resolveUnityDxvkLaunchArgs(app.launchTarget.arguments)
-        : resolveUnityCompatLaunchArgs(app.launchTarget.arguments))
+      ? (presetId === BOX64_PRESET_UNITY_RESCUE
+        ? resolveUnityRescueLaunchArgs(app.launchTarget.arguments)
+        : (presetId === BOX64_PRESET_UNITY_DXVK
+          ? resolveUnityDxvkLaunchArgs(app.launchTarget.arguments)
+          : resolveUnityCompatLaunchArgs(app.launchTarget.arguments)))
       : app.launchTarget.arguments.slice();
     if (isUnityCompatPreset(presetId)) {
       hilog.info(DOMAIN, 'UNITY-DIAG',
