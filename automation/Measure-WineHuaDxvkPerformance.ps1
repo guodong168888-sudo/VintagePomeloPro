@@ -60,6 +60,29 @@ function Invoke-Hdc {
     return $result
 }
 
+function Get-WineStderrLineCount {
+    # DXVK's Logger writes this diagnostic to Wine stderr, not Hilog. Record a
+    # per-run offset so a later collection cannot mistake an older run's
+    # cumulative counter for current evidence.
+    $command = 'log=$(ls -1t /data/app/el2/100/base/com.vintage.pomelopro/temp/wine_stderr*.log 2>/dev/null | head -n 1); if [ -n "$log" ]; then wc -l < "$log"; else echo 0; fi'
+    $line = @(Invoke-Hdc -Arguments @('shell', $command) |
+        Where-Object { $_.Trim() -match '^\d+$' } |
+        Select-Object -Last 1)
+    if ($line.Count -eq 0) { return [long]0 }
+    return [long]$line[0].Trim()
+}
+
+function Get-ModernMappedFlushMarkerSince {
+    param([Parameter(Mandatory)][long]$LineOffset)
+
+    $firstNewLine = $LineOffset + 1
+    $command = 'log=$(ls -1t /data/app/el2/100/base/com.vintage.pomelopro/temp/wine_stderr*.log 2>/dev/null | head -n 1); if [ -n "$log" ]; then tail -n +' +
+        $firstNewLine + ' "$log" | grep -F WineHuaModernMappedFlushPerf | tail -n 1; fi'
+    return @(Invoke-Hdc -Arguments @('shell', $command) |
+        Where-Object { $_ -match 'WineHuaModernMappedFlushPerf' } |
+        Select-Object -Last 1)
+}
+
 function Convert-KeyValueLogLine {
     param([Parameter(Mandatory)][string]$Line)
     $values = [ordered]@{}
@@ -282,7 +305,7 @@ function Invoke-Measurement {
     New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
     $startedAt = [DateTimeOffset]::Now
     $result = [ordered]@{
-        schemaVersion = 4
+        schemaVersion = 5
         runId = $runId
         condition = $Condition.id
         d3dBackend = $Condition.backend
@@ -301,12 +324,19 @@ function Invoke-Measurement {
 
     try {
         Invoke-Hdc -Arguments @('shell', 'hilog', '-r') | Out-Null
+        $collectMappedFlushStats = $CollectModernMappedFlushStats -and
+            $Condition.backend -eq 'dxvk_modern_2_6' -and
+            $Condition.batchMappedFlushMode -ne 'off'
+        $wineStderrLineOffset = if ($collectMappedFlushStats) {
+            Get-WineStderrLineCount
+        } else {
+            $null
+        }
+        $result['wineStderrLineOffset'] = $wineStderrLineOffset
         $d3dEnvironment = @{
             DXVK_LOG_LEVEL = 'info'
         }
-        if ($CollectModernMappedFlushStats -and
-            $Condition.backend -eq 'dxvk_modern_2_6' -and
-            $Condition.batchMappedFlushMode -ne 'off') {
+        if ($collectMappedFlushStats) {
             $d3dEnvironment['DXVK_WINEHUA_BATCH_MAPPED_FLUSH_STATS'] = '1'
         }
         $launchParameters = @{
@@ -358,6 +388,10 @@ function Invoke-Measurement {
             Select-Object -Last 80)
         $mappedFlushLines = @($interesting | Where-Object {
             $_ -match 'WineHuaModernMappedFlushPerf' })
+        if ($collectMappedFlushStats -and $null -ne $wineStderrLineOffset) {
+            $mappedFlushLines = @(Get-ModernMappedFlushMarkerSince `
+                -LineOffset $wineStderrLineOffset)
+        }
         $graphicsContextPattern = [regex]::Escape($bundle) +
             '|WineHua|WineEngine|DXVK|VENUS|VIRGL|WL_NAPI|WL_Broker'
         $criticalErrors = @($interesting | Where-Object {
@@ -396,6 +430,9 @@ function Invoke-Measurement {
         $result['graphicsPerfMarkers'] = $perfMarkers
         $result['modernMappedFlush'] = if ($mappedFlushLines.Count) {
             Convert-KeyValueLogLine -Line $mappedFlushLines[-1]
+        } else { $null }
+        $result['modernMappedFlushSource'] = if ($collectMappedFlushStats) {
+            'wine-stderr-new-lines'
         } else { $null }
         $result['criticalErrors'] = $criticalErrors
         $result['status'] = if (-not $backendObserved -or $presentLines.Count -eq 0 -or

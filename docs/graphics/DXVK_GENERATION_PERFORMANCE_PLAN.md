@@ -50,14 +50,24 @@ VirGLRenderer、NativeWindow 与系统合成路径，但会产生不同的命令
 - Modern 在 Maleoon 不支持 dual-source blend 且命中特定 blend 状态时，默认明确执行 secondary
   与 primary 两次 draw；Heaven 已确认命中过该兼容路径。它是比盲调 present 更高价值的 GPU/draw
   放大候选，但单 pass 替代可能改变 Alpha，必须先做像素正确性门禁。
-- 当前 API 26 设备上安装的是 1.2.8 历史版本，而源码候选为 1.2.9；历史包只能提供旧基线，不能
-  证明本轮 API-trace 编译移除、range 在线合并或 WHIP v10 的动作。必须先产出并安装当前候选。
+- 当前 ARM64 候选已完成替换安装，保留既有应用数据；设备端启动、字体/音频、Direct NativeBuffer
+  及帧序门禁均已复核。历史包的读数不再用于判断本轮优化。
 - 当前候选在同一 HAP、同一 Heaven DX11 低画质参数、固定 10 s 预热 / 20 s 采样和交替顺序下完成
   两轮产品路线确认：Legacy 1.10 平均 presenter FPS 为 18.441（16.788--20.095），Modern 2.6
   为 48.087（48.017--48.157），两者均为 `direct-native-buffer` 且动作契约通过，Modern 相对
   Legacy 为 +160.76%。这推翻了“当前受控 D3D11 路线中 2.6 必然低于 1.10”的前提，但样本仍短，
   不代表所有游戏、冷启动、不同温度或 VirGL 工作负载；后续以更长时长、多轮与独立 VirGL 工作负载
   分别确认，而不据此修改产品默认 runtime。
+- 随后的 Modern 单变量复测（同一 10 s / 20 s 窗口、两轮交错）显示：产品 batching 为
+  48.114 FPS（48.103--48.125），显式 batch-off 为 17.904 FPS（17.831--17.978），两边均为
+  `direct-native-buffer` 且两轮动作契约通过。也就是 batching 在该 Heaven 场景为约 2.687 倍
+  （+168.73%）的确定性收益，应保留为 Modern 产品 capability，而非新的用户 profile。更早一次
+  batch-off 冷启动未产出呈现帧并被标记为 `INFRA_ERROR`；其后的受控复测均成功，不能在未复现前
+  把它归因于 batching。
+- 诊断轮的本进程累计计数为 3,359,308 个 queued range、3,295,188 个 emitted range、16,170 次
+  flush 调用、5.642 GB queued bytes、1.989 GB emitted bytes，失败为零。range 数下降 1.91%，
+  而合并后的 byte 覆盖下降 64.75%，与“合并相邻/重叠 dirty range，减少 Venus 非 coherent flush
+  及其 Host 处理”的预期一致；这解释了 A/B 方向，但不是其它游戏的性能承诺。
 
 ### 媒体播放与图形路由：已确认的边界
 
@@ -177,8 +187,9 @@ inline GPU upload、coverage sort 和 FIFO 动作，只增加每 120 帧一次�
 ```
 
 需要短时确认 Modern range 合并效率时，可另加 `-CollectModernMappedFlushStats`。它只在 Modern
-且 batching 未关闭的轮次设置 stats，`result.json` 会把最后一个累计 marker 解析到
-`modernMappedFlush`；正式 FPS 轮次仍应关闭该参数，避免统计原子与日志干扰稳定态。
+且 batching 未关闭的轮次设置 stats；脚本在启动前记录 Wine stderr 行偏移，结束后仅解析本轮新增的
+`WineHuaModernMappedFlushPerf` marker 并写入 `modernMappedFlush`，不会把旧运行的累计计数混入。
+正式 FPS 轮次仍应关闭该参数，避免统计原子与日志干扰稳定态。
 若产品代际基线已经完成，可用 `-ConditionSet modern-batch` 只运行 Modern 产品配置与
 batch-off 单变量，避免重复消耗 Legacy 轮次；`-ConditionSet all` 则运行完整三条件矩阵。
 终端只打印聚合摘要与归档路径，逐轮 timeline/perf marker 保留在 `comparison.json`。
@@ -334,16 +345,17 @@ profile 有效且 bundle 与 AppScope 一致；`sign.py` 也会拒绝把解密�
 
 ## 当前下一步
 
-1. 当前 DP1 已用原有 `winehua-dev` 产出 API 23 ARM64 1.2.9 Release 签名候选；签名、bundle、ABI、
-   DXVK/VKD3D runtime 文件与哈希均已核验。设备目前离线，尚未覆盖安装。
-2. 设备恢复后先验证启动、首帧、resize/前后台、Direct/WSI 实际 transport 和帧序，再运行三轮
-   Legacy/Modern 产品基线，不带任何强制 on/off override。
-3. 确认差距属于稳定态还是 cold path，并用改前/改后 DLL 验证 API trace 编译移除与在线 range
-   合并的净收益。
-4. 再加入 Modern batch-off 单变量，验证当前产品 capability 的净收益；同轮记录 mapped-flush
-   request/merged range/bytes，避免只看 FPS 猜原因。
-5. 根据 Guest CPU、Host upload、final present 和 GPU draw/submission 指标选择下一分支；若共同
+1. 已完成替换安装与真机启动、视频、Direct NativeBuffer、DXVK Modern 帧序及 VirGL D3D9 帧序验证；
+   不需重建镜像或创建额外容器。
+2. 扩展 Legacy/Modern 到更长时长、冷热两次和温控窗口；保持产品默认 capability，不再重复做
+   batch-off 的短窗口证明。
+3. batch-off 已确认是主要回归来源；下一项在保留 batching 前提下，用改前/改后 DLL 隔离
+   API-trace 编译移除和在线 range 合并各自的净收益。
+4. 为 Heaven 增加 draw/submission 计数，再判断 Modern dual-source 两次 draw、custom-border 或 BC
+   兼容是否值得做正确性受限的单变量实验。
+5. 使用独立固定分辨率 VirGL 工作负载（例如固定设置的 FurMark）补足 WineD3D/VirGL；不能以
+   WineD3D D3D11 `CreateVertexShader` 能力缺口代替 VirGL 性能结论。若共同
    Present 尾端下降但 2.6/1.10 差距不变，就停止把差距归因于 Direct Present。
 6. DXVK/VKD3D 已保存首次登记及第二次全命中证据；在下一次 guest runtime 构建中保存 guest-gfx/
    guest Vulkan 的首次登记与第二次命中证据。旧 deps stamp 暂不删除，保证单步回滚。
-6. 在原因没有被指标区分前，不修改产品默认 backend，不增加新的公开开关。
+7. 在原因没有被指标区分前，不修改产品默认 backend，不增加新的公开开关。
