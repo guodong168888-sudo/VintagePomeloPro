@@ -79,7 +79,10 @@ VirGLRenderer、NativeWindow 与系统合成路径，但会产生不同的命令
   `direct-native-buffer` 动作契约成立。一次后续候选 HAP 的 90 s Heaven 轮次在持续呈现期间记录到
   Box64 `dlopen` 启动辅助进程的 `SIGSEGV`；虽然游戏窗口随后继续以 27.775 FPS 呈现，且显式
   batch-off 对照为 15.972 FPS、未见该事件，但这不足以排除关联。故 Legacy batching 仍保持
-  测试期环境 override，绝不作为产品默认，直到该启动 fault 被独立复现并修复或排除。
+  测试期环境 override，绝不作为产品默认。稳定基线上的后续三轮 20 s 交替复现均未见 fault：
+  batch-on 平均 38.219 FPS，batch-off 平均 22.194 FPS（+72.20%），六个样本均完成动作契约与
+  process-teardown gate。这降低了 batching 为唯一诱因的可能性，但不能替代一次干净的长时复现；
+  直到该启动 fault 被独立复现并修复或排除，Legacy 默认仍维持关闭。
 
 ### 媒体播放与图形路由：已确认的边界
 
