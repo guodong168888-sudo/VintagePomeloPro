@@ -146,7 +146,7 @@ export function box64PresetDescription(presetId: string): string {
     case BOX64_PRESET_STABILITY:
       return '优先保证兼容与稳定，适合新引擎、Unity 或频繁崩溃的程序。';
     case BOX64_PRESET_UNITY:
-      return '针对 Unity 引擎的稳定档：信号处理走解释器，规避模拟层信号竞态导致的启动失败/黑屏。仅对当前游戏生效，可能略微降低帧率。';
+      return 'Unity 兼容方案：默认使用 DX11，并以窗口模式接入鸿蒙合成器；保留游戏手动指定的图形后端。信号处理走稳定路径，仅对当前游戏生效。';
     case BOX64_PRESET_CONSERVATIVE:
       return '兼容与性能之间偏保守，适合大部分老游戏。';
     case BOX64_PRESET_INTERMEDIATE:
@@ -246,11 +246,50 @@ export function box64PresetEnvString(presetId: string): string {
 }
 
 /**
- * Unity 兼容档额外追加的启动参数。参考 Winlator：Unity 引擎游戏在
- * Stability 预设之外还需要 -force-gfx-direct，让 Unity 跳过 GDI 间接
- * 渲染路径，直接绘制到窗口，减少黑屏/花屏。
+ * Unity 可识别的互斥图形后端。用户已经显式选择后端时必须保留选择，
+ * 不能再追加 -force-d3d11，否则 Unity 会按版本差异选择其中一个，导致
+ * 同一配置在不同游戏上表现不一致。
  */
-export const UNITY_COMPAT_LAUNCH_ARGS: string[] = ['-force-gfx-direct'];
+const UNITY_GFX_BACKEND_ARGS: string[] = [
+  '-force-d3d9',
+  '-force-d3d11',
+  '-force-d3d11-no-singlethreaded',
+  '-force-d3d12',
+  '-force-opengl',
+  '-force-glcore',
+  '-force-glcore32',
+  '-force-gles',
+  '-force-vulkan'
+];
+
+/**
+ * 构造 Unity/HarmonyOS 兼容参数：
+ * - DX11 是当前 WineHua 已验证并由 DXVK 覆盖的主路径；
+ * - gfx-direct 避免 GDI 间接呈现导致的黑屏/花屏；
+ * - 窗口模式避免 Unity 独占全屏绕开内嵌 Wayland compositor。
+ *
+ * 参数合并是幂等的，并尊重游戏卡片里已有的图形后端与全屏设置。
+ */
+export function resolveUnityCompatLaunchArgs(argumentsIn: string[]): string[] {
+  const result = argumentsIn.slice();
+  const lower = result.map((arg: string): string => arg.toLowerCase());
+  const hasArgument = (name: string): boolean => lower.includes(name);
+  const hasExplicitBackend = UNITY_GFX_BACKEND_ARGS.some((name: string): boolean => hasArgument(name));
+
+  if (!hasExplicitBackend) {
+    result.push('-force-d3d11');
+    lower.push('-force-d3d11');
+  }
+  if (!hasArgument('-force-gfx-direct')) {
+    result.push('-force-gfx-direct');
+    lower.push('-force-gfx-direct');
+  }
+  if (!hasArgument('-screen-fullscreen')) {
+    result.push('-screen-fullscreen');
+    result.push('0');
+  }
+  return result;
+}
 
 /** 判断某预设是否启用了 Unity 兼容模式（决定是否注入启动参数）。 */
 export function isUnityCompatPreset(presetId: string): boolean {
