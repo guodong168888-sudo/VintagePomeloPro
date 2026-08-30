@@ -116,20 +116,24 @@ assert.equal(
 );
 assert.deepEqual(
   models.resolveUnityCompatLaunchArgs([]),
-  ['-force-d3d11', '-force-gfx-direct', '-screen-fullscreen', '0']
+  ['-force-glcore', '-screen-fullscreen', '0', '-screen-width', '1280', '-screen-height', '720']
 );
 assert.deepEqual(
   models.resolveUnityCompatLaunchArgs(['-force-opengl', '-screen-fullscreen', '1']),
-  ['-force-opengl', '-screen-fullscreen', '1', '-force-gfx-direct']
+  ['-force-glcore', '-screen-fullscreen', '0', '-screen-width', '1280', '-screen-height', '720']
 );
 assert.deepEqual(
   models.resolveUnityCompatLaunchArgs(['-FORCE-D3D12', '-FORCE-GFX-DIRECT']),
-  ['-FORCE-D3D12', '-FORCE-GFX-DIRECT', '-screen-fullscreen', '0']
+  ['-force-glcore', '-screen-fullscreen', '0', '-screen-width', '1280', '-screen-height', '720']
 );
 assert.deepEqual(
   models.resolveUnityCompatLaunchArgs(
     models.resolveUnityCompatLaunchArgs(['-force-vulkan'])),
-  ['-force-vulkan', '-force-gfx-direct', '-screen-fullscreen', '0']
+  ['-force-glcore', '-screen-fullscreen', '0', '-screen-width', '1280', '-screen-height', '720']
+);
+assert.deepEqual(
+  models.resolveUnityDxvkLaunchArgs(['-force-glcore', '-force-gfx-direct', '-screen-width', '2560']),
+  ['-force-d3d11', '-screen-fullscreen', '0', '-screen-width', '1280', '-screen-height', '720']
 );
 assert.equal(
   models.resolveWinePresentationMode(
