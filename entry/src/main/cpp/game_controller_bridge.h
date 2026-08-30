@@ -9,3 +9,4 @@ napi_value GetGamepadCount(napi_env env, napi_callback_info info);
 napi_value SetGamepadButtonCallback(napi_env env, napi_callback_info info);
 napi_value SetGamepadAxisCallback(napi_env env, napi_callback_info info);
 napi_value SetGamepadDeviceCallback(napi_env env, napi_callback_info info);
+napi_value SetGamepadRumbleCallback(napi_env env, napi_callback_info info);

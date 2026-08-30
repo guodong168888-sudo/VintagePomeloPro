@@ -1,9 +1,11 @@
 #include "game_controller_bridge.h"
 
+#include "controller/gamepad_bridge.h"
 #include "controller/physical_gamepad.h"
 
 #include <dlfcn.h>
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -35,6 +37,7 @@ std::vector<Unregister> gUnregisterFunctions;
 napi_threadsafe_function gButtonTsfn = nullptr;
 napi_threadsafe_function gAxisTsfn = nullptr;
 napi_threadsafe_function gDeviceTsfn = nullptr;
+napi_threadsafe_function gRumbleTsfn = nullptr;
 
 ErrorCode (*gGetButtonAction)(const ButtonEvent*, ButtonAction*) = nullptr;
 ErrorCode (*gGetButtonCode)(const ButtonEvent*, int*) = nullptr;
@@ -54,6 +57,7 @@ ErrorCode (*gDestroyDeviceInfos)(DeviceInfos**) = nullptr;
 struct ButtonData { int code; bool pressed; };
 struct AxisData { int type; double x; double y; };
 struct DeviceData { bool connected; };
+struct RumbleData { uint32_t low; uint32_t high; uint32_t durationMs; };
 
 template<typename T>
 T Resolve(const char* name) {
@@ -91,6 +95,24 @@ void DeviceJs(napi_env env, napi_value callback, void*, void* raw) {
         napi_call_function(env, nullptr, callback, 1, &value, &result);
     }
     delete data;
+}
+
+void RumbleJs(napi_env env, napi_value callback, void*, void* raw) {
+    auto* data = static_cast<RumbleData*>(raw);
+    if (env && callback && data) {
+        napi_value values[3], result;
+        napi_create_uint32(env, data->low, &values[0]);
+        napi_create_uint32(env, data->high, &values[1]);
+        napi_create_uint32(env, data->durationMs, &values[2]);
+        napi_call_function(env, nullptr, callback, 3, values, &result);
+    }
+    delete data;
+}
+
+void ForwardRumble(uint16_t low, uint16_t high, uint32_t durationMs) {
+    if (!gRumbleTsfn) return;
+    auto* data = new RumbleData{low, high, durationMs};
+    if (napi_call_threadsafe_function(gRumbleTsfn, data, napi_tsfn_nonblocking) != napi_ok) delete data;
 }
 
 void RefreshDeviceCount() {
@@ -304,9 +326,11 @@ napi_value InitGameController(napi_env env, napi_callback_info) {
 
 napi_value CleanupGameController(napi_env, napi_callback_info) {
     CleanupNative();
+    winehua::controller::GamepadBridge::Instance().SetRumbleListener(nullptr);
     ReleaseTsfn(gButtonTsfn);
     ReleaseTsfn(gAxisTsfn);
     ReleaseTsfn(gDeviceTsfn);
+    ReleaseTsfn(gRumbleTsfn);
     return nullptr;
 }
 
@@ -334,5 +358,11 @@ napi_value SetGamepadAxisCallback(napi_env env, napi_callback_info info) {
 
 napi_value SetGamepadDeviceCallback(napi_env env, napi_callback_info info) {
     InstallTsfn(env, info, "WineGamepadDevice", DeviceJs, gDeviceTsfn);
+    return nullptr;
+}
+
+napi_value SetGamepadRumbleCallback(napi_env env, napi_callback_info info) {
+    InstallTsfn(env, info, "WineGamepadRumble", RumbleJs, gRumbleTsfn);
+    winehua::controller::GamepadBridge::Instance().SetRumbleListener(ForwardRumble);
     return nullptr;
 }

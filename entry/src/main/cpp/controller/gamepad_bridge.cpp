@@ -4,6 +4,7 @@
 #include "gamepad_ipc_protocol.h"
 
 #include <cerrno>
+#include <cstdint>
 #include <cstring>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -18,6 +19,26 @@
 
 namespace winehua {
 namespace controller {
+
+namespace {
+
+bool ReadExact(int fd, void* buf, size_t len)
+{
+    auto* p = static_cast<uint8_t*>(buf);
+    size_t got = 0;
+    while (got < len) {
+        const ssize_t n = read(fd, p + got, len - got);
+        if (n == 0) return false;
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        got += static_cast<size_t>(n);
+    }
+    return true;
+}
+
+}  // namespace
 
 GamepadBridge& GamepadBridge::Instance()
 {
@@ -35,6 +56,12 @@ bool GamepadBridge::IsRunning() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     return running_;
+}
+
+void GamepadBridge::SetRumbleListener(RumbleListener cb)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    rumbleListener_ = std::move(cb);
 }
 
 bool GamepadBridge::Start(const std::string& socketPath)
@@ -101,12 +128,13 @@ void GamepadBridge::Stop()
             listenFd_ = -1;
         }
         if (clientFd_ >= 0) {
-            close(clientFd_);
+            shutdown(clientFd_, SHUT_RDWR);
             clientFd_ = -1;
         }
         if (!path_.empty()) unlink(path_.c_str());
     }
     if (acceptThread_.joinable()) acceptThread_.join();
+    if (rumbleThread_.joinable()) rumbleThread_.join();
 }
 
 void GamepadBridge::AcceptLoop()
@@ -129,15 +157,77 @@ void GamepadBridge::AcceptLoop()
             if (!running_) return;
             continue;
         }
+
+        int oldClient = -1;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (clientFd_ >= 0) close(clientFd_);
+            oldClient = clientFd_;
+            clientFd_ = -1;
+            if (oldClient >= 0) shutdown(oldClient, SHUT_RDWR);
+        }
+        if (rumbleThread_.joinable()) rumbleThread_.join();
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!running_) {
+                close(client);
+                return;
+            }
             clientFd_ = client;
             OH_LOG_INFO(LOG_APP, "[WHGP] client connected fd=%{public}d", client);
         }
-        // Push current slot0 state immediately.
+        rumbleThread_ = std::thread([this, client] { RecvLoop(client); });
         PublishState(0, ControllerHub::Instance().GetState(0));
     }
+}
+
+void GamepadBridge::RecvLoop(int fd)
+{
+    while (true) {
+        whgp_header hdr{};
+        if (!ReadExact(fd, &hdr, sizeof(hdr))) break;
+        if (hdr.magic != WHGP_MAGIC || hdr.version != WHGP_VERSION) {
+            OH_LOG_WARN(LOG_APP, "[WHGP] bad header from winebus magic=%{public}u ver=%{public}u",
+                        hdr.magic, hdr.version);
+            break;
+        }
+        if (hdr.payload_size > 4096) {
+            OH_LOG_WARN(LOG_APP, "[WHGP] payload too large %{public}u", hdr.payload_size);
+            break;
+        }
+
+        if (hdr.msg_type == WHGP_MSG_RUMBLE && hdr.payload_size == sizeof(whgp_rumble_v1)) {
+            whgp_rumble_v1 body{};
+            if (!ReadExact(fd, &body, sizeof(body))) break;
+            RumbleListener cb;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                cb = rumbleListener_;
+            }
+            if (cb) cb(body.low, body.high, body.duration_ms);
+            continue;
+        }
+
+        uint32_t left = hdr.payload_size;
+        uint8_t discard[256];
+        bool ok = true;
+        while (left) {
+            const uint32_t chunk = left > sizeof(discard) ? static_cast<uint32_t>(sizeof(discard)) : left;
+            if (!ReadExact(fd, discard, chunk)) {
+                ok = false;
+                break;
+            }
+            left -= chunk;
+        }
+        if (!ok) break;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (clientFd_ == fd) clientFd_ = -1;
+    }
+    close(fd);
+    OH_LOG_INFO(LOG_APP, "[WHGP] client recv loop exited fd=%{public}d", fd);
 }
 
 void GamepadBridge::WriteState(int fd, uint32_t slot, const LogicalGamepadState& state)
@@ -168,8 +258,8 @@ void GamepadBridge::WriteState(int fd, uint32_t slot, const LogicalGamepadState&
     std::lock_guard<std::mutex> lock(mutex_);
     if (clientFd_ != fd) return;
     if (writev(fd, iov, 2) != total) {
-        close(clientFd_);
-        clientFd_ = -1;
+        shutdown(fd, SHUT_RDWR);
+        if (clientFd_ == fd) clientFd_ = -1;
     }
 }
 

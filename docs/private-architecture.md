@@ -25,4 +25,4 @@
 
 ## 后续边界
 
-首期默认经 Controller Hub → WHGP → `winebus bus_ohos` 以 DirectInput 虚拟手柄进入 Wine；可选 `keyboard_legacy` 回退到 Game Controller Kit → 键鼠/evdev 映射。XInput / 震动 / 多玩家热插拔不在本阶段。
+首期默认经 Controller Hub → WHGP → `winebus bus_ohos` 以 DirectInput / XInput 虚拟手柄进入 Wine，并将游戏 rumble 转发到实体手柄马达；可选 `keyboard_legacy` 回退到 Game Controller Kit → 键鼠/evdev 映射。多玩家热插拔不在本阶段。

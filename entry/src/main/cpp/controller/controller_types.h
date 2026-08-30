@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 
-// WineHua Controller Hub — logical gamepad types (P0).
+// WineHua Controller Hub — logical gamepad types.
 // Stick: int16 [-32768, 32767], +Y = Up.
 // Trigger: uint16 [0, 32767].
 // Hat: int8 -1 / 0 / +1.

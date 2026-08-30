@@ -1,10 +1,24 @@
+import { vibrator } from '@kit.SensorServiceKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { GamepadSink, KeyMouseGamepadSink } from './InputRouter';
 import { GamepadButtonMapping, createDefaultInputProfile } from '../model/AppModels';
+import { hilog } from './LogService';
 import testNapi from 'libentry.so';
 
 export type GamepadConnectionListener = (connected: boolean) => void;
 export type GamepadActivityListener = () => void;
 export type ControllerOutputMode = 'dinput' | 'keyboard_legacy';
+
+const DOMAIN: number = 0x0000;
+const TAG: string = 'PadRumble';
+
+class PadMotor {
+  deviceId: number = 0;
+  vibratorId: number = 0;
+  deviceName: string = '';
+  isHdHapticSupported: boolean = false;
+  usePattern: boolean = true;
+}
 
 export class GamepadManager {
   private static instance: GamepadManager | null = null;
@@ -21,6 +35,11 @@ export class GamepadManager {
     createDefaultInputProfile().gamepadMappings.map((mapping: GamepadButtonMapping): [number, number] =>
       [mapping.buttonCode, mapping.evdevCode])
   );
+  private padMotors: PadMotor[] = [];
+  private lastLow: number = -1;
+  private lastHigh: number = -1;
+  private lastRumbleAt: number = 0;
+  private rumbleListening: boolean = false;
 
   static getInstance(): GamepadManager {
     if (!GamepadManager.instance) GamepadManager.instance = new GamepadManager();
@@ -36,6 +55,7 @@ export class GamepadManager {
     if (this.outputMode === mode) return;
     this.releaseAll();
     this.outputMode = mode;
+    if (mode !== 'dinput') this.stopPadVibration();
     try {
       testNapi.controllerSetOutputMode(mode);
       if (mode === 'dinput') {
@@ -75,9 +95,18 @@ export class GamepadManager {
     });
     testNapi.setGamepadDeviceCallback((connected: boolean) => {
       this.connected = connected;
-      if (!connected) this.releaseAll();
+      if (!connected) {
+        this.releaseAll();
+        this.stopPadVibration();
+      }
+      this.refreshPadMotors();
       this.connectionListeners.forEach((listener: GamepadConnectionListener) => listener(connected));
     });
+    testNapi.setGamepadRumbleCallback((low: number, high: number, durationMs: number) => {
+      this.applyRumble(low, high, durationMs);
+    });
+    this.watchVibrators();
+    this.refreshPadMotors();
     try {
       testNapi.initGameController();
       this.connected = testNapi.isGamepadConnected();
@@ -116,6 +145,27 @@ export class GamepadManager {
 
   setDeadzone(percent: number): void {
     this.deadzone = Math.max(0, Math.min(0.5, percent / 100));
+  }
+
+  getRumbleStatusText(): string {
+    if (this.padMotors.length === 0) {
+      return '震动: 无外接马达';
+    }
+    const names: string[] = [];
+    for (let i = 0; i < this.padMotors.length; i++) {
+      const name = this.padMotors[i].deviceName.length > 0
+        ? this.padMotors[i].deviceName
+        : ('id=' + this.padMotors[i].deviceId);
+      if (names.indexOf(name) < 0) names.push(name);
+    }
+    return '震动: ' + names.join(',') + ' ×' + this.padMotors.length;
+  }
+
+  testRumble(): boolean {
+    this.refreshPadMotors();
+    if (this.padMotors.length === 0) return false;
+    this.applyRumble(48000, 48000, 450);
+    return true;
   }
 
   handleKey(keyCode: number, pressed: boolean): boolean {
@@ -198,6 +248,137 @@ export class GamepadManager {
     if (this.outputMode === 'dinput') {
       // Overlay / key-emulation leftovers only. Physical is owned by native kit.
       try { testNapi.controllerResetSource(0); } catch (_) {}
+    }
+  }
+
+  private watchVibrators(): void {
+    if (this.rumbleListening) return;
+    this.rumbleListening = true;
+    try {
+      vibrator.on('vibratorStateChange', (_data: vibrator.VibratorStatusEvent): void => {
+        this.refreshPadMotors();
+      });
+    } catch (error) {
+      const e: BusinessError = error as BusinessError;
+      hilog.warn(DOMAIN, TAG, 'vibrator.on failed code=%{public}d %{public}s', e.code, e.message);
+    }
+  }
+
+  private motorKey(motor: PadMotor): string {
+    return '' + motor.deviceId + ':' + motor.vibratorId;
+  }
+
+  private refreshPadMotors(): void {
+    const previous: Map<string, boolean> = new Map<string, boolean>();
+    for (let i = 0; i < this.padMotors.length; i++) {
+      previous.set(this.motorKey(this.padMotors[i]), this.padMotors[i].usePattern);
+    }
+    const next: PadMotor[] = [];
+    try {
+      const infos: vibrator.VibratorInfo[] = vibrator.getVibratorInfoSync();
+      for (let i = 0; i < infos.length; i++) {
+        const info: vibrator.VibratorInfo = infos[i];
+        if (info.isLocalVibrator) continue;
+        const motor = new PadMotor();
+        motor.deviceId = info.deviceId;
+        motor.vibratorId = info.vibratorId;
+        motor.deviceName = info.deviceName;
+        motor.isHdHapticSupported = info.isHdHapticSupported;
+        const prev = previous.get(this.motorKey(motor));
+        if (prev === false) motor.usePattern = false;
+        if (!motor.isHdHapticSupported) motor.usePattern = false;
+        next.push(motor);
+      }
+    } catch (error) {
+      const e: BusinessError = error as BusinessError;
+      hilog.warn(DOMAIN, TAG, 'getVibratorInfoSync failed code=%{public}d %{public}s', e.code, e.message);
+    }
+    this.padMotors = next;
+    hilog.info(DOMAIN, TAG, 'pad motors=%{public}d %{public}s', next.length, this.getRumbleStatusText());
+  }
+
+  private applyRumble(low: number, high: number, durationMs: number): void {
+    if (this.outputMode !== 'dinput') return;
+    const now = Date.now();
+    if (low <= 0 && high <= 0) {
+      this.lastLow = 0;
+      this.lastHigh = 0;
+      this.lastRumbleAt = now;
+      this.stopPadVibration();
+      return;
+    }
+    if (low === this.lastLow && high === this.lastHigh && (now - this.lastRumbleAt) < 60) {
+      return;
+    }
+    this.lastLow = low;
+    this.lastHigh = high;
+    this.lastRumbleAt = now;
+
+    if (this.padMotors.length === 0) this.refreshPadMotors();
+    if (this.padMotors.length === 0) return;
+
+    const duration = durationMs > 0 ? durationMs : 250;
+    if (this.padMotors.length >= 2) {
+      this.startMotor(this.padMotors[0], low, duration, true);
+      this.startMotor(this.padMotors[1], high, duration, false);
+      return;
+    }
+    this.startMotor(this.padMotors[0], Math.max(low, high), duration, true);
+  }
+
+  private startMotor(motor: PadMotor, intensityRaw: number, durationMs: number, isLow: boolean): void {
+    if (intensityRaw <= 0) {
+      this.stopMotor(motor);
+      return;
+    }
+    const duration = Math.max(1, Math.min(5000, Math.round(durationMs)));
+    const intensity = Math.max(1, Math.min(100, Math.round(intensityRaw / 655.35)));
+    const attr: vibrator.VibrateAttribute = {
+      id: motor.vibratorId,
+      deviceId: motor.deviceId,
+      usage: 'physicalFeedback'
+    };
+    if (motor.usePattern) {
+      try {
+        const builder = new vibrator.VibratorPatternBuilder();
+        const param: vibrator.ContinuousParam = {
+          intensity: intensity,
+          frequency: isLow ? 28 : 82,
+          index: 0
+        };
+        builder.addContinuousEvent(0, duration, param);
+        vibrator.startVibration({ type: 'pattern', pattern: builder.build() }, attr).catch(
+          (error: BusinessError): void => {
+            hilog.warn(DOMAIN, TAG, 'pattern rumble fail code=%{public}d, fallback time', error.code);
+            motor.usePattern = false;
+            this.startTimeVibration(motor, attr, duration);
+          });
+        return;
+      } catch (error) {
+        const e: BusinessError = error as BusinessError;
+        hilog.warn(DOMAIN, TAG, 'pattern build fail code=%{public}d', e.code);
+        motor.usePattern = false;
+      }
+    }
+    this.startTimeVibration(motor, attr, duration);
+  }
+
+  private startTimeVibration(motor: PadMotor, attr: vibrator.VibrateAttribute, duration: number): void {
+    vibrator.startVibration({ type: 'time', duration: duration }, attr).catch((error: BusinessError): void => {
+      hilog.warn(DOMAIN, TAG, 'time rumble fail dev=%{public}d vib=%{public}d code=%{public}d %{public}s',
+        motor.deviceId, motor.vibratorId, error.code, error.message);
+    });
+  }
+
+  private stopMotor(motor: PadMotor): void {
+    vibrator.stopVibration({ deviceId: motor.deviceId, vibratorId: motor.vibratorId }).catch(
+      (_error: BusinessError): void => {
+      });
+  }
+
+  private stopPadVibration(): void {
+    for (let i = 0; i < this.padMotors.length; i++) {
+      this.stopMotor(this.padMotors[i]);
     }
   }
 }

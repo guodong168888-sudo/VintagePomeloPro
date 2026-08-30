@@ -1,5 +1,6 @@
 // controller_merge_test.cpp — ControllerHub source ownership (make test)
 #include "controller/controller_hub.h"
+#include "controller/gamepad_ipc_protocol.h"
 
 #include <cstdio>
 
@@ -22,6 +23,10 @@ static int g_failures = 0;
 
 int main()
 {
+    static_assert(sizeof(whgp_header) == 16, "whgp_header packed size");
+    static_assert(sizeof(whgp_state_v1) == 20, "whgp_state_v1 packed size");
+    static_assert(sizeof(whgp_rumble_v1) == 8, "whgp_rumble_v1 packed size");
+
     auto& hub = ControllerHub::Instance();
     hub.SetEnabled(true);
     hub.SetInnerDeadzone(0.10f);

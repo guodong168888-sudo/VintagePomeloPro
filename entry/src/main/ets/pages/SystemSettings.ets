@@ -1056,7 +1056,8 @@ struct SystemSettingsPage {
 
   private refreshHubState(): void {
     try {
-      this.hubStateText = testNapi.controllerGetStateText(0);
+      this.hubStateText = testNapi.controllerGetStateText(0) + '  ' +
+        GamepadManager.getInstance().getRumbleStatusText();
     } catch (_) {
       this.hubStateText = 'Hub 不可用';
     }
@@ -1095,7 +1096,7 @@ struct SystemSettingsPage {
     void ThemeSettingsService.getInstance().update(this.settings);
     promptAction.showToast({
       message: mode === 'dinput'
-        ? '已切换 DirectInput；请重新启动 Wine 会话后生效'
+        ? '已切换 Wine 手柄（XInput/DirectInput）；请重新启动 Wine 会话后生效'
         : '已切换键盘模拟；请重新启动 Wine 会话后生效'
     });
   }
@@ -1956,14 +1957,22 @@ struct SystemSettingsPage {
           }
           Text('手柄兼容模式').fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
           Row({ space: 10 }) {
-            Button(this.settings.controllerOutputMode === 'dinput' ? 'DirectInput ✓' : 'DirectInput')
+            Button(this.settings.controllerOutputMode === 'dinput' ? 'Wine 手柄 ✓' : 'Wine 手柄')
               .fontSize(13)
               .onClick((): void => this.updateControllerOutputMode('dinput'))
             Button(this.settings.controllerOutputMode === 'keyboard_legacy' ? '键盘模拟 ✓' : '键盘模拟')
               .fontSize(13)
               .onClick((): void => this.updateControllerOutputMode('keyboard_legacy'))
+            Button('测试震动')
+              .fontSize(13)
+              .onClick((): void => {
+                const ok: boolean = GamepadManager.getInstance().testRumble();
+                promptAction.showToast({
+                  message: ok ? '正在测试手柄震动' : '未找到手柄马达（不会使用平板震动）'
+                });
+              })
           }.width('100%')
-          Text('DirectInput 经 Controller Hub 进入 Wine；键盘模拟保持旧版键鼠映射。切换后需重启会话。')
+          Text('Wine 手柄经 Controller Hub 进入 DirectInput 与 XInput，并转发震动到实体手柄；键盘模拟保持旧版键鼠映射。切换后需重启会话。')
             .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
           Text(this.hubStateText)
             .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')

@@ -129,6 +129,8 @@ export const setGamepadButtonCallback: (
 export const setGamepadAxisCallback: (
   callback: (axisType: number, x: number, y: number) => void) => void;
 export const setGamepadDeviceCallback: (callback: (connected: boolean) => void) => void;
+export const setGamepadRumbleCallback: (
+  callback: (low: number, high: number, durationMs: number) => void) => void;
 /** Controller Hub (Touch source + WHGP). source: 0=Touch 1=Physical 2=Keyboard */
 export const controllerSetEnabled: (enabled: boolean) => void;
 export const controllerSetButton: (source: number, slot: number, button: number, pressed: boolean) => void;

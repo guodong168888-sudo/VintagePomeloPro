@@ -339,7 +339,7 @@ export interface GlobalSettings {
   virtualMouseConfig: VirtualMouseConfig;
   controlOpacity: number;
   gamepadDeadzone: number;
-  /** DirectInput (Controller Hub) or keyboard/mouse emulation for gamepads. */
+  /** Wine pad via Controller Hub (DInput/XInput + rumble) or keyboard/mouse emulation. */
   controllerOutputMode: 'dinput' | 'keyboard_legacy';
   outputScale: number;
   d3dRendererPreference: D3DRendererPreference;
