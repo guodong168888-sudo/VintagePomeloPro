@@ -73,7 +73,7 @@ function Stop-AutomationApp {
     Invoke-Hdc shell aa force-stop $Bundle | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not stop the previous application session' }
     for ($attempt = 0; $attempt -lt 25; ++$attempt) {
-        $processes = @(Invoke-Hdc shell ps -A -o PID,PPID,NAME)
+        $processes = @(Invoke-Hdc shell ps -A -o 'PID,PPID,NAME')
         if ($LASTEXITCODE -ne 0) { throw 'Could not verify application process-tree shutdown' }
         if (@($processes | Where-Object { $_ -match [regex]::Escape($Bundle) }).Count -eq 0) {
             Start-Sleep -Milliseconds 300

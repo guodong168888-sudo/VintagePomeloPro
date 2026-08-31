@@ -211,32 +211,19 @@ for automation_script in \
         "ValidateSet('baseline'" "$automation_script"
 done
 require_literal "DXVK performance Legacy baseline" \
-    "id = 'legacy-1.10-product'" \
-    automation/Measure-WineHuaDxvkPerformance.ps1
+    "id='legacy-1.10-product'" automation/GraphicsTestPolicy.ps1
 require_literal "DXVK performance Modern baseline" \
-    "id = 'modern-2.6-product'" \
-    automation/Measure-WineHuaDxvkPerformance.ps1
+    "id='modern-2.6-product'" automation/GraphicsTestPolicy.ps1
 require_literal "DXVK performance inherits product batching" \
-    "batchMappedFlushMode = 'product'" \
-    automation/Measure-WineHuaDxvkPerformance.ps1
-require_literal "DXVK performance isolates batch-off" \
-    "id = 'modern-2.6-batch-flush-off'" \
-    automation/Measure-WineHuaDxvkPerformance.ps1
-require_literal "DXVK performance supports focused Modern batch A/B" \
-    "'modern-batch'" automation/Measure-WineHuaDxvkPerformance.ps1
-require_literal "DXVK performance supports focused Legacy batch experiment" \
-    "'legacy-batch'" automation/Measure-WineHuaDxvkPerformance.ps1
-require_literal "Legacy batch experiment is explicit off-side control" \
-    "id = 'legacy-1.10-batch-flush-off'" \
-    automation/Measure-WineHuaDxvkPerformance.ps1
-require_literal "Legacy batch experiment keeps off-side as a per-run override" \
-    "batchMappedFlushOverride = '0'" \
-    automation/Measure-WineHuaDxvkPerformance.ps1
-require_literal "Smoke inherits product batching by default" \
-    "batchMappedFlush: undefined" entry/src/main/ets/service/SmokeRunner.ets
-require_literal "Smoke uses batch-off only as an explicit override" \
-    "else if (this.request.batchMappedFlush === false)" \
-    entry/src/main/ets/service/SmokeRunner.ets
+    "batchMappedFlushMode='product'" automation/GraphicsTestPolicy.ps1
+require_literal "DXVK performance consumes the shared product matrix" \
+    'Get-DxvkProductTestConditions $ConditionSet' automation/Measure-WineHuaDxvkPerformance.ps1
+require_literal "Normal launcher rejects disabled batching" \
+    'Assert-GraphicsTestMappedFlush -Mode $BatchMappedFlushMode' automation/Start-WineHuaGameTest.ps1
+require_literal "Core regression uses normal game launch" \
+    "Start-WineHuaGameTest.ps1" automation/NormalSmoke.ps1
+require_literal "Core regression rejects obsolete App smoke mode" \
+    'Assert-NormalSmokeSuite $Suite $Prefix' automation/Invoke-WineHuaAutomation.ps1
 require_literal "Automation omits batch override unless requested" \
     "ContainsKey('BatchMappedFlush')" automation/Invoke-WineHuaAutomation.ps1
 require_literal "DXVK performance product-equivalent observation" \

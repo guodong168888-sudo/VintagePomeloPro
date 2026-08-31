@@ -65,8 +65,8 @@ function Invoke-NormalSmokeRun {
             if ($batchMappedFlushOverrideRequested) { $launch.BatchMappedFlushMode = 'on' }
             & (Join-Path $PSScriptRoot 'Start-WineHuaGameTest.ps1') @launch 6>&1 |
                 Set-Content -LiteralPath (Join-Path $testDirectory 'start.log') -Encoding UTF8
-            $testAppPid = ((Invoke-Hdc shell pidof $Bundle) -join '').Trim()
-            if ($testAppPid -notmatch '^\d+$') { throw 'Cannot identify this test application process' }
+            $testAppPid = Select-AutomationAppPid -Bundle $Bundle -ProcessLines @(
+                Invoke-Hdc shell ps -A -o 'PID,PPID,NAME')
             $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
             while ((Get-Date) -lt $deadline) {
                 $resultText = Get-DeviceText $remoteResult

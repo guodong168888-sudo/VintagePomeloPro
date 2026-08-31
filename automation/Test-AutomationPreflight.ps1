@@ -21,6 +21,11 @@ if ((Select-AutomationDevice @('test-only-target')) -ne 'test-only-target') { th
 Assert-Rejected { Select-AutomationDevice @('[Empty]') } 'no device'
 Assert-Rejected { Select-AutomationDevice @('test-a', 'test-b') } 'ambiguous physical targets'
 Assert-Rejected { Select-AutomationDevice @('test-a', '127.0.0.1:1234') } 'implicit emulator selection'
+$sameNameProcesses = @('PID PPID NAME', '101 10 test.bundle', '102 101 test.bundle',
+    '103 102 test.bundle', '99 10 other.bundle')
+if ((Select-AutomationAppPid $sameNameProcesses 'test.bundle') -ne '101') { throw 'Fork children confused App PID selection' }
+Assert-Rejected { Select-AutomationAppPid @('101 10 test.bundle', '105 10 test.bundle') 'test.bundle' } 'multiple app roots'
+Assert-Rejected { Select-AutomationAppPid @('[Fail] disconnected') 'test.bundle' } 'missing app process'
 $source = [pscustomobject]@{ Type='bind'; Source='/home/test/repo'; Destination='/data/src/winehua'; RW=$true }
 $sdk = [pscustomobject]@{ Type='bind'; Source='/home/test/sdk'; Destination='/apps/harmony'; RW=$false }
 Assert-AutomationMounts @($source) '/home/test/repo' '/data/src/winehua'

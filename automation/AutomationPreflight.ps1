@@ -29,6 +29,21 @@ function Select-AutomationDevice {
     return $connected[0]
 }
 
+function Select-AutomationAppPid {
+    param([string[]]$ProcessLines, [string]$Bundle)
+    $rows = @($ProcessLines | ForEach-Object {
+        if ($_ -match '^\s*(\d+)\s+(\d+)\s+(\S+)\s*$' -and $Matches[3] -ceq $Bundle) {
+            [pscustomobject]@{ pid = [string]$Matches[1]; parent = [string]$Matches[2] }
+        }
+    })
+    # Forked native/Wine children share the bundle process name. pidof alone
+    # returns all of them, not necessarily the Ability process.
+    $ids = @($rows | ForEach-Object { $_.pid })
+    $roots = @($rows | Where-Object { $_.parent -notin $ids })
+    if ($roots.Count -ne 1) { throw 'Cannot identify one application process-tree root' }
+    return $roots[0].pid
+}
+
 function Assert-AutomationMounts {
     param([object[]]$Mounts, [string]$RepoWsl, [string]$ContainerRepo)
     $source = @($Mounts | Where-Object { $_.Type -eq 'bind' -and $_.Destination -eq $ContainerRepo -and
