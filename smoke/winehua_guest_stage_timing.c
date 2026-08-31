@@ -22,6 +22,12 @@ struct gl_texture_image;
 #include "state_tracker/st_cb_texture.h"
 #endif
 #include "virtio-gpu/virgl_protocol.h"
+#ifdef WINEHUA_GUEST_BUSY_IO
+#include "winehua_vtest_busy_io.h"
+#define GUEST_IO_MODE "packed"
+#else
+#define GUEST_IO_MODE "original"
+#endif
 
 #ifndef WINEHUA_GUEST_STAGE_CLOCK
 #define WINEHUA_GUEST_STAGE_CLOCK clock_gettime
@@ -121,7 +127,7 @@ static void report(struct guest_count *c, const char *reason)
         now, now && c->started && now >= c->started, c->words, c->packets, c->draw,
         c->inline_words, c->transfer, c->query, c->malformed, c->get_bytes,
         c->get_full_size, c->get_max_width, c->get_max_height, c->caller_overflow);
-    fprintf(f, " api_nested=1 read_spec=%ux%u/0x%x/0x%x texture_spec=%ux%u/0x%x/0x%x",
+    fprintf(f, " io=" GUEST_IO_MODE " api_nested=1 read_spec=%ux%u/0x%x/0x%x texture_spec=%ux%u/0x%x/0x%x",
         c->read_spec[0], c->read_spec[1], c->read_spec[2], c->read_spec[3],
         c->texture_spec[0], c->texture_spec[1], c->texture_spec[2], c->texture_spec[3]);
     for (unsigned i = 0; i < METRIC_COUNT; ++i) print_metric(f, metric_names[i], &c->time[i]);
@@ -236,7 +242,17 @@ int __wrap_virgl_vtest_busy_wait(struct virgl_vtest_winsys *vws, int handle, int
     struct guest_count *c = lookup(vws);
     const uintptr_t caller = (uintptr_t)__builtin_return_address(0);
     struct stamp a = begin();
+#ifdef WINEHUA_GUEST_BUSY_IO
+    uint32_t answer;
+    const int status = winehua_vtest_busy_io(vws->sock_fd, handle, flags, &answer);
+    if (status) {
+        fprintf(stderr, "[GUEST-STAGE] packed busy transport failure=%d; aborting, not replaying\n", status);
+        abort();
+    }
+    const int result = (int)answer;
+#else
     const int result = __real_virgl_vtest_busy_wait(vws, handle, flags);
+#endif
     struct stamp b = begin();
     record(c, flags & VCMD_BUSY_WAIT_FLAG_WAIT ? BUSY_WAIT : BUSY_CHECK, a, b, result);
     if (c && c->ready) {

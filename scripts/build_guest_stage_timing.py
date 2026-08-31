@@ -3,6 +3,7 @@
 
 No Meson configure, Ninja build, runtime zip, submodule edits or cache changes.
 """
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -39,9 +40,12 @@ def argv(command, name):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--busy-io", action="store_true", help="Isolated packed busy I/O candidate; not a product default")
+    options = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     cache = root / "build/guest_gfx_build/x86_64/wayland-virpipe"
-    out = root / "build/guest-stage-timing/x86_64"
+    out = root / "build" / ("guest-busy-io" if options.busy_io else "guest-stage-timing") / "x86_64"
     if out.is_symlink() or not out.resolve().is_relative_to(root / "build"):
         raise ValueError("Output escapes build directory")
     libraries = list((cache / "src/gallium/targets/dri").glob("libgallium-*.so"))
@@ -71,10 +75,13 @@ def main():
             raise ValueError(f"Unavailable wrappers in {obj_path}: {set(hooks) - undefined}")
     source = root / "smoke/winehua_guest_stage_timing.c"
     inputs = {source, Path(__file__).resolve(), baseline, cache / "compile_commands.json", cache / "build.ninja"}
+    if options.busy_io:
+        inputs.add(root / "smoke/winehua_vtest_busy_io.h")
     for pattern in ("*.o", "*.a", "*.sym", "*.h"):
         inputs.update(cache.rglob(pattern))
     inputs.update((root / "thirdparty/mesa/src/gallium/winsys/virgl/vtest").glob("*.h"))
     inputs.add(root / "thirdparty/mesa/src/virtio/virtio-gpu/virgl_protocol.h")
+    inputs.add(root / "thirdparty/mesa/src/virtio/vtest/vtest_protocol.h")
     inputs.add(root / "thirdparty/mesa/src/mesa/state_tracker/st_cb_readpixels.h")
     inputs.add(root / "thirdparty/mesa/src/mesa/state_tracker/st_cb_texture.h")
     inputs.add(root / "thirdparty/mesa/src/mesa/main/formats.h")
@@ -84,7 +91,9 @@ def main():
         if not a.startswith("-") and p.is_absolute() and p.is_file():
             inputs.add(p)
     inventory = {str(p): digest(p) for p in sorted(inputs)}
-    signature = {"inputs": inventory, "hooks": HOOKS, "compile": compile_args, "link": link_args}
+    defines = ["-DWINEHUA_GUEST_BUSY_IO=1"] if options.busy_io else []
+    signature = {"inputs": inventory, "hooks": HOOKS, "compile": compile_args,
+                 "link": link_args, "defines": defines, "busy_io": options.busy_io}
     fingerprint = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()
     candidate, obj, manifest = out / baseline.name, out / "guest_stage_timing.o", out / "manifest.json"
     if any(p.is_symlink() for p in (candidate, obj, manifest)):
@@ -105,7 +114,7 @@ def main():
             filtered.append(a)
         index += 1
     print("Compiling one Guest diagnostic bridge; reusing all Mesa objects", flush=True)
-    run(filtered + ["-c", str(source), "-o", str(obj)], cache)
+    run(filtered + defines + ["-c", str(source), "-o", str(obj)], cache)
     link_args[link_args.index("-o") + 1] = str(candidate)
     link_args += [str(obj)] + [f"-Wl,--wrap={hook}" for hook in HOOKS]
     run(link_args, cache)

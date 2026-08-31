@@ -507,6 +507,18 @@ test-host-stage-timing:
 guest-stage-timing:
 	python3 $(SCRIPTS)/build_guest_stage_timing.py
 
+# Opt-in candidate output only: same synchronization, combined short I/O.
+.PHONY: guest-busy-io test-vtest-busy-io
+guest-busy-io: test-vtest-busy-io
+	python3 $(SCRIPTS)/build_guest_stage_timing.py --busy-io
+
+test-vtest-busy-io:
+	@mkdir -p $(HOST_TEST_DIR)
+	gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+	    -I $(ROOT)/thirdparty/mesa/src/virtio \
+	    $(ROOT)/host_tests/vtest_busy_io_test.c -o $(HOST_TEST_DIR)/vtest_busy_io_test
+	$(HOST_TEST_DIR)/vtest_busy_io_test
+
 test-guest-stage-timing:
 	@mkdir -p $(HOST_TEST_DIR)
 	gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
