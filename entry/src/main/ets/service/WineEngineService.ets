@@ -498,6 +498,14 @@ export class WineEngineService {
     const program = isCommandScript(executable) ? 'cmd.exe' : executable;
     const launchArguments = isCommandScript(executable) ?
       ['/c', executable].concat(argumentsValue) : argumentsValue;
+    // Game-specific profiles can select the bundled DXVK 2.6.2 overlay for a
+    // single process. This avoids changing every app's renderer and avoids
+    // unreliable GPU-name inference on new Kirin devices such as Pura X Max.
+    const forceModernDxvk = envOverrides.some((line: string): boolean =>
+      line === 'WINEHUA_FORCE_DXVK_MODERN=1');
+    const effectiveD3DBackend = forceModernDxvk ? 'dxvk_modern_2_6' : this.d3dBackend;
+    hilog.info(DOMAIN, TAG, 'launch renderer backend=%{public}s forcedModern=%{public}s',
+      effectiveD3DBackend, forceModernDxvk ? 'true' : 'false');
     return testNapi.runWineExe(
       WINE_BIN,
       SOCK,
@@ -506,7 +514,7 @@ export class WineEngineService {
       this.homeDirectory,
       launchArguments,
       workingDirectory,
-      this.d3dBackend,
+      effectiveD3DBackend,
       envOverrides
     ) as NativeLaunchResult;
   }
