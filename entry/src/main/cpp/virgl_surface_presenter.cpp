@@ -79,6 +79,7 @@ public:
         timestampFailures_ = 0;
         throttled_ = 0;
         lastPresentNs_ = 0;
+        failureBackoff_.Reset();
         timing_.Reset();
         directDisabled_ = !winehua::kGlesDirectQualified;
         directFallbackPending_ = false;
@@ -142,6 +143,11 @@ public:
         if (!sourceVisible) return -3;
         const uint64_t nowNs = NowNs();
         const uint64_t startedUs = nowNs / 1000;
+        if (const uint64_t retry = failureBackoff_.PendingDeadline(nowNs)) {
+            if (nextPresentDeadlineNs) *nextPresentDeadlineNs = retry;
+            ++throttled_;
+            return 1;
+        }
         const winehua::PresentPacingDecision pacing =
             winehua::EvaluatePresentPacing(nowNs, lastPresentNs_, framePeriodNs_);
         if (width_ == width && height_ == height && !pacing.presentNow &&
@@ -152,7 +158,11 @@ public:
             return 1;
         }
         sourceReady = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-        if (!sourceReady) return -7;
+        if (!sourceReady) {
+            const uint64_t retry = failureBackoff_.Fail(NowNs(), framePeriodNs_);
+            if (nextPresentDeadlineNs) *nextPresentDeadlineNs = retry;
+            return -7;
+        }
         glFlush();
         if (!EnsureGlLocked(sourceDisplay, sourceContext, width, height))
         {
@@ -164,6 +174,8 @@ public:
                 return 1;
             }
             ++failures_;
+            const uint64_t retry = failureBackoff_.Fail(NowNs(), framePeriodNs_);
+            if (nextPresentDeadlineNs) *nextPresentDeadlineNs = retry;
             return -4;
         }
         if (eglMakeCurrent(display_, surface_, surface_, context_) != EGL_TRUE)
@@ -171,6 +183,8 @@ public:
             eglMakeCurrent(sourceDisplay, sourceDraw, sourceRead, sourceContext);
             glDeleteSync(sourceReady);
             ++failures_;
+            const uint64_t retry = failureBackoff_.Fail(NowNs(), framePeriodNs_);
+            if (nextPresentDeadlineNs) *nextPresentDeadlineNs = retry;
             return -5;
         }
         glWaitSync(sourceReady, 0, GL_TIMEOUT_IGNORED);
@@ -230,16 +244,21 @@ public:
         if (swapped != EGL_TRUE || restored != EGL_TRUE)
         {
             ++failures_;
+            const uint64_t retry = failureBackoff_.Fail(NowNs(), framePeriodNs_);
+            if (nextPresentDeadlineNs) *nextPresentDeadlineNs = retry;
             if (failures_ == 1 || failures_ % 120 == 0)
                 OH_LOG_WARN(LOG_APP,
                             "[VIRGL-ZC][NCP] blit dropped serial=%{public}u gl=0x%{public}x "
-                            "egl=0x%{public}x restore=%{public}d drops=%{public}llu",
+                            "egl=0x%{public}x restore=%{public}d drops=%{public}llu "
+                            "retry_deadline_ns=%{public}llu",
                             serial, glError, eglError, restored,
-                            static_cast<unsigned long long>(failures_));
+                            static_cast<unsigned long long>(failures_),
+                            static_cast<unsigned long long>(retry));
             return -6;
         }
 
         lastPresentNs_ = frameTimestamp;
+        failureBackoff_.Reset();
         ++frames_;
         if (policy_.perfSummary) {
             const uint64_t endedUs = NowUs();
@@ -542,6 +561,7 @@ void main() { outColor = texture(uTexture, vTexCoord); }
     bool directFallbackPending_ = false;
     bool resetDeferred_ = false;
     uint64_t lastPresentNs_ = 0;
+    winehua::GlPresentFailureBackoff failureBackoff_;
     uint64_t displayPeriodNs_ = winehua::kDefaultPresentFramePeriodNs;
     uint64_t framePeriodNs_ = winehua::kDefaultPresentFramePeriodNs;
 };

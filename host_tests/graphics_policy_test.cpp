@@ -358,6 +358,26 @@ void TestGuestProfileResolution()
 
 void TestPresentPacing()
 {
+    winehua::GlPresentFailureBackoff backoff;
+    Check(backoff.PendingDeadline(100) == 0, "healthy GL has no retry gate");
+    Check(backoff.Fail(100, 8000000) == 8000100, "first GL failure waits one frame");
+    Check(backoff.PendingDeadline(101) == 8000100, "failed GL skips GPU before deadline");
+    Check(backoff.PendingDeadline(8000100) == 0, "failed GL can retry when due");
+    Check(backoff.Fail(8000100, 8000000) == 24000100, "repeated GL failure backs off");
+    uint64_t now = 24000100;
+    for (int i = 0; i < 1000; ++i) {
+        const uint64_t deadline = backoff.Fail(now, 8000000);
+        Check(deadline > now && deadline - now <= 50000000,
+              "GL failure delay stays future and within Guest clamp");
+        now = deadline;
+    }
+    Check(backoff.Fail(now, 8000000) - now == 50000000, "persistent failure is capped at 20 Hz");
+    backoff.Reset();
+    Check(backoff.PendingDeadline(now) == 0, "success or new target clears GL retry state");
+    Check(backoff.Fail(now, 0) - now == winehua::kDefaultPresentFramePeriodNs,
+          "missing GL period cannot disable failure pacing");
+    Check(backoff.Fail(UINT64_MAX - 2, 8000000) == UINT64_MAX,
+          "GL failure deadline saturates without wraparound");
     Check(winehua::NormalizePresentFramePeriodNs(0) ==
               winehua::kDefaultPresentFramePeriodNs,
           "zero display period uses the common default");

@@ -70,6 +70,31 @@ inline uint64_t RetryPresentDeadlineNs(uint64_t nowNs,
     return SaturatingDeadlineNs(nowNs, periodNs);
 }
 
+// EGL cannot reliably distinguish a full, temporarily unconsumed NativeImage
+// queue from allocation failure. Keep the failure visible, but do not let it
+// erase pacing and turn a hidden surface into an unbounded producer loop.
+// 50 ms is also the existing Guest vtest deadline clamp; no protocol change.
+class GlPresentFailureBackoff {
+public:
+    uint64_t Fail(uint64_t nowNs, uint64_t periodNs)
+    {
+        if (failures_ < 5) ++failures_;
+        const uint64_t base = NormalizePresentFramePeriodNs(periodNs);
+        const uint64_t delay = std::min<uint64_t>(50000000, base << (failures_ - 1));
+        deadlineNs_ = SaturatingDeadlineNs(nowNs, delay);
+        return deadlineNs_;
+    }
+    uint64_t PendingDeadline(uint64_t nowNs) const
+    {
+        return deadlineNs_ > nowNs ? deadlineNs_ : 0;
+    }
+    void Reset() { failures_ = 0; deadlineNs_ = 0; }
+
+private:
+    uint32_t failures_ = 0;
+    uint64_t deadlineNs_ = 0;
+};
+
 inline bool DirectPresentUsesGuestDeadline(uint64_t framesPresented)
 {
     return framesPresented >= kDirectPresentWarmupFrames;
