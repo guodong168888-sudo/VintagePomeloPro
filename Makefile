@@ -473,6 +473,10 @@ test-performance-hud:
 	$(HOST_TEST_DIR)/performance_monitor_test
 	node $(SCRIPTS)/test_performance_hud.cjs
 
+.PHONY: test-bottom-navigation
+test-bottom-navigation:
+	node $(SCRIPTS)/test_bottom_navigation.cjs
+
 # ============================================================
 # clean
 # ============================================================

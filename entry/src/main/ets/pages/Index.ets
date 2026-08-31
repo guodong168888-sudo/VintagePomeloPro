@@ -9,6 +9,7 @@ import { AppSearchBar } from '../components/SearchBar';
 import { AppCard } from '../components/AppCard';
 import { FileBrowserView } from '../components/FileBrowserView';
 import { BreakpointSystem, BreakpointType } from '../common/BreakpointSystem';
+import { bottomNavigationLayout } from '../model/BottomNavigationLayout';
 import {
   AppDescriptor,
   AppSource,
@@ -1210,8 +1211,7 @@ struct Index {
   }
 
   private phoneBottomInset(): number {
-    if (this.isPhoneLandscape()) return 72;
-    return this.isNarrowPhone() ? 80 : 84;
+    return bottomNavigationLayout(this.isPhoneLandscape(), this.navBarInsetVp).contentInset;
   }
 
   @Builder
@@ -1545,7 +1545,7 @@ struct Index {
 
   @Builder
   private PhoneNavigationTab(label: string, icon: Resource, index: number) {
-    Column({ space: 1 }) {
+    Column({ space: 2 }) {
       SymbolGlyph(icon)
         .fontSize(20)
         .fontColor([this.phoneNavIndex === index ? $r('app.color.accent') : $r('app.color.text_secondary')])
@@ -1556,10 +1556,9 @@ struct Index {
         .maxLines(1)
     }
     .width('100%')
-    // Keep the custom content within the compact HDS tab slot. The previous
-    // 64vp slot became a 224px bar on the tablet density and made the bottom
-    // navigation look vertically misaligned.
-    .height(48)
+    // HDS owns the padded inner slot (barHeight minus 8vp on the tested SDK).
+    // A fixed bar-sized child overflows that slot and shifts the content down.
+    .height('100%')
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
     .id('library-nav-tab-' + index)
@@ -1589,14 +1588,14 @@ struct Index {
       this.PhoneNavigationContents()
     }
     .vertical(false)
-    .barHeight(48)
+    .barHeight(bottomNavigationLayout(this.isPhoneLandscape(), this.navBarInsetVp).barHeight)
     .scrollable(false)
     .barOverlap(true)
     .divider({ mode: DividerMode.FOLLOW_SCROLL })
     .barBackgroundBlurStyle(BlurStyle.COMPONENT_THICK)
     .barFloatingStyle({
-      barBottomMargin: Math.max(this.isPhoneLandscape() ? 10 : 14, this.navBarInsetVp),
-      barSideMargin: this.isPhoneLandscape() ? 24 : 20,
+      barBottomMargin: bottomNavigationLayout(this.isPhoneLandscape(), this.navBarInsetVp).bottomMargin,
+      barSideMargin: bottomNavigationLayout(this.isPhoneLandscape(), this.navBarInsetVp).sideMargin,
       gradientMask: { maskColor: $r('app.color.page_background') },
       systemMaterialEffect: {
         materialType: hdsMaterial.MaterialType.ADAPTIVE,
@@ -1612,7 +1611,7 @@ struct Index {
       this.selectFilter(target, false);
     })
     .width('100%')
-    .height(this.isPhoneLandscape() ? 72 : 80)
+    .height(bottomNavigationLayout(this.isPhoneLandscape(), this.navBarInsetVp).containerHeight)
     .id('library-bottom-bar')
     .visibility(this.libraryChromeVisible() ? Visibility.Visible : Visibility.None)
   }
