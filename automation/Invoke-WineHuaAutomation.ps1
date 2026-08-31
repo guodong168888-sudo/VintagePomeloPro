@@ -1,3 +1,4 @@
+#requires -Version 7.0
 [CmdletBinding()]
 param(
     [ValidateSet('core', 'audio', 'opengl', 'd3d8', 'd3d9', 'host-vulkan', 'host-heaven', 'host-heaven-material-depth', 'host-heaven-inputs', 'venus', 'venus-sampled', 'venus-sampled-idle', 'venus-depth-cube', 'venus-depth-cube-array-2d-golden', 'venus-depth-cube-graphics', 'venus-heaven-material', 'venus-heaven-material-depth', 'venus-heaven-captured', 'venus-heaven-inputs', 'venus-heaven-captured-ab', 'venus-heaven-discard-ab', 'venus-heaven-material-layout', 'venus-heaven-draw0', 'venus-heaven-draw170', 'venus-heaven-f647', 'capabilities', 'wine-vulkan', 'wine-vulkan-present', 'dxvk', 'dxvk-long', 'dxvk-replay', 'dxvk-layout-general', 'dxvk-combined', 'dxvk-dynamic', 'all', 'long')]
@@ -5,30 +6,50 @@ param(
     [ValidateSet('reuse', 'clean')]
     [string]$Prefix = 'reuse',
     [ValidateNotNullOrEmpty()]
+    [ValidatePattern('^[a-z0-9-]+$')]
     [string]$GraphicsExperiment = 'observe-product-summary',
     [int]$Runs = 1,
     [ValidateRange(60, 3600)]
     [int]$LongSeconds = 3600,
     [switch]$Gate,
     [switch]$SkipBuild,
+    [switch]$SkipInstall,
+    [switch]$PreflightOnly,
+    [string]$HapPath = '',
+    [string]$ExpectedHapSha256 = '',
+    [string]$RepoWsl = '',
+    [string]$Container = 'vp-build',
+    [string]$WslDistro = 'Ubuntu',
     [switch]$BatchMappedFlush,
     [string]$DeviceId = '',
     [string]$ReplayFragmentSpv = '',
     [string]$ReplayVertexSpv = '',
-    [string]$ArchiveRoot = 'D:\MyProject\winehua-logs\automation',
+    [string]$ArchiveRoot = '',
     [int]$TimeoutMinutes = 15
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'AutomationPreflight.ps1')
 $batchMappedFlushOverrideRequested = $PSBoundParameters.ContainsKey('BatchMappedFlush')
-$RepoWsl = '/home/maple/Work/WineHua-build'
-$Container = 'winehua-master-ext4'
+Assert-AutomationOptions -SkipBuild $SkipBuild -SkipInstall $SkipInstall -HapPath $HapPath `
+    -ExpectedHapSha256 $ExpectedHapSha256 -BatchOverrideRequested $batchMappedFlushOverrideRequested `
+    -BatchMappedFlush $BatchMappedFlush
+$SourceRepo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$product = Get-Content -Raw -LiteralPath (Join-Path $SourceRepo 'AppScope/app.json5') | ConvertFrom-Json
 $ContainerRepo = '/data/src/winehua'
-$Bundle = 'app.hackeris.winehua'
+$Bundle = [string]$product.app.bundleName
+if ($Bundle -notmatch '^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$') { throw 'Invalid product bundle name' }
+if (-not $ArchiveRoot) { $ArchiveRoot = Join-Path $SourceRepo '.hvigor/outputs/automation' }
 $Ability = 'EntryAbility'
 $Hdc = 'C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe'
 $HapWsl = "$RepoWsl/entry/build/default/outputs/default/entry-default-signed.hap"
-$HapWindows = '\\wsl.localhost\Ubuntu\home\maple\Work\WineHua-build\entry\build\default\outputs\default\entry-default-signed.hap'
+$HapWindows = $HapPath
+if (-not $SkipBuild) {
+    if ($RepoWsl -notmatch '^/(home|opt|srv)/[A-Za-z0-9_./-]+$' -or $RepoWsl -match '/\.\.?(/|$)') {
+        throw 'Building requires an explicit ext4 -RepoWsl path; no Windows mount or implicit clone'
+    }
+    $HapWindows = "\\wsl.localhost\$WslDistro$($HapWsl.Replace('/', '\'))"
+}
 $DeviceSandbox = "/data/app/el2/100/base/$Bundle"
 
 function Invoke-NativeChecked {
@@ -38,12 +59,36 @@ function Invoke-NativeChecked {
 }
 
 function Invoke-Hdc {
-    & $Hdc -t $script:DeviceId @args
+    $output = @(& $Hdc -t $script:DeviceId @args)
+    # HDC can print [Fail] while returning exit code zero after USB loss.
+    # Never mistake an empty process list from that failure for successful stop.
+    if ($LASTEXITCODE -ne 0 -or @($output | Where-Object { $_ -match '^\[Fail\]' }).Count) {
+        throw 'HDC request failed; check the selected target connection'
+    }
+    return $output
+}
+
+function Stop-AutomationApp {
+    Invoke-Hdc shell aa force-stop $Bundle | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not stop the previous application session' }
+    for ($attempt = 0; $attempt -lt 25; ++$attempt) {
+        $processes = @(Invoke-Hdc shell ps -A -o PID,PPID,NAME)
+        if ($LASTEXITCODE -ne 0) { throw 'Could not verify application process-tree shutdown' }
+        if (@($processes | Where-Object { $_ -match [regex]::Escape($Bundle) }).Count -eq 0) {
+            Start-Sleep -Milliseconds 300
+            return
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    throw 'Previous application/native child session did not stop; refusing an overlapping run'
 }
 
 function Get-DeviceText {
     param([string]$RemotePath)
     $text = & $Hdc -t $script:DeviceId shell cat $RemotePath 2>$null
+    if (@($text | Where-Object { $_ -match '^\[Fail\]|Permission denied' }).Count) {
+        throw 'HDC result read failed: target disconnected or result path inaccessible'
+    }
     if ($LASTEXITCODE -ne 0) { return '' }
     $joined = ($text -join "`n").Trim()
     $start = $joined.IndexOf('{')
@@ -346,39 +391,48 @@ function Capture-D3D11Frame {
 }
 
 function Assert-BuildEnvironment {
-    $mountsText = wsl -d Ubuntu -- docker inspect $Container --format '{{json .Mounts}}'
+    $mountsText = wsl -d $WslDistro -- docker inspect $Container --format '{{json .Mounts}}'
     if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect build container' }
     $mounts = $mountsText | ConvertFrom-Json
-    $source = $mounts | Where-Object { $_.Destination -eq $ContainerRepo -and $_.Source -eq $RepoWsl -and $_.RW }
-    $sdk = $mounts | Where-Object { $_.Destination -eq '/apps/harmony' -and -not $_.RW }
-    if (-not $source -or -not $sdk -or $mounts.Count -ne 2) {
-        throw 'winehua-master-ext4 mounts do not match the isolated build contract'
-    }
+    # The existing vp-build image can contain its SDK; a read-only SDK bind is
+    # also supported. Never recreate a container just to match an old layout.
+    Assert-AutomationMounts -Mounts @($mounts) -RepoWsl $RepoWsl -ContainerRepo $ContainerRepo
 }
 
 function Invoke-Build {
     param([string]$LogPath)
     Assert-BuildEnvironment
-    wsl -d Ubuntu -- docker start $Container | Out-Null
-    $output = & wsl -d Ubuntu -- docker exec $Container bash -lc "cd $ContainerRepo && make NATIVE_ARCH=arm64-v8a" 2>&1
+    wsl -d $WslDistro -- docker start $Container | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to start the existing build container' }
+    wsl -d $WslDistro -- docker exec $Container test -x /apps/harmony/sdk/default/openharmony/native/llvm/bin/clang
+    if ($LASTEXITCODE -ne 0) { throw 'Existing container has no usable Harmony SDK' }
+    $script:BuildStartedUtc = [DateTime]::UtcNow
+    $output = & wsl -d $WslDistro -- docker exec -w $ContainerRepo $Container make hap NATIVE_ARCH=arm64-v8a 2>&1
     $exitCode = $LASTEXITCODE
     $redacted = $output | ForEach-Object {
         $_ -replace '(-keyPwd\s+)\S+', '$1<redacted>' -replace '(-keystorePwd\s+)\S+', '$1<redacted>'
     }
     $redacted | Set-Content -LiteralPath $LogPath -Encoding UTF8
     if ($exitCode -ne 0) { throw "Docker build failed; see $LogPath" }
+    if ((Get-Item -LiteralPath $HapWindows).LastWriteTimeUtc -lt $script:BuildStartedUtc) {
+        throw 'Build did not produce a fresh signed HAP; refusing the older artifact'
+    }
 }
 
 function Get-ArtifactMetadata {
     param([string]$OutputDirectory)
-    $stat = wsl -d Ubuntu -- stat -c '%y %s' $HapWsl
+    $stat = wsl -d $WslDistro -- stat -c '%y %s' $HapWsl
     if ($LASTEXITCODE -ne 0) { throw 'Signed HAP does not exist' }
-    $hapHash = ((wsl -d Ubuntu -- sha256sum $HapWsl) -split '\s+')[0]
-    $rawHash = ((wsl -d Ubuntu -- sha256sum "$RepoWsl/entry/src/main/resources/rawfile/wine-data.zip") -split '\s+')[0]
-    $embeddedHash = ((wsl -d Ubuntu -- bash -lc "unzip -p '$HapWsl' resources/rawfile/wine-data.zip | sha256sum") -split '\s+')[0]
+    $hapHash = ((wsl -d $WslDistro -- sha256sum $HapWsl) -split '\s+')[0]
+    if ($LASTEXITCODE -ne 0 -or $hapHash -notmatch '^[0-9a-f]{64}$') { throw 'Could not hash the built HAP' }
+    $identity = Get-ReferenceHapMetadata -HapPath $HapWindows -ExpectedHapSha256 $hapHash -Bundle $Bundle
+    $rawHash = ((wsl -d $WslDistro -- sha256sum "$RepoWsl/entry/src/main/resources/rawfile/wine-data.zip") -split '\s+')[0]
+    if ($LASTEXITCODE -ne 0 -or $rawHash -notmatch '^[0-9a-f]{64}$') { throw 'Could not hash the assembled runtime' }
+    $embeddedHash = $identity.rawfileSha256
     if ($rawHash -ne $embeddedHash) { throw 'HAP embedded wine-data.zip hash does not match assembled payload' }
 
-    $smokeList = wsl -d Ubuntu -- unzip -l "$RepoWsl/entry/src/main/resources/rawfile/wine-data.zip"
+    $smokeList = wsl -d $WslDistro -- unzip -l "$RepoWsl/entry/src/main/resources/rawfile/wine-data.zip"
+    if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the assembled runtime archive' }
     foreach ($required in @('smoke/manifest.json', 'smoke/x64/winehua_audio_smoke.exe',
         'smoke/x86/winehua_audio_smoke.exe', 'smoke/x64/winehua_graphics_smoke.exe',
         'smoke/x86/winehua_graphics_smoke.exe', 'smoke/x64/winehua_vulkan_smoke.exe',
@@ -395,21 +449,25 @@ function Get-ArtifactMetadata {
         if (-not ($smokeList -match [regex]::Escape($required))) { throw "Payload missing $required" }
     }
 
-    $guestArch = wsl -d Ubuntu -- bash -lc "unzip -p '$RepoWsl/entry/src/main/resources/rawfile/wine-data.zip' bin/guest_gfx/lib/libEGL.so.1 | file -"
-    $hostArch = wsl -d Ubuntu -- bash -lc "unzip -p '$HapWsl' libs/arm64-v8a/libentry.so | file -"
+    $guestArch = wsl -d $WslDistro -- bash -lc "unzip -p '$RepoWsl/entry/src/main/resources/rawfile/wine-data.zip' bin/guest_gfx/lib/libEGL.so.1 | file -"
+    $hostArch = $identity.hostArchitecture
     if ($guestArch -notmatch 'x86-64') { throw "Guest EGL architecture invalid: $guestArch" }
-    if ($hostArch -notmatch 'ARM aarch64') { throw "Host libentry architecture invalid: $hostArch" }
 
-    $mainCommit = wsl -d Ubuntu -- git -C $RepoWsl rev-parse HEAD
-    $submodules = wsl -d Ubuntu -- git -C $RepoWsl submodule status --recursive
-    $dirty = wsl -d Ubuntu -- git -C $RepoWsl status --short
+    $mainCommit = wsl -d $WslDistro -- git -C $RepoWsl rev-parse HEAD
+    $submodules = wsl -d $WslDistro -- git -C $RepoWsl submodule status --recursive
+    $dirty = wsl -d $WslDistro -- git -C $RepoWsl status --short
     $metadata = [ordered]@{
         schemaVersion = 1
         hap = $HapWsl
         hapTimestampAndSize = $stat
         hapSha256 = $hapHash
         rawfileSha256 = $rawHash
-        mainCommit = $mainCommit
+        buildMirrorCommit = $mainCommit
+        bundle = $identity.bundle
+        versionName = $identity.versionName
+        versionCode = $identity.versionCode
+        minAPIVersion = $identity.minAPIVersion
+        targetAPIVersion = $identity.targetAPIVersion
         submodules = @($submodules)
         dirtySummary = @($dirty)
         guestArchitecture = $guestArch
@@ -531,11 +589,12 @@ function Invoke-OneRun {
     $remotePrefix = if ($RunPrefix -eq 'clean') { '.wine-smoke' } else { '.wine' }
     $remoteResults = "$DeviceSandbox/files/$remotePrefix/drive_c/smoke/results/$RunId"
 
-    Invoke-Hdc shell aa force-stop $Bundle | Out-Null
+    Stop-AutomationApp
     # HDC shell cannot remove application-owned sandbox files. EntryAbility
     # performs and verifies the clean-prefix reset under the App UID before
     # starting Wayland, wineserver or Wine.
     Invoke-Hdc shell 'power-shell wakeup' | Out-Null
+    Invoke-Hdc shell 'power-shell timeout -o 2147483647' | Out-Null
     Invoke-Hdc shell 'hilog -x' | Out-Null
     $batchMappedFlushArgument = if ($batchMappedFlushOverrideRequested) {
         $batchMappedFlushValue = if ($BatchMappedFlush) { '1' } else { '0' }
@@ -653,7 +712,9 @@ function Invoke-OneRun {
         $captured['host-vulkan'] = $false
     }
 
-    (& $Hdc -t $script:DeviceId shell 'hilog -z 10000 -t app') | Set-Content -LiteralPath (Join-Path $runDirectory 'hilog.txt') -Encoding UTF8
+    (& $Hdc -t $script:DeviceId shell 'hilog -z 10000 -t app') |
+        Where-Object { $_ -match [regex]::Escape($Bundle) -and $_ -notmatch '__env|entryParams=' } |
+        Set-Content -LiteralPath (Join-Path $runDirectory 'hilog.txt') -Encoding UTF8
     Save-DeviceFile "$DeviceSandbox/temp/wine_stderr_$(Get-Date -Format yyyyMMdd).log" (Join-Path $runDirectory 'wine-stderr.log')
     Save-DeviceFile "$DeviceSandbox/cache/winehua_virgl_host.log" (Join-Path $runDirectory 'virgl-host.log')
     Save-DeviceFile "$DeviceSandbox/temp/winehua_vtest_frontbuffer.log" (Join-Path $runDirectory 'vtest-frontbuffer.log')
@@ -687,7 +748,8 @@ function Invoke-OneRun {
         suite = $RunSuite
         prefix = $RunPrefix
         graphicsExperiment = $GraphicsExperiment
-        batchMappedFlush = [bool]$BatchMappedFlush
+        batchMappedFlush = if ($batchMappedFlushOverrideRequested) { [bool]$BatchMappedFlush } else { $null }
+        batchMappedFlushPolicy = if ($batchMappedFlushOverrideRequested) { 'explicit-on' } else { 'product-default-on' }
         appStatus = $summary.status
         visualStatus = if ($visualPass) { 'PASS' } else { 'FAIL' }
         coverageStatus = if ($null -eq $coverage) { 'NOT_APPLICABLE' } else { $coverage.status }
@@ -702,39 +764,57 @@ function Invoke-OneRun {
     return $hostSummary.status -eq 'PASS'
 }
 
-if (-not (Test-Path -LiteralPath $Hdc)) { throw "Windows HDC not found: $Hdc" }
-if (-not (Test-Path -LiteralPath $HapWindows) -and $SkipBuild) { throw 'Signed HAP missing while -SkipBuild was requested' }
 if ($Runs -lt 1) { throw '-Runs must be at least 1' }
+$referenceArtifact = if ($SkipBuild) {
+    Get-ReferenceHapMetadata -HapPath $HapWindows -ExpectedHapSha256 $ExpectedHapSha256 -Bundle $Bundle
+} else { $null }
+if ($PreflightOnly) {
+    if (-not $SkipBuild) { Assert-BuildEnvironment }
+    [ordered]@{ bundle = $Bundle; build = -not $SkipBuild; install = -not $SkipInstall
+        artifact = $referenceArtifact; archiveRoot = $ArchiveRoot } | ConvertTo-Json -Depth 6
+    return
+}
+if (-not (Test-Path -LiteralPath $Hdc)) { throw "Windows HDC not found: $Hdc" }
 
 if (-not $DeviceId) {
-    $targets = @(& $Hdc list targets | ForEach-Object { "$($_)".Trim() } |
-        Where-Object { $_ -and $_ -notmatch '^\[' })
-    # Prefer a physical target when HDC also exposes the local forwarding/emulator
-    # target. An ARM64 HAP is intentionally rejected by the x86 localhost target.
-    $physicalTargets = @($targets | Where-Object {
-        $_ -notmatch '^(127\.0\.0\.1|localhost)(:|$)'
-    })
-    $DeviceId = if ($physicalTargets.Count -gt 0) {
-        $physicalTargets[0]
-    } elseif ($targets.Count -gt 0) {
-        $targets[0]
-    } else {
-        ''
-    }
+    $DeviceId = Select-AutomationDevice -Targets @(& $Hdc list targets)
 }
 if (-not $DeviceId) { throw 'No HDC device is connected' }
 $script:DeviceId = $DeviceId
+$deviceAbi = ((Invoke-Hdc shell param get const.product.cpu.abilist) -join '').Trim()
+if ($deviceAbi -notmatch 'arm64-v8a') { throw 'This runner requires a physical ARM64 target' }
+$deviceApi = ((Invoke-Hdc shell param get const.ohos.apiversion) -join '').Trim()
+if ($deviceApi -notmatch '^\d+$' -or [int]$deviceApi -lt 23) { throw 'Device must expose API 23 or newer' }
+if ($SkipInstall) {
+    $bundleDump = (Invoke-Hdc shell bm dump -n $Bundle) -join "`n"
+    $installed = Get-InstalledBundleVersion $bundleDump
+    if ($installed.versionCode -ne $referenceArtifact.versionCode -or
+        $installed.versionName -ne $referenceArtifact.versionName) {
+        throw 'Installed product version does not match the reference HAP'
+    }
+}
 
 $sessionId = "phase2-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 $sessionDirectory = Join-Path $ArchiveRoot $sessionId
 New-Item -ItemType Directory -Force -Path $sessionDirectory | Out-Null
 
 if (-not $SkipBuild) { Invoke-Build -LogPath (Join-Path $sessionDirectory 'build.log') }
-$artifact = Get-ArtifactMetadata -OutputDirectory $sessionDirectory
-$installOutput = & $Hdc -t $DeviceId install -r $HapWindows 2>&1
-$installOutput | Set-Content -LiteralPath (Join-Path $sessionDirectory 'install.log') -Encoding UTF8
-if ($LASTEXITCODE -ne 0 -or ($installOutput -join "`n") -notmatch 'install bundle successfully') {
-    throw 'HAP overwrite install did not report install bundle successfully'
+$artifact = if ($SkipBuild) { $referenceArtifact } else { Get-ArtifactMetadata -OutputDirectory $sessionDirectory }
+$artifact.installation = if ($SkipInstall) { 'reused-installed-package-unverified-reference' } else { 'overwrite-install-pending' }
+$artifact | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $sessionDirectory 'artifact.json') -Encoding UTF8
+if (-not $SkipInstall) {
+    if ((Get-FileHash -LiteralPath $HapWindows -Algorithm SHA256).Hash.ToLowerInvariant() -ne $artifact.hapSha256) {
+        throw 'HAP changed after validation; refusing installation'
+    }
+    $installOutput = & $Hdc -t $DeviceId install -r $HapWindows 2>&1
+    $installOutput | Set-Content -LiteralPath (Join-Path $sessionDirectory 'install.log') -Encoding UTF8
+    if ($LASTEXITCODE -ne 0 -or ($installOutput -join "`n") -notmatch 'install bundle successfully') {
+        throw 'HAP overwrite install did not report install bundle successfully'
+    }
+    $artifact.installation = 'overwrite-installed-this-run'
+    $artifact | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $sessionDirectory 'artifact.json') -Encoding UTF8
+} else {
+    Write-Warning 'Testing the installed package without replacement. Reference HAP hash is not proof of installed bytes or extracted runtime state.'
 }
 
 if ($Suite -in @('venus-heaven-material', 'venus-heaven-material-layout')) {
@@ -804,7 +884,12 @@ foreach ($entry in $matrix) {
         # normal Tablet desktop.  Stop only our test app after all result and
         # screenshot collection for this run has completed; the next run (or a
         # normal user launch) will then start from the correct mode boundary.
-        Invoke-Hdc shell aa force-stop $Bundle | Out-Null
+        try { Stop-AutomationApp } catch {
+            # A disconnected device must not mask the original run failure or
+            # prevent the session summary from recording incomplete cleanup.
+            $passed = $false
+            $_ | Out-String | Set-Content -LiteralPath (Join-Path $sessionDirectory "$runId-cleanup-error.txt") -Encoding UTF8
+        }
     }
     $runRecords += [ordered]@{ runId = $runId; suite = $runSuite; prefix = $runPrefix; passed = $passed }
     if (-not $passed) { $allPassed = $false }
@@ -821,10 +906,10 @@ if ($Suite -eq 'capabilities') {
 }
 
 [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     sessionId = $sessionId
-    deviceId = $DeviceId
-    hapSha256 = $artifact.hapSha256
+    referenceHapSha256 = $artifact.hapSha256
+    installation = $artifact.installation
     gate = [bool]$Gate
     graphicsExperiment = $GraphicsExperiment
     batchMappedFlush = if ($batchMappedFlushOverrideRequested) { [bool]$BatchMappedFlush } else { $null }

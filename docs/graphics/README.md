@@ -11,8 +11,9 @@
 - Legacy/Modern 的 `batchMappedFlush` 保持产品开启策略，不跑 off 对照。
 - 性能监控在系统设置中独立分区，采用小字号顶部横条；指标含义、
   采样边界和测试入口见 [performance-hud.md](performance-hud.md)。
-- 局内低帧率仍在定位；原 FP 采样不能直接作函数热点结论，新 DWARF 短采样、
-  数据可信度检查和下一轮对照见 [war3-gameplay-cpu-investigation.md](war3-gameplay-cpu-investigation.md)。
+- War3 局内低帧已定位到 D3D8 全帧读回成本，但不是完整归因。游戏自身 GL
+  短测有提速迹象（用户约 +10 FPS），视角/温度不一致且有一次 0x505 丢帧，
+  未通过严格验收；[实测与暂放边界](war3-gameplay-cpu-investigation.md)单独记录。
 - Host/Guest 阶段计时已分项提交，确认 War3 每帧还有完整 RGB565 纹理下载。
   [短包 I/O 候选](guest-busy-io-candidate.md)降低了部分查询 CPU 开销，但未证明
   FPS 改善，不进入默认路径；[Guest 诊断与回退](guest-stage-timing-diagnostic.md)
@@ -58,6 +59,11 @@
    菜单稳定不代表局内瓶颈解决。已完成稳定修复与性能候选分开评审。
 4. 保留既有内容寻址构建校验和原容器增量构建。GPU 能力门控去重、
    Host 同步/上传、scanout 去拷贝、PC/x86_64 完整设备矩阵与 D3D12 专项后置。
+5. 公共测试入口已支持显式 HAP 哈希、只读预检和跳过安装，去除旧工程包名/
+   路径假设；使用方法与范围见 [automation/README.md](../../automation/README.md)。
+   EGL 基线偶发 0x505 丢帧仍是共同稳定性未完成项，不因局内均值增加而关闭。
+   18:31 的 core/reuse 已启动，但设备断连导致无结果超时；GL/音频回归仍待
+   重连补测，测试会话退出与正常启动模式恢复也需确认。
 
 ## 本地校验
 
