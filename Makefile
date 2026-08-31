@@ -408,6 +408,9 @@ graphics-contract-check:
 .PHONY: test
 test: graphics-contract-check
 	@mkdir -p $(HOST_TEST_DIR)
+	g++ -std=c++17 -Wall -Wextra -Werror -I $(ROOT)/entry/src/main/cpp \
+	    -o $(HOST_TEST_DIR)/present_timing_test $(ROOT)/host_tests/present_timing_test.cpp
+	$(HOST_TEST_DIR)/present_timing_test
 	g++ -std=c++17 -Wall -Wextra -I $(ROOT)/entry/src/main/cpp \
 	    -o $(HOST_TEST_DIR)/geometry_test \
 	    $(ROOT)/host_tests/geometry_test.cpp \

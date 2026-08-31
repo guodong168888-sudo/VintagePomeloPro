@@ -3,6 +3,7 @@
 #include "native_window_lease.h"
 #include "present_pacing.h"
 #include "present_policy.h"
+#include "present_timing.h"
 
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
@@ -77,6 +78,7 @@ public:
         timestampFailures_ = 0;
         throttled_ = 0;
         lastPresentNs_ = 0;
+        timing_.Reset();
         policy_ = winehua::ReadPresenterRuntimePolicyFromEnvironment();
         displayPeriodNs_ = winehua::NormalizePresentFramePeriodNs(framePeriodNs);
         framePeriodNs_ = winehua::PresentPacingPeriodNs(displayPeriodNs_);
@@ -135,6 +137,7 @@ public:
         if (!windowLease_) return -2;
         if (!sourceVisible) return -3;
         const uint64_t nowNs = NowNs();
+        const uint64_t startedUs = nowNs / 1000;
         const winehua::PresentPacingDecision pacing =
             winehua::EvaluatePresentPacing(nowNs, lastPresentNs_, framePeriodNs_);
         if (width_ == width && height_ == height && !pacing.presentNow) {
@@ -163,6 +166,7 @@ public:
         glWaitSync(sourceReady, 0, GL_TIMEOUT_IGNORED);
         glDeleteSync(sourceReady);
 
+        const uint64_t drawStartedUs = policy_.perfSummary ? NowUs() : 0;
         glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
         glDisable(GL_BLEND);
         glDisable(GL_DEPTH_TEST);
@@ -188,9 +192,11 @@ public:
         }
         glDrawArrays(GL_TRIANGLES, 0, 3);
         const GLenum glError = glGetError();
+        const uint64_t publishStartedUs = policy_.perfSummary ? NowUs() : 0;
         const EGLBoolean swapped = glError == GL_NO_ERROR
             ? eglSwapBuffers(display_, surface_) : EGL_FALSE;
         const EGLint eglError = swapped == EGL_TRUE ? EGL_SUCCESS : eglGetError();
+        const uint64_t restoreStartedUs = policy_.perfSummary ? NowUs() : 0;
         const EGLBoolean restored = eglMakeCurrent(
             sourceDisplay, sourceDraw, sourceRead, sourceContext);
 
@@ -208,6 +214,27 @@ public:
 
         lastPresentNs_ = frameTimestamp;
         ++frames_;
+        if (policy_.perfSummary) {
+            const uint64_t endedUs = NowUs();
+            if (timing_.Add(endedUs - startedUs, frameTimestamp,
+                            drawStartedUs - startedUs,
+                            publishStartedUs - drawStartedUs,
+                            restoreStartedUs - publishStartedUs,
+                            endedUs - restoreStartedUs)) {
+                OH_LOG_INFO(LOG_APP,
+                    "[VIRGL-ZC][TIMING] key=%{public}llu frames=%{public}llu "
+                    "transport=egl-window count=120 request_us=%{public}llu "
+                    "draw_us=%{public}llu publish_us=%{public}llu restore_us=%{public}llu "
+                    "cpu_us=%{public}s interval_us=%{public}s",
+                    static_cast<unsigned long long>(surfaceKey_),
+                    static_cast<unsigned long long>(frames_),
+                    static_cast<unsigned long long>(timing_.RequestUs()),
+                    static_cast<unsigned long long>(timing_.DrawUs()),
+                    static_cast<unsigned long long>(timing_.PublishUs()),
+                    static_cast<unsigned long long>(timing_.RestoreUs()),
+                    timing_.CpuCsv().c_str(), timing_.IntervalCsv().c_str());
+            }
+        }
         if (nextPresentDeadlineNs)
             *nextPresentDeadlineNs =
                 winehua::NextPresentDeadlineNs(lastPresentNs_, framePeriodNs_);
@@ -424,6 +451,7 @@ void main() { outColor = texture(uTexture, vTexCoord); }
     uint64_t timestampFailures_ = 0;
     uint64_t throttled_ = 0;
     winehua::PresenterRuntimePolicy policy_;
+    winehua::PresentTimingWindow timing_;
     uint64_t lastPresentNs_ = 0;
     uint64_t displayPeriodNs_ = winehua::kDefaultPresentFramePeriodNs;
     uint64_t framePeriodNs_ = winehua::kDefaultPresentFramePeriodNs;
