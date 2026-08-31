@@ -97,6 +97,8 @@ export const stopHostVulkanProbe: () => boolean;
 export const getHostGpuName: () => string;
 /** Host compositor displayed FPS for the renderer bound to toplevelId (0 = best active). */
 export const getDisplayFps: (toplevelId: number) => number;
+/** Worker-thread procfs counters; JSON schema is CpuSnapshot in PerformanceMetrics.ets. */
+export const readPerformanceCounters: (appCpu: boolean, systemCpu: boolean) => Promise<string>;
 export const setOutputSize: (w: number, h: number) => void;
 export const setDisplayScale: (scale: number) => void;
 export const setDesktopMode: (enabled: boolean) => void;

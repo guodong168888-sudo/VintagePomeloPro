@@ -97,6 +97,30 @@ submission/Box64/GPU load if it dominates. None is established as the cause of
 the reported gameplay bottleneck. Preserve CPU video/UI, popups, SHM freshness
 and the validated input geometry when testing any fast path.
 
+Follow-up **actual-game** capture on the default-off HAP, source `9ca71b8`:
+`war3-gameplay-initial-20260831-130613`, 2,400 frames / 91.1685 seconds,
+26.32 FPS. Presenter CPU P95 was 634 us (P99 816 us); publication intervals
+P95/P99 were 56,536/67,030 us. Source remained 800x600; no CPU readback upload,
+failed swaps, drops or presenter throttling were reported in the captured
+stable windows. Main compositor CPU P95 was approximately 3.3–7.4 ms.
+
+The two busiest Wine threads used approximately 94–97% and 66–68% of a logical
+CPU; VirGL and the main renderer used roughly 11–12% and 6–7%. A 10-second
+user-space CPU-cycle profile collected 5,184 samples without reported loss,
+but guest JIT frames were not symbolized. The reported Box64/libc wrapper
+addresses are **not evidence that those wrappers are the actual hot functions**.
+This points investigation toward Guest execution/draw submission, not simply
+the sub-millisecond presenter tail; it does not yet distinguish game logic,
+WineD3D or Box64 translation overhead.
+
+This was an exploratory cinematic/gameplay scene, not a fixed save/camera
+benchmark. Battery temperature rose from about 40 to 42°C; this is not chip
+temperature and conditions were not controlled. Do not compare it directly to
+the menu or infer a fullscreen speed ratio. Next: fixed save/camera windowed vs
+fullscreen alternating samples, Guest/JIT-aware CPU attribution, and permitted
+GPU counters if obtainable. The [configurable HUD](performance-hud.md) supports
+that diagnosis without adding a second launch environment.
+
 War3 cold starts x3 (intro/menu, fullscreen pointer, minimize/restore); GL x86
 and x64, resize and foreground/background x5 each, then ten continuous minutes;
 Modern DXVK media with CPU UI around it and normal video completion; both

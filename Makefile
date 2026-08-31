@@ -464,6 +464,15 @@ test: graphics-contract-check
 test-gles-direct:
 	bash $(SCRIPTS)/test_gles_direct.sh
 
+.PHONY: test-performance-hud
+test-performance-hud:
+	@mkdir -p $(HOST_TEST_DIR)
+	g++ -std=c++17 -Wall -Wextra -Werror -I $(ROOT)/entry/src/main/cpp \
+	    $(ROOT)/host_tests/performance_monitor_test.cpp $(ROOT)/entry/src/main/cpp/performance_monitor.cpp \
+	    -o $(HOST_TEST_DIR)/performance_monitor_test
+	$(HOST_TEST_DIR)/performance_monitor_test
+	node $(SCRIPTS)/test_performance_hud.cjs
+
 # ============================================================
 # clean
 # ============================================================

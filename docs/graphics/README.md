@@ -9,6 +9,8 @@
 - GLES 候选在英文分支 `refact/gl-optimization` 开发；EGL 仍为默认路径，
   不能将候选代码存在或编译成功视为性能验收完成。
 - Legacy/Modern 的 `batchMappedFlush` 保持产品开启策略，不跑 off 对照。
+- 性能监控在系统设置中独立分区，采用小字号顶部横条；指标含义、
+  采样边界和测试入口见 [performance-hud.md](performance-hud.md)。
 - 最新回退包、测量入口、真机能力门禁与未完成项见
   [gles-direct-validation.md](gles-direct-validation.md)。历史 1.2.8/1.2.9
   记录仅作为历史证据，不再代表当前安装包或设备连接状态。

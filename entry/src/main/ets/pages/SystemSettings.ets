@@ -1,5 +1,7 @@
 /// <reference path="../ohos.systemShare.d.ts" />
 import router from '@ohos.router';
+import { PerformanceHudField, PerformanceHudSettings, hasPerformanceHudContent,
+  normalizePerformanceHud, setPerformanceHudField } from '../model/PerformanceHudSettings';
 import promptAction from '@ohos.promptAction';
 import fs from '@ohos.file.fs';
 import { bundleManager, common, ConfigurationConstant, Want } from '@kit.AbilityKit';
@@ -62,7 +64,7 @@ import {
 
 const DOMAIN = 0x0000;
 
-type SettingsSection = 'display' | 'appearance' | 'input' | 'engine' | 'logs' | 'about';
+type SettingsSection = 'display' | 'appearance' | 'input' | 'engine' | 'performance' | 'logs' | 'about';
 
 /** native extractFontZip 的返回结构 (与 libentry Index.d.ts 保持一致)。 */
 interface FontZipExtractResult {
@@ -571,7 +573,8 @@ struct SystemSettingsPage {
       desktopWindowMode: DesktopWindowMode = this.settings.desktopWindowMode,
       keepScreenOn: boolean = this.settings.keepScreenOn,
       preserveUserDataOnReset: boolean = this.settings.preserveUserDataOnReset,
-      showFpsHud: boolean = this.settings.showFpsHud): void {
+      showFpsHud: boolean = this.settings.showFpsHud,
+      performanceHud: PerformanceHudSettings = this.settings.performanceHud): void {
     const virtualInputChanged = this.settings.virtualInputEnabled !== virtualInputEnabled;
     this.settings = {
       defaultDisplayMode: mode,
@@ -598,7 +601,8 @@ struct SystemSettingsPage {
       outputScale: scale,
       d3dRendererPreference: d3dRendererPreference,
       preserveUserDataOnReset: preserveUserDataOnReset,
-      showFpsHud: showFpsHud
+      showFpsHud: showFpsHud,
+      performanceHud: normalizePerformanceHud(performanceHud)
     };
     GamepadManager.getInstance().setDeadzone(deadzone);
     WineWindowManager.getInstance().setOutputScalePercent(scale);
@@ -655,7 +659,13 @@ struct SystemSettingsPage {
       enabled);
   }
 
-  private updateShowFpsHud(enabled: boolean): void {
+  private updatePerformanceHud(field: PerformanceHudField, enabled: boolean): void {
+    this.updateShowFpsHud(this.settings.showFpsHud,
+      setPerformanceHudField(this.settings.performanceHud, field, enabled));
+  }
+
+  private updateShowFpsHud(enabled: boolean,
+    metrics: PerformanceHudSettings = this.settings.performanceHud): void {
     this.update(this.settings.defaultDisplayMode, this.settings.viewMode,
       this.settings.useGlassEffect, this.settings.usePageBackground,
       this.settings.showVirtualControls, this.settings.autoHideVirtualControls,
@@ -666,7 +676,7 @@ struct SystemSettingsPage {
       this.settings.virtualInputEnabled, this.settings.desktopOrientation,
       this.settings.controlBarPositionX, this.settings.controlBarPositionY,
       this.settings.d3dRendererPreference, this.settings.desktopWindowMode,
-      this.settings.keepScreenOn, this.settings.preserveUserDataOnReset, enabled);
+      this.settings.keepScreenOn, this.settings.preserveUserDataOnReset, enabled, metrics);
   }
 
   /**
@@ -1035,7 +1045,8 @@ struct SystemSettingsPage {
       outputScale: this.settings.outputScale,
       d3dRendererPreference: this.settings.d3dRendererPreference,
       preserveUserDataOnReset: this.settings.preserveUserDataOnReset,
-      showFpsHud: this.settings.showFpsHud
+      showFpsHud: this.settings.showFpsHud,
+      performanceHud: normalizePerformanceHud(this.settings.performanceHud)
     };
     void ThemeSettingsService.getInstance().update(this.settings);
     promptAction.showToast({ message: '兼容性预设已保存，新启动的程序生效' });
@@ -1090,7 +1101,8 @@ struct SystemSettingsPage {
       outputScale: this.settings.outputScale,
       d3dRendererPreference: this.settings.d3dRendererPreference,
       preserveUserDataOnReset: this.settings.preserveUserDataOnReset,
-      showFpsHud: this.settings.showFpsHud
+      showFpsHud: this.settings.showFpsHud,
+      performanceHud: normalizePerformanceHud(this.settings.performanceHud)
     };
     GamepadManager.getInstance().setOutputMode(mode);
     void ThemeSettingsService.getInstance().update(this.settings);
@@ -1354,8 +1366,9 @@ struct SystemSettingsPage {
     if (section === 'appearance') return 1;
     if (section === 'input') return 2;
     if (section === 'engine') return 3;
-    if (section === 'logs') return 4;
-    return 5;
+    if (section === 'performance') return 4;
+    if (section === 'logs') return 5;
+    return 6;
   }
 
   private sectionAt(index: number): SettingsSection {
@@ -1363,7 +1376,8 @@ struct SystemSettingsPage {
     if (index === 1) return 'appearance';
     if (index === 2) return 'input';
     if (index === 3) return 'engine';
-    if (index === 4) return 'logs';
+    if (index === 4) return 'performance';
+    if (index === 5) return 'logs';
     return 'about';
   }
 
@@ -2029,10 +2043,6 @@ struct SystemSettingsPage {
             .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
           Text('更改后需要重启 Wine 引擎；运行中的游戏不会被立即中断。')
             .fontSize(11).fontColor('#C47A20').width('100%')
-          this.SwitchRow('显示 FPS',
-            '在 Wine 画面左上角显示宿主合成帧率，DXVK 与 VirGL 均可看到',
-            this.settings.showFpsHud, (value: boolean): void => this.updateShowFpsHud(value),
-            'engine-show-fps-hud')
 
           Text('Box64 兼容性预设').fontSize(12).fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_secondary')).width('100%')
@@ -2121,6 +2131,43 @@ struct SystemSettingsPage {
         .backgroundBlurStyle(this.settings.useGlassEffect ? BlurStyle.COMPONENT_ULTRA_THICK : BlurStyle.NONE)
         .border({ width: 1, color: this.groupBorderColor() })
         .borderRadius(20)
+      } else if (section === 'performance') {
+        Column({ space: 14 }) {
+          Text('性能监控').fontSize(20).fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.text_primary')).width('100%')
+          Text('在游戏顶部以小字号横条显示，即时生效；不修改图形后端或游戏启动环境。')
+            .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%')
+          this.SwitchRow('显示性能监控', '总开关；关闭后保留各项选择并停止采样',
+            this.settings.showFpsHud, (value: boolean): void => this.updateShowFpsHud(value),
+            'performance-enabled')
+          Column({ space: 10 }) {
+            this.SwitchRow('FPS', '宿主呈现帧率，非游戏引擎内部计数',
+              this.settings.performanceHud.fps,
+              (value: boolean): void => this.updatePerformanceHud('fps', value), 'performance-fps')
+            this.SwitchRow('应用 CPU', '累计 Wine 子进程；100%＝一个逻辑核，200%≈两个核的负载。≥ 表示计数不完整时的下限',
+              this.settings.performanceHud.appCpu,
+              (value: boolean): void => this.updatePerformanceHud('appCpu', value), 'performance-app-cpu')
+            this.SwitchRow('系统 CPU', '整机全部逻辑核的平均占用（0–100%），包含游戏、系统服务及其他应用；采样窗口可能与应用 CPU 不同',
+              this.settings.performanceHud.systemCpu,
+              (value: boolean): void => this.updatePerformanceHud('systemCpu', value), 'performance-system-cpu')
+            this.SwitchRow('电池温度', '系统电池传感器温度（℃），与芯片温度不同',
+              this.settings.performanceHud.batteryTemperature,
+              (value: boolean): void => this.updatePerformanceHud('batteryTemperature', value), 'performance-battery-temperature')
+            this.SwitchRow('热状态', '系统热管理等级，不代表具体温度或已发生降频',
+              this.settings.performanceHud.thermalLevel,
+              (value: boolean): void => this.updatePerformanceHud('thermalLevel', value), 'performance-thermal-level')
+          }.width('100%')
+          if (!hasPerformanceHudContent(this.settings.performanceHud)) {
+            Text('未选择任何指标，监控层将隐藏且不采样。').fontSize(12)
+              .fontColor($r('app.color.text_secondary')).width('100%')
+          }
+          Text('FPS 每 0.5 秒刷新，其余指标每 2 秒采样；进入后台时暂停。尚未取得数值时显示省略号，读取失败的指标自动隐藏。GPU 占用率和芯片温度暂不提供开关。')
+            .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+        }
+        .width('100%').padding(this.cardPadding())
+        .backgroundColor(this.groupSurfaceColor())
+        .backgroundBlurStyle(this.settings.useGlassEffect ? BlurStyle.COMPONENT_ULTRA_THICK : BlurStyle.NONE)
+        .border({ width: 1, color: this.groupBorderColor() }).borderRadius(20)
       } else if (section === 'logs') {
         Column({ space: 14 }) {
           Row({ space: 12 }) {
@@ -2238,6 +2285,7 @@ struct SystemSettingsPage {
       ListItem() { this.Content('appearance') }.width('100%').id('settings-section-appearance')
       ListItem() { this.Content('input') }.width('100%').id('settings-section-input')
       ListItem() { this.Content('engine') }.width('100%').id('settings-section-engine')
+      ListItem() { this.Content('performance') }.width('100%').id('settings-section-performance')
       ListItem() { this.Content('logs') }.width('100%').id('settings-section-logs')
       ListItem() { this.Content('about') }.width('100%').id('settings-section-about')
     }
@@ -2271,6 +2319,7 @@ struct SystemSettingsPage {
               this.SectionButton('外观', 'appearance', $r('sys.symbol.square_grid_2x2'))
               this.SectionButton('输入与手柄', 'input', $r('sys.symbol.list_bullet'))
               this.SectionButton('Wine 引擎', 'engine', $r('sys.symbol.arrow_clockwise'))
+              this.SectionButton('性能监控', 'performance', $r('sys.symbol.list_bullet'))
               this.SectionButton('日志', 'logs', $r('sys.symbol.doc_text'))
               this.SectionButton('关于', 'about', $r('sys.symbol.info_circle'))
             }

@@ -1,96 +1,102 @@
 import testNapi from 'libentry.so';
+import { common } from '@kit.AbilityKit';
 import { GlobalSettings } from '../model/AppModels';
+import { PerformanceHudSettings, hasPerformanceHudContent, normalizePerformanceHud } from '../model/PerformanceHudSettings';
+import { PerformanceListener, PerformanceMonitorService, PerformanceReading } from '../service/PerformanceMonitorService';
 import { ThemeSettingsListener, ThemeSettingsService } from '../service/ThemeSettingsService';
-
-const HUD_INTERVAL_MS: number = 500;
 
 @Component
 export struct FpsHud {
-  /** Renderer toplevel; 0 表示按桌面根 / 当前最高活跃值查询。 */
+  /** 0 selects the desktop root; other values address a managed Wine window. */
   @Prop toplevelId: number = 0;
-  /** 浮窗缩略等场景隐藏，避免小窗挤数字。 */
   @Prop @Watch('onHideChanged') hide: boolean = false;
   @State private hudEnabled: boolean = false;
-  @State private fpsText: string = '0';
-  private timerId: number = -1;
+  @State private metrics: PerformanceHudSettings = normalizePerformanceHud();
+  @State private text: string = '';
+  private appeared: boolean = false;
   private settingsListener: ThemeSettingsListener | null = null;
+  private performanceListener: PerformanceListener | null = null;
 
   aboutToAppear(): void {
-    this.hudEnabled = ThemeSettingsService.getInstance().getSettings().showFpsHud;
-    this.settingsListener = (settings: GlobalSettings): void => {
-      this.hudEnabled = settings.showFpsHud;
-      this.syncTimer();
-    };
+    this.appeared = true;
+    this.applySettings(ThemeSettingsService.getInstance().getSettings());
+    this.settingsListener = (settings: GlobalSettings): void => { this.applySettings(settings); };
     ThemeSettingsService.getInstance().subscribe(this.settingsListener);
-    this.syncTimer();
   }
 
   aboutToDisappear(): void {
-    this.clearTimer();
+    this.appeared = false;
+    this.stopMonitoring();
     if (this.settingsListener) {
       ThemeSettingsService.getInstance().unsubscribe(this.settingsListener);
       this.settingsListener = null;
     }
   }
 
+  private applySettings(settings: GlobalSettings): void {
+    this.hudEnabled = settings.showFpsHud;
+    this.metrics = normalizePerformanceHud(settings.performanceHud);
+    this.onHideChanged();
+  }
+
   onHideChanged(): void {
-    this.syncTimer();
+    this.stopMonitoring();
+    if (!this.appeared || !this.active()) return;
+    this.performanceListener = (reading: PerformanceReading, foreground: boolean): void => {
+      if (!foreground) { this.text = ''; return; }
+      const lines: string[] = [];
+      if (this.metrics.fps) lines.push(this.readFps() + ' FPS');
+      if (this.metrics.appCpu && reading.appCpu !== '不可用') lines.push('应用CPU ' + this.shortValue(reading.appCpu));
+      if (this.metrics.systemCpu && reading.systemCpu !== '不可用') lines.push('系统CPU ' + this.shortValue(reading.systemCpu));
+      if (this.metrics.batteryTemperature && reading.batteryTemperature !== '不可用') {
+        lines.push('电池 ' + this.shortValue(reading.batteryTemperature));
+      }
+      if (this.metrics.thermalLevel && reading.thermalLevel !== '不可用') {
+        lines.push('热 ' + this.shortValue(reading.thermalLevel));
+      }
+      this.text = lines.join('  ·  ');
+    };
+    PerformanceMonitorService.getInstance().subscribe(
+      getContext(this) as common.UIAbilityContext, this.performanceListener, this.metrics);
+  }
+
+  private stopMonitoring(): void {
+    if (this.performanceListener) {
+      PerformanceMonitorService.getInstance().unsubscribe(this.performanceListener);
+      this.performanceListener = null;
+    }
+    this.text = '';
   }
 
   private active(): boolean {
-    return this.hudEnabled && !this.hide;
+    return this.hudEnabled && !this.hide && hasPerformanceHudContent(this.metrics);
   }
 
-  private syncTimer(): void {
-    if (this.active()) {
-      this.refreshFps();
-      if (this.timerId < 0) {
-        this.timerId = setInterval((): void => {
-          this.refreshFps();
-        }, HUD_INTERVAL_MS);
-      }
-    } else {
-      this.clearTimer();
-    }
+  private shortValue(value: string): string {
+    return value === '采样中' ? '…' : value;
   }
 
-  private clearTimer(): void {
-    if (this.timerId >= 0) {
-      clearInterval(this.timerId);
-      this.timerId = -1;
-    }
-  }
-
-  private refreshFps(): void {
-    if (!this.active()) return;
-    let id = this.toplevelId;
-    if (id <= 0) {
-      try {
-        id = testNapi.getDesktopRootId() as number;
-      } catch (_) {
-        id = 0;
-      }
-    }
-    let fps = 0;
+  private readFps(): string {
     try {
-      fps = testNapi.getDisplayFps(id) as number;
-    } catch (_) {
-      fps = 0;
-    }
-    if (!(fps >= 0) || fps > 1000) fps = 0;
-    this.fpsText = Math.round(fps).toString();
+      const id: number = this.toplevelId > 0 ? this.toplevelId : testNapi.getDesktopRootId() as number;
+      const fps: number = testNapi.getDisplayFps(id) as number;
+      return Number.isFinite(fps) && fps >= 0 && fps <= 1000 ? Math.round(fps).toString() : '—';
+    } catch (_) { return '—'; }
   }
 
   build() {
-    if (this.active()) {
-      Text(this.fpsText + ' FPS')
-        .fontSize(14)
+    if (this.active() && this.text.length > 0) {
+      Text(this.text)
+        .fontSize(10)
+        .maxLines(1)
+        .lineHeight(14)
         .fontWeight(FontWeight.Medium)
         .fontColor('#FF76FF03')
-        .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+        .padding({ left: 6, right: 6, top: 2, bottom: 2 })
         .backgroundColor('#99000000')
-        .borderRadius(6)
+        .borderRadius(3)
         .hitTestBehavior(HitTestMode.None)
+        .id('performance-hud')
     }
   }
 }

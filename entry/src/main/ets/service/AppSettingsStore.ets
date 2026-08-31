@@ -1,4 +1,5 @@
 import preferences from '@ohos.data.preferences';
+import { normalizePerformanceHud } from '../model/PerformanceHudSettings';
 import { common } from '@kit.AbilityKit';
 import { DeviceCapabilityPolicy } from '../common/DeviceCapabilityPolicy';
 import {
@@ -149,7 +150,8 @@ export class AppSettingsStore {
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
       preserveUserDataOnReset: current.preserveUserDataOnReset,
-      showFpsHud: current.showFpsHud
+      showFpsHud: current.showFpsHud,
+      performanceHud: normalizePerformanceHud(current.performanceHud)
     };
     await this.store.put(GLOBAL_KEY, JSON.stringify(this.globalSettings));
     await this.store.put(PLATFORM_DEFAULTS_KEY, '1');
@@ -213,7 +215,8 @@ export class AppSettingsStore {
         outputScale: stored.outputScale ?? defaults.outputScale,
         d3dRendererPreference: stored.d3dRendererPreference ?? D3DRendererPreference.DXVK,
         preserveUserDataOnReset: stored.preserveUserDataOnReset ?? defaults.preserveUserDataOnReset,
-        showFpsHud: stored.showFpsHud ?? false
+        showFpsHud: stored.showFpsHud ?? false,
+        performanceHud: normalizePerformanceHud(stored.performanceHud)
       };
     } catch (_) {
       this.globalSettings = createDefaultGlobalSettings();
@@ -293,7 +296,8 @@ export class AppSettingsStore {
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
       preserveUserDataOnReset: current.preserveUserDataOnReset,
-      showFpsHud: current.showFpsHud
+      showFpsHud: current.showFpsHud,
+      performanceHud: normalizePerformanceHud(current.performanceHud)
     });
   }
 
@@ -324,7 +328,8 @@ export class AppSettingsStore {
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
       preserveUserDataOnReset: current.preserveUserDataOnReset,
-      showFpsHud: current.showFpsHud
+      showFpsHud: current.showFpsHud,
+      performanceHud: normalizePerformanceHud(current.performanceHud)
     });
   }
 
@@ -355,7 +360,8 @@ export class AppSettingsStore {
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
       preserveUserDataOnReset: current.preserveUserDataOnReset,
-      showFpsHud: current.showFpsHud
+      showFpsHud: current.showFpsHud,
+      performanceHud: normalizePerformanceHud(current.performanceHud)
     });
   }
 
@@ -387,7 +393,8 @@ export class AppSettingsStore {
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
       preserveUserDataOnReset: current.preserveUserDataOnReset,
-      showFpsHud: current.showFpsHud
+      showFpsHud: current.showFpsHud,
+      performanceHud: normalizePerformanceHud(current.performanceHud)
     });
   }
 
@@ -418,7 +425,8 @@ export class AppSettingsStore {
       outputScale: current.outputScale,
       d3dRendererPreference: current.d3dRendererPreference,
       preserveUserDataOnReset: current.preserveUserDataOnReset,
-      showFpsHud: current.showFpsHud
+      showFpsHud: current.showFpsHud,
+      performanceHud: normalizePerformanceHud(current.performanceHud)
     });
   }
 

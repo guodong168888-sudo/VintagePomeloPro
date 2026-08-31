@@ -48,6 +48,8 @@ add_library(entry SHARED
     broker.cpp
     ncp_dispatch.cpp
     perf_utils.cpp
+    performance_monitor.cpp
+    performance_monitor_napi.cpp
     phone_adapter/phone_process.cpp
     phone_adapter/phone_virgl_relay.cpp
     wayland_server.cpp
@@ -87,6 +89,7 @@ target_compile_options(entry PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/app_lo
 set_source_files_properties(compositor/compositor_blit.cpp PROPERTIES COMPILE_OPTIONS "-O2")
 
 target_link_libraries(entry PUBLIC
+    libohhidebug.so
     libace_napi.z.so
     libace_ndk.z.so
     libnative_window.so

@@ -1,4 +1,5 @@
 import { bindingToEvdevName, evdevNameToBinding } from '../common/EvdevKeyNames';
+import { PerformanceHudSettings, normalizePerformanceHud } from './PerformanceHudSettings';
 export enum AppSource {
   BUILTIN = 'builtin',
   DOWNLOAD = 'download'
@@ -345,8 +346,9 @@ export interface GlobalSettings {
   d3dRendererPreference: D3DRendererPreference;
   /** 重置 Wine prefix 时默认保留文档目录与注册表，只重建沙盒。 */
   preserveUserDataOnReset: boolean;
-  /** 在 Wine 画面上显示宿主 compositor FPS。 */
+  /** Performance HUD master switch; retain the existing preference key. */
   showFpsHud: boolean;
+  performanceHud: PerformanceHudSettings;
 }
 
 export interface RuntimeSession {
@@ -958,7 +960,8 @@ export function createDefaultGlobalSettings(): GlobalSettings {
     outputScale: 100,
     d3dRendererPreference: D3DRendererPreference.DXVK,
     preserveUserDataOnReset: true,
-    showFpsHud: false
+    showFpsHud: false,
+    performanceHud: normalizePerformanceHud()
   };
 }
 

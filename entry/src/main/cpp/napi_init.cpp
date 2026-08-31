@@ -7,6 +7,7 @@
 #include "pointer_extras.h"
 #include "egl_renderer.h"
 #include "fps_counter.h"
+#include "performance_monitor_napi.h"
 #include "audio_broker.h"
 #include "audio_ipc_protocol.h"
 #include "graphics_broker.h"
@@ -1306,6 +1307,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"stopHostVulkanProbe", nullptr, StopHostVulkanProbeNapi, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getHostGpuName", nullptr, GetHostGpuNameNapi, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getDisplayFps", nullptr, GetDisplayFps, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"readPerformanceCounters", nullptr, ReadPerformanceCounters, nullptr, nullptr, nullptr, napi_default, nullptr},
         // surfaceId 驱动的渲染器管理 (XComponentController 回调)
         {"createRenderer",  nullptr, CreateRenderer,  nullptr, nullptr, nullptr, napi_default, nullptr},
         {"resizeRenderer",  nullptr, ResizeRenderer,  nullptr, nullptr, nullptr, napi_default, nullptr},
