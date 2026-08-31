@@ -17,6 +17,9 @@
   [短包 I/O 候选](guest-busy-io-candidate.md)降低了部分查询 CPU 开销，但未证明
   FPS 改善，不进入默认路径；[Guest 诊断与回退](guest-stage-timing-diagnostic.md)
   明确提取库覆盖不能仅靠重装 HAP 清理。
+- [WineD3D 调用探针](wined3d-readback-diagnostic.md)已确认额外下载来自
+  32 位 D3D8 后缓冲的整帧 READONLY LockRect；不能当作无用读回删除。
+  DXVK 2.6 当前没有接管这条 D3D8 路线，后续分开评估原同步链与游戏自身 GL。
 - 最新回退包、测量入口、真机能力门禁与未完成项见
   [gles-direct-validation.md](gles-direct-validation.md)。历史 1.2.8/1.2.9
   记录仅作为历史证据，不再代表当前安装包或设备连接状态。

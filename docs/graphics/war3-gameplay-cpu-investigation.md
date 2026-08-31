@@ -279,6 +279,23 @@ SYSMEM/BUFFER 触发；尚未找到游戏/Wine 的确切上层调用者。因而
 `orc-guest-stage.log`、`orc-host-stage.log`、`v2-gameplay-1718.log` 和
 `v2-host-1718.log`。隔离 Guest 覆盖状态及回退见上述诊断说明。
 
+## 17:40–17:53：定位到 D3D8 后缓冲 LockRect
+
+[WineD3D 隔离探针](wined3d-readback-diagnostic.md)补全了上节缺失的调用来源：
+本次 War3 为 32 位 D3D8，每次 present 前同一后缓冲出现
+READONLY | NOSYSLOCK map；60 次 v2 抽样请求均为完整 800×600，而非小范围锁定。
+前后缓冲尺寸/格式相同。栈可定位到 Wine 的 D3D8 LockRect，尚未解出游戏函数。
+这是正面调用证据，不是从缺少颜色转换日志作出的推断。
+
+17:53 前后兽族基地约 24–26 FPS，主合成仍无 CPU 上传/交换失败。20 次 map
+抽样耗时约 4.9–7.0 ms，但不是完整逐帧覆盖，不能据此给出帧时间 P95。
+额外全帧读回是已确认的成本之一，尚不足以解释所有低帧差距。
+
+产品 DXVK 选择目前仅强制接管 D3D11/DXGI；不能以“选了 2.6”认定 War3
+D3D8 也走 Vulkan。保留 D3D8/VirGL 默认，另用经典 War3 自身 OpenGL 做正常
+入口的临时路径区分实验，比盲目跳过读回更容易验证是否能避开 WineD3D 的开销。
+不增加产品 profile/持久化环境变量，也不把这个游戏特例当作通用重构完成。
+
 ## 下一轮的优先顺序
 
 1. War3 当前入口无法切换窗口/分辨率，不再将它们列为前置条件。固定同一

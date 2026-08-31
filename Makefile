@@ -502,6 +502,14 @@ test-host-stage-timing:
 	    $(ROOT)/host_tests/host_stage_timing_test.c -o $(HOST_TEST_DIR)/host_stage_timing_test
 	$(HOST_TEST_DIR)/host_stage_timing_test
 
+# Isolated WineD3D PE diagnostics; do not stage into the runtime or HAP.
+.PHONY: wined3d-readback test-wined3d-readback-build
+wined3d-readback: test-wined3d-readback-build
+	python3 $(SCRIPTS)/build_wined3d_readback.py
+
+test-wined3d-readback-build:
+	PYTHONDONTWRITEBYTECODE=1 python3 $(ROOT)/host_tests/wined3d_readback_build_test.py
+
 # Explicit Guest timing bridge; no production staging or runtime archive changes.
 .PHONY: guest-stage-timing test-guest-stage-timing
 guest-stage-timing:
