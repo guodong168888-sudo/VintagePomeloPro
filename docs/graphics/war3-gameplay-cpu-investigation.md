@@ -236,6 +236,49 @@ GPU 时间仍未测，游戏主线程高 CPU 也可能包含 Wine 命令队列�
 `v2-host-stages-1642.log`、`v2-resumed-host-1645.log`、`v2-resumed-graphics-1645.log`、
 `v2-lowfps-host-1646.log`、`v2-lowfps-top-1646.log` 及对应游戏截图。
 
+## 16:57–17:18：Guest 查询来源与完整彩色纹理下载
+
+新增 [Guest 诊断桥](guest-stage-timing-diagnostic.md)，只重用原缓存重新链接，
+未更改产品默认路径。以下是不同场景负载下的诊断，不是优化前后对照。
+
+Guest v1：兽族雨中 Thrall 剧情（证据图片误命名为 `menu.jpeg`，实际不是菜单），
+约 13–15 FPS。一个完整窗口 120 帧 / 9.003997 秒 = 13.327 FPS：
+
+- 每帧约 1,012.7 个编码绘制包、80.5 个 transfer 包；没有 query 包或 inline 数据。
+- 非阻塞 busy 检查 74.08 次/帧，wall 3.688 ms/帧；WAIT 三次/帧，wall 9.227 ms/帧。
+- 每帧一次 800×600 下载，960,000 字节；present wall 0.830 ms/帧。
+- `virgl_vtest_resource_is_busy` 调用点贡献 8,160/8,890 次非阻塞检查，
+  全部返回 idle；资源缓存约 604 次、fence wait 约 126 次。
+- 三次 WAIT 的直接调用位置确认是 transfer map 的传输前等待、vtest
+  transfer-get 内部等待，以及 map 的传输后等待。不能仅凭三次就全部删除。
+
+Guest v2：直接测得 `st_GetTexSubImage` 每帧一次，参数为
+`800x600/GL_RGB/GL_UNSIGNED_SHORT_5_6_5`，恰为 800×600×2 字节。
+稳态 `st_ReadPixels` 为零。由此确认是 **RGB565 彩色纹理下载，不是深度缓冲**；
+主合成 `upload_bytes=0` 也不代表整个 Guest 没有资源读回。
+
+17:18 捕获文件最后 20 个完整窗口（同 PID、线程、generation、surface）：
+2,400 帧 / 87.667690 秒 = 27.376 FPS，`end_ns` 范围
+209158766493445–209242137420945。平均每帧 370.70 个绘制包、25.16 次非阻塞
+busy 查询，后者 wall 1.329 ms；WAIT wall 5.782 ms；取纹理 API wall 5.991 ms、
+CPU 0.284 ms；present wall 0.733 ms。API 包含 WAIT，二者不得相加。
+当前游戏主线程短采样约 93%、Guest 图形线程约 63%；没有据此认定主线程全部
+在执行游戏逻辑。所有这些窗口依旧每帧下载 960,000 字节。
+
+源码表明该 GL 下载既可能由 Wine 的 CPU 目标 blit 触发，也可能由纹理加载到
+SYSMEM/BUFFER 触发；尚未找到游戏/Wine 的确切上层调用者。因而不能称为
+“已确认无用下载”，更不能跳过下载后把黑屏/旧帧当性能收益。
+
+目前可区分三部分：绘制工作量明显随场景增长；资源查询跨进程往返可累计数毫秒；
+整张纹理下载带来同步等待。末端 GPU 呈现的 wall 没有同幅增长，不支持优先修改
+全屏缩放或直接关闭同步。接下来先选不改变同步语义的传输优化候选，再继续追
+下载触发源。缓存 idle 结果需要涵盖所有写入/提交、连接重用和跨线程失效规则；
+仅在 submit 时清空 TLS 缓存不够安全，不能直接作为产品改动。
+
+原始证据：`.hvigor/outputs/guest-stage-20260831/` 中的
+`orc-guest-stage.log`、`orc-host-stage.log`、`v2-gameplay-1718.log` 和
+`v2-host-1718.log`。隔离 Guest 覆盖状态及回退见上述诊断说明。
+
 ## 下一轮的优先顺序
 
 1. War3 当前入口无法切换窗口/分辨率，不再将它们列为前置条件。固定同一

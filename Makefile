@@ -502,6 +502,18 @@ test-host-stage-timing:
 	    $(ROOT)/host_tests/host_stage_timing_test.c -o $(HOST_TEST_DIR)/host_stage_timing_test
 	$(HOST_TEST_DIR)/host_stage_timing_test
 
+# Explicit Guest timing bridge; no production staging or runtime archive changes.
+.PHONY: guest-stage-timing test-guest-stage-timing
+guest-stage-timing:
+	python3 $(SCRIPTS)/build_guest_stage_timing.py
+
+test-guest-stage-timing:
+	@mkdir -p $(HOST_TEST_DIR)
+	gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+	    -I $(ROOT)/thirdparty/mesa/src/virtio \
+	    $(ROOT)/host_tests/guest_stage_timing_test.c -ldl -o $(HOST_TEST_DIR)/guest_stage_timing_test
+	$(HOST_TEST_DIR)/guest_stage_timing_test
+
 # ============================================================
 # clean
 # ============================================================
