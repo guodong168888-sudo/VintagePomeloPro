@@ -108,3 +108,25 @@ WineD3D 兼容路线，因此 DXVK 2.6 的 D3D11 改善不能直接应用于这�
 使用 HDC debug bundle 文件传输，核对四个目标的哈希。runtime 和 prefix 均是
 实际文件，不能只还原一组；重新安装 HAP 不保证清理这些覆盖。不要删除前缀
 或存档。完整生产回退还需恢复 [Host 基线 HAP](host-stage-timing-diagnostic.md)。
+
+## 本轮收口：暂停扩大 War3 专项
+
+用户随后明确要求：有明确性能问题且可优化才尝试；若需要归结到架构/CPU，
+则考虑暂放。因此不继续扩大同步改造、CPU 采样或 D3D8→DXVK 路由实验。
+结论是“已定位强制回读成本，但没有已验证的低风险明显收益改动”，
+不是“已证明全部低帧都由 CPU 引起”。游戏进程 CPU 包含 Wine/Mesa/Box64，
+不能等同游戏 AI；GPU 执行时间仍未测。
+
+收口前正常入口的临时 `-opengl` 已启动经典版动态菜单，约 52–60 FPS。
+稳态 Host 每 120 帧 `rpc_get=0`、`driver_finish=120`、presented=120/failed=0；
+初始窗口有 3 次 get 和 1 次 present 失败，未混入稳态。菜单仍有 Host
+`Unhandled input/output semantic: 3` 告警，完整渲染正确性未验收。
+没有同一战役场景的 A/B，不能与 D3D8 局内 24–26 FPS 对比宣称翻倍。
+此项仅保留为将来有具体需求时可恢复的游戏自身 GL 选项，不默认启用。
+
+已还原全部四个 WineD3D DLL，哈希与上节原库一致；Guest Mesa 原库保持不变。
+随后使用已校验的 `hud-nav-baseline-1.3.2-arm64.hap` 覆盖安装成功
+（SHA-256 `64a8fc96ebedda8c28be4234b20f83a9596b56a4157e4e9cafe622ed160fc154`），
+撤掉 Host 诊断 HAP。正常入口重启时 Game argument count=0、无环境实验覆盖，
+`batchMappedFlush` 仍为 product/on。未重建环境、未删除前缀/存档、未修改游戏文件。
+源码诊断能力保留，不进入生产 payload；公共重构和跨后端验收另行收口。
