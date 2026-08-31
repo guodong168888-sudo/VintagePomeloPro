@@ -20,7 +20,8 @@ not a declaration that the optimization roadmap or device gates are complete.
 `automation/Measure-WineHuaGlPerformance.ps1` launches the regular game Want
 using WineD3D and the existing `observe-product-summary` diagnostic policy.
 It does not add a launch environment, product profile or batch-flush override.
-`-Attach` samples an already running, manually checked menu.
+`-Attach` samples an already running, manually checked scene. Record whether it
+is gameplay or a menu; attaching does not validate matching cameras/saves.
 
 Every 120 successful presents, the explicitly enabled summary records bounded
 raw presenter CPU durations, four stage sums, and frame intervals. The parser
@@ -123,10 +124,12 @@ progress, not an FPS gain or a qualified fullscreen/windowed comparison.
 This was an exploratory cinematic/gameplay scene, not a fixed save/camera
 benchmark. Battery temperature rose from about 40 to 42°C; this is not chip
 temperature and conditions were not controlled. Do not compare it directly to
-the menu or infer a fullscreen speed ratio. Next: fixed save/camera windowed vs
-fullscreen alternating samples, Guest/JIT-aware CPU attribution, and permitted
-GPU counters if obtainable. The [configurable HUD](performance-hud.md) supports
-that diagnosis without adding a second launch environment.
+the menu or infer a fullscreen speed ratio. Subsequent bounded work confirmed a
+D3D8 full-backbuffer READONLY map; the game's own OpenGL had a higher observed
+gameplay cadence, but unmatched scenes/temperatures and a 0x505 drop invalidated
+strict qualification. War3 deep optimization is now parked at the user's request;
+see [the final observations](wined3d-readback-diagnostic.md). No further War3
+windowed/resolution or JIT experiment is a prerequisite for public regression.
 
 War3 cold starts x3 (intro/menu, fullscreen pointer, minimize/restore); GL x86
 and x64, resize and foreground/background x5 each, then ten continuous minutes;
@@ -144,3 +147,30 @@ PC/x86_64 host device matrix, D3D12, heavier GPU workloads, longer stability,
 scanout copy elimination, Host upload/sync work and capability-gate cleanup
 remain separate follow-ups. The stable fullscreen fix is independently
 reviewable; this candidate must not delay or imply requalification of it.
+
+## Offline closeout check (2026-08-31, source 9a63eae)
+
+187 tracked Native/Host-test/build-entry files were compared against the existing
+`/home/maple/vp-src` tree, allowing only CRLF/LF differences; no content differences
+were found. The canonical Windows Git contract passed. The mirror's Git metadata
+was not changed: its redundant contract prerequisite was omitted explicitly while
+running the same Host sources in the existing `vp-build` container.
+
+Passed: `make test`, `test-gles-direct`, `test-performance-hud`, and
+`test-bottom-navigation`. This includes geometry (52), compositor state (30),
+scaled blit (402), environment spec (21), environment baseline (103), controller
+merge (11), mapped ranges (27), product policy, timing, GLES target mock/failure
+handling, and actual API 23 declarations for both ARM64 and x86_64 syntax checks.
+It does not constitute new ARM64/x86_64 HAP linkage, visual or hardware acceptance.
+
+Remaining current-batch evidence is unchanged: real core GL/audio after reconnect;
+War3 cold start/input/restore x3; GL 32/64-bit lifecycle x5 and ten minutes; Modern
+video + surrounding CPU UI through completion; both DXVK D3D11 cubes; and bounded
+investigation of the existing EGL 0x505 observation. The 18:31 core session timed out
+after HDC disconnected and cannot satisfy any of those gates. Normal-session
+restoration after that attempt must also be confirmed after reconnect.
+
+GLES Direct remains default-off. Its actual-device matrix and three alternating
+performance pairs additionally require native-buffer import capability; this
+phone did not advertise it. Do not rerun comparisons that are EGL on both sides,
+invent Direct results, or change the batching policy to manufacture a gain.

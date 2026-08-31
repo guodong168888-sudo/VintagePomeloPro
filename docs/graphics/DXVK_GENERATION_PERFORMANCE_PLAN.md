@@ -83,8 +83,8 @@ VirGLRenderer、NativeWindow 与系统合成路径，但会产生不同的命令
   batch-on 平均 38.219 FPS，batch-off 平均 22.194 FPS（+72.20%），六个样本均完成动作契约与
   process-teardown gate。这降低了 batching 为唯一诱因的可能性，但不能替代长时观察。本轮按产品
   决策把 Legacy `batchMappedFlush` 切回默认开启：正常启动与没有显式覆盖的自动化均继承产品高性能
-  capability；`legacy-batch` A/B 改为“产品开启”对“显式临时关闭”，而不是再把开启态作为临时环境
-  override。历史启动 fault 继续记录和归因，但不再以 22 FPS 回退作为常规产品配置。
+  capability。当时 `legacy-batch` 仍有显式关闭控制组；后续用户要求不再跑 off，
+  该入口现已删除。历史启动 fault 与测量记录保留，但不再以 22 FPS 回退作为常规配置。
 
 ### 媒体播放与图形路由：已确认的边界
 
@@ -182,7 +182,11 @@ VirGL/Venus presenter 对两代相同。若 2.6 的 `wait_fence`、`acquire`、`
 
 1. Legacy 1.10 产品基线。
 2. Modern 2.6 产品基线（继承产品的 mapped-flush batching）。
-3. 可选 Modern 2.6 batch-off 单变量。
+
+2026-08-31 按用户“始终保持开启、不再关闭验证”的要求，所有本地测量入口
+只保留 product/on。旧 `modern-batch`、`legacy-batch`、`all` 四条件矩阵与
+`-IncludeModernBatchMappedFlushOff` 已移除；正常启动器也在访问设备之前拒绝
+通过 `DXVK_WINEHUA_BATCH_MAPPED_FLUSH=0` 绕过该约束。不改变 Native 产品策略。
 
 各轮循环旋转顺序。启动后先等待 Presenter 至少提交 120 帧，再开始预热；预热结束时清空
 hilog，避免首次 runtime 解压、Wine 初始化和 Heaven Loading 混入正式采样。正式 FPS 使用采样窗口内
@@ -201,18 +205,16 @@ inline GPU upload、coverage sort 和 FIFO 动作，只增加每 120 帧一次�
   -Rounds 3 `
   -WarmupSeconds 30 `
   -SampleSeconds 90 `
-  -CooldownSeconds 20 `
-  -IncludeModernBatchMappedFlushOff
+  -CooldownSeconds 20
 ```
 
 需要短时确认 Modern range 合并效率时，可另加 `-CollectModernMappedFlushStats`。它只在 Modern
-且 batching 未关闭的轮次设置 stats；脚本在启动前记录 Wine stderr 行偏移，结束后仅解析本轮新增的
+轮次设置 stats；脚本在启动前记录 Wine stderr 行偏移，结束后仅解析本轮新增的
 `WineHuaModernMappedFlushPerf` marker 并写入 `modernMappedFlush`，不会把旧运行的累计计数混入。
 正式 FPS 轮次仍应关闭该参数，避免统计原子与日志干扰稳定态。
-若产品代际基线已经完成，可用 `-ConditionSet modern-batch` 只运行 Modern 产品配置与
-batch-off 单变量，避免重复消耗 Legacy 轮次；`-ConditionSet legacy-batch` 则比较 Legacy 的产品
-高性能配置与显式 batch-off 控制组。只有该控制组注入临时环境变量，绝不改变产品 capability。
-`-ConditionSet all` 运行四条件矩阵。
+若产品代际基线已经完成，可用 `-ConditionSet modern` 或 `-ConditionSet legacy`
+只测相应代际；默认 `-ConditionSet product` 交替两代，均继承 batching 开启。
+后续实现优化应比较改前/改后产物，保持此策略不变；不恢复第二套启动环境。
 终端只打印聚合摘要与归档路径，逐轮 timeline/perf marker 保留在 `comparison.json`。
 
 设备测量至少读取：
@@ -255,9 +257,10 @@ Heaven 性能结论。
 
 退出条件：2.6 相对 1.10 的差距在多轮仍稳定，且不是 backend 未切换、温控或旧日志污染。
 
-### Phase B：mapped-flush batching 单变量
+### Phase B：mapped-flush batching（历史开关实验已收口）
 
-- 只比较 Modern product 与 Modern batch-off，不能把强制关闭的实验误标成产品 baseline。
+- 两代产品均保持 batching 开启；不再执行历史 off 对照。新合并算法只比较
+  改前/改后产物，不能把强制关闭状态误标成产品 baseline。
 - 如需 range/call 细目，另做短时 stats characterization；稳定性能轮次不打开 stats bookkeeping。
 - 不同时改变 dual-source、border、pipeline 或 Host uploader。
 - 重跑 Heaven、Modern x86/x64 smoke、Cube 和帧序门禁。
@@ -368,8 +371,8 @@ profile 有效且 bundle 与 AppScope 一致；`sign.py` 也会拒绝把解密�
 
 1. 已完成替换安装与真机启动、视频、Direct NativeBuffer、DXVK Modern 帧序及 VirGL D3D9 帧序验证；
    不需重建镜像或创建额外容器。
-2. Legacy 与 Modern 都保持产品默认 batching，扩展到更长时长、冷热两次和温控窗口；batch-off 只作为
-   有明确诊断目的的单变量控制组。
+2. Legacy 与 Modern 都保持产品默认 batching，扩展到更长时长、冷热两次和温控窗口；
+   off 实验已停用，旧结果仅保留为历史证据。
 3. Legacy batching 已确认有大幅性能收益。候选默认的 90 s 门禁曾记录 Box64 `dlopen` 启动 fault；
    现在以高性能默认值继续收集按 PID 关联的启动证据，并完成 smoke、帧序和长稳门禁。不得新增用户
    profile，也不得让普通自动化隐式关闭 batching。

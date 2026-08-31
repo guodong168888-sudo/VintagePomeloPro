@@ -9,7 +9,7 @@ param(
     [string]$GamePath = '',
     [string[]]$GameArguments = @(),
     [hashtable]$D3DEnvironment = @{},
-    [ValidateSet('product', 'on', 'off')]
+    [ValidateSet('product', 'on')]
     [string]$BatchMappedFlushMode = 'product',
     [string]$ClickTitlePrefix = '',
     [string]$ClickButtonText = '',
@@ -24,6 +24,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'GraphicsTestPolicy.ps1')
+# Reject retired off experiments before waking/stopping any device or changing
+# the caller's environment table. Product policy already enables both DXVKs.
+Assert-GraphicsTestMappedFlush -Mode $BatchMappedFlushMode -Environment $D3DEnvironment
 $hdc = $HdcPath
 $bundle = 'com.vintage.pomelopro'
 if (-not (Test-Path -LiteralPath $hdc)) { throw "Windows HDC not found: $hdc" }
@@ -89,9 +93,6 @@ if ($BatchMappedFlushMode -eq 'on') {
     if (-not $D3DEnvironment.ContainsKey('DXVK_LOG_LEVEL')) {
         $D3DEnvironment['DXVK_LOG_LEVEL'] = 'info'
     }
-} elseif ($BatchMappedFlushMode -eq 'off' -and
-    -not $D3DEnvironment.ContainsKey('DXVK_WINEHUA_BATCH_MAPPED_FLUSH')) {
-    $D3DEnvironment['DXVK_WINEHUA_BATCH_MAPPED_FLUSH'] = '0'
 }
 
 $environmentPairs = @($D3DEnvironment.GetEnumerator() | Sort-Object { [string]$_.Key })

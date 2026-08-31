@@ -4,7 +4,7 @@ param(
     [string]$D3DBackend = 'dxvk_legacy',
     [AllowEmptyString()]
     [string]$GraphicsExperiment = '',
-    [ValidateSet('product', 'on', 'off')]
+    [ValidateSet('product', 'on')]
     [string]$BatchMappedFlushMode = 'product',
     [string]$GamePath = 'C:\smoke\x64\winehua_d3d_switch_cube.exe',
     [string[]]$GameArguments = @(),

@@ -12,9 +12,8 @@ param(
     [int]$ReadyTimeoutSeconds = 180,
     [ValidateRange(30, 10000)]
     [int]$ReadyFrames = 120,
-    [ValidateSet('product', 'modern-batch', 'legacy-batch', 'all')]
+    [ValidateSet('product', 'legacy', 'modern')]
     [string]$ConditionSet = 'product',
-    [switch]$IncludeModernBatchMappedFlushOff,
     [switch]$CollectModernMappedFlushStats,
     [string]$DeviceId = '',
     [string]$HdcPath = 'C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe',
@@ -22,12 +21,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'GraphicsTestPolicy.ps1')
+$conditions = @(Get-DxvkProductTestConditions $ConditionSet)
 $bundle = 'com.vintage.pomelopro'
 $startScript = Join-Path $PSScriptRoot 'Start-WineHuaGameTest.ps1'
 $observationExperiment = 'observe-frame-timeline'
 if (-not $OutputRoot) {
     $repositoryRoot = Split-Path $PSScriptRoot -Parent
-    $OutputRoot = Join-Path $repositoryRoot 'output\dxvk-performance'
+    $OutputRoot = Join-Path $repositoryRoot '.hvigor\outputs\dxvk-performance'
 }
 
 if (-not (Test-Path -LiteralPath $HdcPath)) {
@@ -356,8 +357,7 @@ function Invoke-Measurement {
     try {
         Invoke-Hdc -Arguments @('shell', 'hilog', '-r') | Out-Null
         $collectMappedFlushStats = $CollectModernMappedFlushStats -and
-            $Condition.backend -eq 'dxvk_modern_2_6' -and
-            $Condition.batchMappedFlushMode -ne 'off'
+            $Condition.backend -eq 'dxvk_modern_2_6'
         $wineStderrLineOffset = if ($collectMappedFlushStats) {
             Get-WineStderrLineCount
         } else {
@@ -366,10 +366,6 @@ function Invoke-Measurement {
         $result['wineStderrLineOffset'] = $wineStderrLineOffset
         $d3dEnvironment = @{
             DXVK_LOG_LEVEL = 'info'
-        }
-        if ($Condition.PSObject.Properties['batchMappedFlushOverride']) {
-            $d3dEnvironment['DXVK_WINEHUA_BATCH_MAPPED_FLUSH'] =
-                [string]$Condition.batchMappedFlushOverride
         }
         if ($collectMappedFlushStats) {
             $d3dEnvironment['DXVK_WINEHUA_BATCH_MAPPED_FLUSH_STATS'] = '1'
@@ -495,45 +491,6 @@ function Invoke-Measurement {
             Set-Content -LiteralPath (Join-Path $runDirectory 'result.json') -Encoding UTF8
     }
     return [pscustomobject]$result
-}
-
-$legacyCondition = [pscustomobject]@{
-        id = 'legacy-1.10-product'
-        backend = 'dxvk_legacy'
-        batchMappedFlushMode = 'product'
-    }
-$modernCondition = [pscustomobject]@{
-        id = 'modern-2.6-product'
-        backend = 'dxvk_modern_2_6'
-        batchMappedFlushMode = 'product'
-    }
-$modernBatchOffCondition = [pscustomobject]@{
-        id = 'modern-2.6-batch-flush-off'
-        backend = 'dxvk_modern_2_6'
-        batchMappedFlushMode = 'off'
-    }
-$legacyBatchOffCondition = [pscustomobject]@{
-        # Product Legacy is high-performance batching. The only Legacy A/B
-        # override is now the explicit off-side control; ordinary measurements
-        # inherit the product capability without injecting this key.
-        id = 'legacy-1.10-batch-flush-off'
-        backend = 'dxvk_legacy'
-        batchMappedFlushMode = 'off'
-        batchMappedFlushOverride = '0'
-    }
-$conditions = switch ($ConditionSet) {
-    'product' { @($legacyCondition, $modernCondition) }
-    'modern-batch' { @($modernCondition, $modernBatchOffCondition) }
-    'legacy-batch' { @($legacyCondition, $legacyBatchOffCondition) }
-    'all' {
-        @($legacyCondition, $modernCondition, $legacyBatchOffCondition,
-          $modernBatchOffCondition)
-    }
-}
-# Preserve the original opt-in switch as a compatibility alias for the full
-# three-condition matrix.
-if ($IncludeModernBatchMappedFlushOff -and $ConditionSet -eq 'product') {
-    $conditions = @($legacyCondition, $modernCondition, $modernBatchOffCondition)
 }
 
 $results = [System.Collections.Generic.List[object]]::new()

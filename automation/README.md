@@ -49,7 +49,13 @@ ELF 和内嵌 runtime 哈希；签名与 Guest 嵌套载荷完整性须已在该
 ```powershell
 .\automation\Test-AutomationPreflight.ps1
 .\automation\Test-GlTiming.ps1
+.\automation\Test-GraphicsTestPolicy.ps1
 ```
+
+DXVK 性能测量的 `-ConditionSet` 仅支持 `product`（两代交替）、`legacy`、
+`modern`。游戏启动与帧序工具仅支持 `-BatchMappedFlushMode product/on`；
+旧 off 参数、off 条件组及 `DXVK_WINEHUA_BATCH_MAPPED_FLUSH=0` 临时注入均在
+访问设备之前拒绝。历史开关对照只留文档，不再提供可误用的执行入口。
 
 ## 本轮验证状态（2026-08-31）
 
