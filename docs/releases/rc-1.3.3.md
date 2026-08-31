@@ -67,6 +67,17 @@
 ## 发布可复现性检查
 
 主仓库已补齐浅克隆历史，完整 HEAD 历史的 Gitleaks 扫描通过，签名文件未纳入跟踪。
-当前新增 DXVK Modern gitlink `ff2d6a2` 还需先发布至其代码仓库的可获取分支；
-不能先发布主库标签，再把他人无法拉取的子模块留作隐含依赖。
-本文件记录的是本地 RC 准备，不代表 GitHub push/tag 已完成。
+DXVK Modern gitlink `ff2d6a2c3d26a3c3098f8a490e4e4adc5aa4704b` 已发布至
+[`winehua/dxvk:codex/rc-1.3.3-mapped-flush`](https://github.com/winehua/dxvk/tree/codex/rc-1.3.3-mapped-flush)，
+并从空白 Git 对象库按精确 SHA 成功拉取验证。原 `dxvk-modern-2.6` 分支未修改；
+CI 使用递归 gitlink 检出，不执行 `submodule update --remote`。
+
+CI 在编译前检查主库 SHA、RC 标签/产品版本及每级子模块实际 HEAD；
+产物再次校验版本、ARM64 ELF/API 23，并上传源码/子模块/补丁版本清单与 HAP SHA-256。
+手动发布必须选择标签所指向的提交，不能把当前分支产物挂到旧标签。
+新增十项宿主回归测试覆盖版本错位、子模块缺失/错位及签名边界，已在原容器通过。
+
+公开 CI 走明确的 `make hap-unsigned`，不读取私人签名，也不把 unsigned 文件冒充 signed。
+GitHub Release 的无签名 HAP 与上方本地 debug 签名包是不同产物，哈希不能混用；
+用户安装前须使用适当的签名证书/profile，单开开发者模式不足以完成签名。
+本地签名预检和字体补丁反向校验通过。流水线最终结果以对应 GitHub Actions 运行为准。

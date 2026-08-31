@@ -396,6 +396,14 @@ hap: assemble
 	@echo "HAP: $(ROOT)/entry/build/default/outputs/default/entry-default-signed.hap"
 	@ls -lh $(ROOT)/entry/build/default/outputs/default/entry-default-signed.hap 2>/dev/null || true
 
+# Public CI has no device signing material. Never disguise unsigned output.
+.PHONY: hap-unsigned test-ci-release
+hap-unsigned: assemble
+	bash $(SCRIPTS)/package.sh hap-unsigned
+
+test-ci-release:
+	PYTHONDONTWRITEBYTECODE=1 python3 $(ROOT)/host_tests/ci_release_test.py
+
 # ============================================================
 # test: 宿主机单元测试 (纯函数, 不依赖 OHOS SDK, 用宿主 g++ 编译)
 # ============================================================
@@ -572,6 +580,7 @@ help:
 	@echo "  make host-vulkan # Host Vulkan exact replay"
 	@echo "  make assemble  # 组装布局"
 	@echo "  make hap       # HAP 打包 + 签名"
+	@echo "  make hap-unsigned # CI 无签名 HAP (安装前需自行签名)"
 	@echo "  make graphics-contract-check # 校验图形协议、默认 profile 与 gitlink"
 	@echo "  make test      # 图形契约 + 宿主机纯函数测试"
 	@echo ""

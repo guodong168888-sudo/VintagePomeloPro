@@ -216,14 +216,28 @@ with open('$profile', 'w') as f:
 
 # ============================================================
 package_hap() {
+    local mode="${1:-signed}"
     log "=== 打包 HAP ($NATIVE_ARCH) ==="
     local unsigned_hap="$WINEHUA/entry/build/default/outputs/default/entry-default-unsigned.hap"
     local signed_hap="$WINEHUA/entry/build/default/outputs/default/entry-default-signed.hap"
 
-    import_user_profile     # <-- 优先使用用户挂载的 profile + 签名
+    if [ "$mode" = unsigned ]; then
+        # CI must opt in explicitly and must never import private signing data.
+        python3 - "$WINEHUA/build-profile.json5" <<'PY'
+import json, re, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+text = re.sub(r'//.*$', '', text, flags=re.MULTILINE)
+profile = json.loads(re.sub(r',\s*([}\]])', r'\1', text))
+app = profile.get("app", {})
+if app.get("signingConfigs") or any(p.get("signingConfig") for p in app.get("products", [])):
+    raise SystemExit("unsigned build requires an unsigned profile; private signing configuration is not allowed")
+PY
+    else
+        import_user_profile
+        validate_signing_profile
+    fi
     set_sdk_versions
     set_abi_filters
-    validate_signing_profile
 
     # 移除 hnpPackages (所有平台统一用 rawfile zip)
     local module_json="$WINEHUA/entry/src/main/module.json5"
@@ -247,6 +261,13 @@ with open('$module_json', 'w') as f:
 
     cd "$WINEHUA"
     hvigorw assembleHap || { err "hvigorw assembleHap 失败"; return 1; }
+
+    [ -s "$unsigned_hap" ] || err "unsigned HAP missing after assembleHap"
+    if [ "$mode" = unsigned ]; then
+        ls -lh "$unsigned_hap"
+        log "HAP 构建完成 (unsigned, $NATIVE_ARCH); 安装前必须自行签名"
+        return 0
+    fi
 
     cd "$WINEHUA"
     python3 sign.py "$unsigned_hap" "$signed_hap"
@@ -276,6 +297,7 @@ deploy() {
 # ---- main ----
 case "${1:-}" in
     hap)  package_hap ;;
+    hap-unsigned) package_hap unsigned ;;
     signing-preflight)
         import_user_profile
         set_sdk_versions
@@ -285,5 +307,5 @@ case "${1:-}" in
     all)
         package_hap && deploy "${2:-}"
         ;;
-    *)    echo "用法: $0 {hap|signing-preflight|deploy|all} [device_ip]" >&2; exit 1 ;;
+    *)    echo "用法: $0 {hap|hap-unsigned|signing-preflight|deploy|all} [device_ip]" >&2; exit 1 ;;
 esac
