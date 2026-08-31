@@ -48,3 +48,22 @@ FPS 无实质提升，取纹理仍耗时约 9 ms/帧。场景、温度及调度�
 `packed-graphics.log`。提取文件覆盖可跨 HAP 重装残留，恢复方法见
 [Guest 诊断说明](guest-stage-timing-diagnostic.md)及同目录 `rollback.md`。
 War3 三次冷启动、GL32/64、音频/视频、DXVK 和长稳回归仍未验收。
+
+## 本轮结束状态
+
+候选已提交为 `85f6f46`，并从设备撤下。随后临时恢复 Guest 诊断 v2，
+通过单次正常入口增加 `WINEDEBUG=-all,fixme+d3d_perf`，试图区分 Wine 的
+RGB/sRGB 下载回退。这一轮在首帧后没有稳定渲染，出现 Box64 signal 日志，
+因此样本无效；未证明颜色转换假设，也未证明该告警覆盖导致异常。
+没有为此修改同步规则或 Wine/Box64。
+
+已再次停止整棵应用进程，将四个 Guest 文件全部恢复到原始生产 SHA
+`28101aed4dd8256cafaff657b85d567e0dfed93fb6ae5682c1679ca491b840e4` 并逐项核验，
+再用无环境覆盖的正常入口启动。Host 诊断 v2 HAP 仍安装，**不是整包回退完成**。
+该无效启动的有限、剔除 entryParams/环境序列化的证据为
+`perf-fixme-start-invalid.log`。
+
+17:33 恢复后，正常入口再次进入 GPU_ACTIVE，连续主合成窗口约 49–50 FPS，
+source 800×600，upload_bytes=0、failed_swaps=0、consumer failures=0，
+最新 War3 启动参数确认 `WINEDEBUG=-all`。这只验证恢复后菜单持续出帧，不与
+先前温度/动画阶段不同的菜单 FPS 比较。恢复记录为 `production-restored-graphics.log`。

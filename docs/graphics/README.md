@@ -13,6 +13,10 @@
   采样边界和测试入口见 [performance-hud.md](performance-hud.md)。
 - 局内低帧率仍在定位；原 FP 采样不能直接作函数热点结论，新 DWARF 短采样、
   数据可信度检查和下一轮对照见 [war3-gameplay-cpu-investigation.md](war3-gameplay-cpu-investigation.md)。
+- Host/Guest 阶段计时已分项提交，确认 War3 每帧还有完整 RGB565 纹理下载。
+  [短包 I/O 候选](guest-busy-io-candidate.md)降低了部分查询 CPU 开销，但未证明
+  FPS 改善，不进入默认路径；[Guest 诊断与回退](guest-stage-timing-diagnostic.md)
+  明确提取库覆盖不能仅靠重装 HAP 清理。
 - 最新回退包、测量入口、真机能力门禁与未完成项见
   [gles-direct-validation.md](gles-direct-validation.md)。历史 1.2.8/1.2.9
   记录仅作为历史证据，不再代表当前安装包或设备连接状态。
