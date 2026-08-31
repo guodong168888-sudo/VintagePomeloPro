@@ -3,6 +3,9 @@ param(
     [Parameter(Mandatory)][string]$RunLabel,
     [ValidateSet('egl-window', 'gles-direct')][string]$ExpectedTransport = 'egl-window',
     [string]$GamePath = 'Z:/games/Warcraft III/Warcraft III/Frozen Throne.exe',
+    [string[]]$GameArguments = @(),
+    [ValidateSet('wined3d', 'dxvk_legacy', 'dxvk_modern_2_6')][string]$D3DBackend = 'wined3d',
+    [string]$SceneLabel = 'unclassified',
     [ValidateRange(0, 180)][int]$WarmupSeconds = 30,
     [ValidateRange(20, 600)][int]$SampleSeconds = 90,
     [ValidateRange(10, 300)][int]$ReadyTimeoutSeconds = 180,
@@ -23,15 +26,23 @@ if (-not $DeviceId) {
     $DeviceId = ($targets[0] -split '\s+')[0]
 }
 function Read-GlLogs {
-    $lines = @(& $HdcPath -t $DeviceId shell "hilog -x | grep -E 'VIRGL-ZC|timestamp regression'" 2>&1)
+    $lines = @(& $HdcPath -t $DeviceId shell "hilog -x | grep -E 'VIRGL-ZC|GLES-DIRECT|GL-PERF|DBG-FIT|DBG-ZC|timestamp regression'" 2>&1)
     if ($LASTEXITCODE -ne 0) { throw 'HDC log collection failed' }
     return $lines
+}
+function Read-Conditions {
+    # Read-only service dumps. Keep only sensor/charge fields, never identifiers.
+    $thermal = @(& $HdcPath -t $DeviceId shell hidumper -s ThermalService -a '-t' 2>$null |
+        Where-Object { $_ -match '^Type:|^Temperature:' })
+    $battery = @(& $HdcPath -t $DeviceId shell hidumper -s BatteryService -a '-i' 2>$null |
+        Where-Object { $_ -match '(?i)capacity|temperature|charging|charge state|plugged|voltage|current' })
+    return [pscustomobject]@{ capturedUtc = [DateTime]::UtcNow.ToString('o'); thermal = $thermal; battery = $battery }
 }
 $seen = [Collections.Generic.HashSet[string]]::new()
 foreach ($line in @(Read-GlLogs)) { [void]$seen.Add($line) }
 if (-not $Attach) {
     & (Join-Path $PSScriptRoot 'Start-WineHuaGameTest.ps1') -GamePath $GamePath `
-        -D3DBackend wined3d -GraphicsExperiment observe-product-summary `
+        -GameArguments $GameArguments -D3DBackend $D3DBackend -GraphicsExperiment observe-product-summary `
         -DeviceId $DeviceId -HdcPath $HdcPath
 }
 $readyDeadline = [DateTime]::UtcNow.AddSeconds($ReadyTimeoutSeconds)
@@ -49,6 +60,7 @@ if (-not $ready) { throw 'No ready GL workload with expected dimensions; focus/m
 Write-Host "Ready: $RunLabel. Warmup ${WarmupSeconds}s; sampling ${SampleSeconds}s."
 for ($i = 0; $i -lt $WarmupSeconds; $i++) { Start-Sleep -Seconds 1 }
 foreach ($line in @(Read-GlLogs)) { [void]$seen.Add($line) }
+$conditionsStart = Read-Conditions
 $captured = [Collections.Generic.List[string]]::new()
 $sampleDeadline = [DateTime]::UtcNow.AddSeconds($SampleSeconds)
 $skipBoundaryWindow = $true
@@ -68,7 +80,9 @@ New-Item -ItemType Directory -Path $runDir -Force | Out-Null
 $captured | Set-Content -LiteralPath (Join-Path $runDir 'graphics.log') -Encoding UTF8
 $result = [ordered]@{
     label = $RunLabel; sourceCommit = (git -C (Join-Path $PSScriptRoot '..') rev-parse HEAD)
-    hapSha256 = $HapSha256; batchMappedFlush = 'product-default-no-override'; backend = 'wined3d'
+    hapSha256 = $HapSha256; batchMappedFlush = 'product-default-no-override'; requestedBackend = $D3DBackend
+    scene = $SceneLabel; gameArguments = $GameArguments; attachedSession = [bool]$Attach
+    conditionsStart = $conditionsStart; conditionsEnd = Read-Conditions
     width = $ExpectedWidth; height = $ExpectedHeight; status = 'INCONCLUSIVE'
     visualReviewRequired = $true; metrics = $null
 }

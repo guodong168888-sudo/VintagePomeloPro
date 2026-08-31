@@ -46,6 +46,57 @@ payload, replacement installation and War3 menu visibility were checked.
 
 ## Acceptance gates still required
 
+### Candidate capability result
+
+The Host target imports NativeWindow buffers into an EGLImage/renderbuffer/FBO
+cache, keyed by surface/window generation, buffer sequence, extent/format and
+EGL display/context. It retains the existing GPU blit. Acquire waits run on the
+GPU; the release fence is exported after submission. Queue exhaustion returns a
+future deadline; retirement polls zero-timeout completion fences and retains
+the context/window until writes finish. Failed imports lock the attach to EGL.
+There are no new launch variables, profiles, protocol fields or runtime gitlinks.
+
+SDK-declaration mock tests cover missing extensions/entrypoints, cache identity,
+fd ownership, queue exhaustion, failed image/FBO/fence/flush, and delayed
+retirement. These tests cannot prove a real driver supports native-buffer import.
+
+Physical ARM64 device, candidate `b83770aa962d86d6264d6d4e8e8775d3e5bb5dff49e6cc1069bc6ae29982d424`:
+the runtime EGL display does **not advertise `EGL_OHOS_image_native_buffer`**.
+The candidate logged exactly that reason and fell back before any buffer import
+(`slots=0`); War3 continued presenting through `egl-window` with no per-frame
+reprobe. Do not label this a GLES Direct success or invent Direct performance
+numbers. The compile-time product default remains false. A supported import path
+or suitable device is needed before the Direct qualification matrix can run.
+
+Final default-off development HAP (same 1.3.2 / API 23 / ARM64 debug identity):
+`4d65d2b461918db106eb99066ee487b95b96df459ed49a037334dbaa99edda47`,
+467,336,818 bytes, built incrementally in 7.9 seconds, signature verified and
+replacement-installed. Embedded runtime SHA-256 is unchanged:
+`2f9b5730da6b1013a7c9f268ef1cd20e8241bd38c7963408f35d5e3a47c00a0d`.
+War3 menu visibility and EGL presentation were rechecked; the measurement
+runner's new scene/thermal/power collection passed a short 20-second tool check.
+That check is explicitly **not** the gameplay or three-pair acceptance test.
+API 23 ARM64 and x86_64 syntax checks, mock target tests, host suite and canonical
+graphics contract pass; only ARM64 was linked/packaged and device-tested here.
+
+### Actual-game performance (added after user clarification)
+
+The user reports that actual gameplay remains around 20-something FPS, similar
+to before optimization, despite much larger window-mode gains. This is a separate
+acceptance gap, not explained by a 55 FPS menu sample. First hold map/save,
+camera, unit count, source resolution and thermal state fixed; distinguish game
+fullscreen from application immersive layout. Compare producer cadence, main
+consumer cadence, CPU upload, swap waits and CPU/GPU activity in that scene.
+
+Current menu logs establish only: 800x600 GPU source, 1416x640 logical root,
+2832x1280 output, 120 Hz display pacing; stable windows have zero CPU upload.
+The renderer still draws its cached desktop base before the GPU overlay.
+Potential optimizations include safely omitting fully covered base pixels,
+reducing producer/consumer synchronization overhead, or targeting Guest draw
+submission/Box64/GPU load if it dominates. None is established as the cause of
+the reported gameplay bottleneck. Preserve CPU video/UI, popups, SHM freshness
+and the validated input geometry when testing any fast path.
+
 War3 cold starts x3 (intro/menu, fullscreen pointer, minimize/restore); GL x86
 and x64, resize and foreground/background x5 each, then ten continuous minutes;
 Modern DXVK media with CPU UI around it and normal video completion; both

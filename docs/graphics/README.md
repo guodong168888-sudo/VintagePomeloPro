@@ -2,13 +2,16 @@
 
 本目录是 VintagePomeloPro 图形栈的规划与约束入口。目标不是继续叠加实验开关，而是先固定当前可工作的契约，再逐步收敛配置所有权、补足回归测试，最后推进可量化的性能改造。
 
-## 当前审计基线
+## 当前实施状态（2026-08-31）
 
-- 当前私有 `main`：`d73f299fbb7cca81ead0a947765fd93f9d0c3fec`，产品版本 `1.2.9`，标签 `rc-1.2.9`。
-- 本轮本地集成候选：`317e45c`。它在上述 `main` 上收敛两条产品 route、移植 DP1、锁定
-  DXVK/VKD3D 优化并补齐打包预检；尚未推送，也尚未成为新的设备性能基线。
-- 已验证图形基线：`v1.2.8` / `5a92254f3d6732b8a3987dbeb72eab568247a308`。
-- `1.2.9` 已包含输入与 Box64 兼容性更新；它不是一次新的图形性能结论。图形回归比较仍以 `v1.2.8` 的设备证据为起点。
+- 当前本地验证基线为 `7d5e787`，产品版本 `1.3.2` / API 23；原分支
+  `codex/graphics-refactor-performance` 保留，包含全屏显示与鼠标几何统一修复。
+- GLES 候选在英文分支 `refact/gl-optimization` 开发；EGL 仍为默认路径，
+  不能将候选代码存在或编译成功视为性能验收完成。
+- Legacy/Modern 的 `batchMappedFlush` 保持产品开启策略，不跑 off 对照。
+- 最新回退包、测量入口、真机能力门禁与未完成项见
+  [gles-direct-validation.md](gles-direct-validation.md)。历史 1.2.8/1.2.9
+  记录仅作为历史证据，不再代表当前安装包或设备连接状态。
 - 机器可校验的协议、两条产品 route 与子模块 gitlink 记录在 [graphics-stack.lock.yaml](graphics-stack.lock.yaml)。
 
 ## 阅读顺序
@@ -33,13 +36,15 @@
 
 ## 下一步
 
-当前优先级是“稳定与可维护”：
-
-1. VKD3D 0001..0019 已在 `3e5aab6` 上以 `fuzz=0` 完整应用并完成 limited-500K x64 编译；下一门禁是设备 gears/SingleGpu 动画与 Width-flush 统计。
-2. `GraphicsProfile`/DP1 已通过宿主测试、ARM64/x86_64 Native 严格链接和 API 23 ARM64 HAP 编译/Release 签名。候选版本为 1.2.9，签名 HAP SHA-256 为 `08920731b159f777edc93e72ba61ee0bba67da798f14c560a5a05d8dc852553b`。
-3. 当前设备离线，尚未覆盖安装候选；设备恢复后先做正确性/帧序矩阵，再运行三轮 DXVK 1.10/2.6 同条件 Heaven 稳定态对照。
-4. DXVK 1.10、DXVK 2.6、VKD3D、guest-gfx 与 guest Vulkan 的内容寻址构建校验已落地：输入 key 与整个对应输出树哈希同时命中才复用，不再依赖人工 touch stamp。
-4. 通过上述门禁后再评估 GLES Direct 与 scanout backing；不得整分支合并或沿用已漂移的旧 cherry-pick 配方。
+1. 优先补“同一游戏实际对局”的性能定位。用户反馈局内仍约 20 多帧，
+   不可用菜单或窗口测试的收益代替。固定地图、视角、分辨率并区分游戏全屏
+   与应用铺满屏幕，采集 Guest 提交、Host 呈现、主合成和帧间隔。
+2. GLES Direct 只做 Host 尾段候选；能力不足时固定回退 EGL，默认启用仍需
+   正确性和三组交替性能门槛。不要为得到 Direct 路径而绕过驱动能力检查。
+3. 分别验证 CPU UI/视频、GL 32/64 位、两代 DXVK、生命周期及长稳；
+   菜单稳定不代表局内瓶颈解决。已完成稳定修复与性能候选分开评审。
+4. 保留既有内容寻址构建校验和原容器增量构建。GPU 能力门控去重、
+   Host 同步/上传、scanout 去拷贝、PC/x86_64 完整设备矩阵与 D3D12 专项后置。
 
 ## 本地校验
 

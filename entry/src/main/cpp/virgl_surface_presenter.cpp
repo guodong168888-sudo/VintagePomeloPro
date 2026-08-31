@@ -4,6 +4,7 @@
 #include "present_pacing.h"
 #include "present_policy.h"
 #include "present_timing.h"
+#include "native_window_gles_target.h"
 
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
@@ -65,7 +66,7 @@ public:
     {
         if (!surfaceKey || !window) return -1;
         std::lock_guard<std::mutex> lock(mutex_);
-        ResetGlLocked();
+        if (!ResetGlLocked()) return -EAGAIN;
         windowLease_.Adopt(
             window, releaseWindowWithUnreference
                 ? winehua::NativeWindowReleaseMode::UnreferenceNativeObject
@@ -79,6 +80,9 @@ public:
         throttled_ = 0;
         lastPresentNs_ = 0;
         timing_.Reset();
+        directDisabled_ = !winehua::kGlesDirectQualified;
+        directFallbackPending_ = false;
+        ++generation_;
         policy_ = winehua::ReadPresenterRuntimePolicyFromEnvironment();
         displayPeriodNs_ = winehua::NormalizePresentFramePeriodNs(framePeriodNs);
         framePeriodNs_ = winehua::PresentPacingPeriodNs(displayPeriodNs_);
@@ -113,7 +117,7 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (surfaceKey_ && surfaceKey && surfaceKey_ != surfaceKey) return -1;
-        ResetLocked();
+        if (!ResetLocked()) return -EAGAIN;
         OH_LOG_INFO(LOG_APP, "[VIRGL-ZC][NCP] target detached surface_key=%{public}llu",
                     static_cast<unsigned long long>(surfaceKey));
         return 0;
@@ -140,7 +144,8 @@ public:
         const uint64_t startedUs = nowNs / 1000;
         const winehua::PresentPacingDecision pacing =
             winehua::EvaluatePresentPacing(nowNs, lastPresentNs_, framePeriodNs_);
-        if (width_ == width && height_ == height && !pacing.presentNow) {
+        if (width_ == width && height_ == height && !pacing.presentNow &&
+            (!glesDirect_.Ready() || !winehua::DirectPresentUsesGuestDeadline(frames_))) {
             if (nextPresentDeadlineNs)
                 *nextPresentDeadlineNs = pacing.nextDeadlineNs;
             ++throttled_;
@@ -153,6 +158,11 @@ public:
         {
             eglMakeCurrent(sourceDisplay, sourceDraw, sourceRead, sourceContext);
             glDeleteSync(sourceReady);
+            if (resetDeferred_) {
+                if (nextPresentDeadlineNs) *nextPresentDeadlineNs =
+                    winehua::RetryPresentDeadlineNs(NowNs(), lastPresentNs_, framePeriodNs_);
+                return 1;
+            }
             ++failures_;
             return -4;
         }
@@ -166,6 +176,17 @@ public:
         glWaitSync(sourceReady, 0, GL_TIMEOUT_IGNORED);
         glDeleteSync(sourceReady);
 
+        if (glesDirect_.Ready()) {
+            const auto begin = glesDirect_.BeginFrame(frames_, NowNs());
+            if (begin != winehua::GlesBeginResult::Ready) {
+                if (begin == winehua::GlesBeginResult::Failed) LockDirectFallback();
+                eglMakeCurrent(sourceDisplay, sourceDraw, sourceRead, sourceContext);
+                if (nextPresentDeadlineNs) *nextPresentDeadlineNs =
+                    winehua::RetryPresentDeadlineNs(NowNs(), lastPresentNs_, framePeriodNs_);
+                ++throttled_;
+                return 1;
+            }
+        }
         const uint64_t drawStartedUs = policy_.perfSummary ? NowUs() : 0;
         glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
         glDisable(GL_BLEND);
@@ -177,8 +198,9 @@ public:
         glBindTexture(GL_TEXTURE_2D, texture);
         glBindSampler(0, sampler_);
         glUniform1i(textureLocation_, 0);
+        const bool direct = glesDirect_.Ready();
         const uint64_t frameTimestamp = NowNs();
-        const int32_t timestampResult = OH_NativeWindow_NativeWindowHandleOpt(
+        const int32_t timestampResult = direct ? 0 : OH_NativeWindow_NativeWindowHandleOpt(
             windowLease_.Get(), SET_UI_TIMESTAMP, frameTimestamp);
         if (timestampResult != 0)
         {
@@ -194,7 +216,12 @@ public:
         const GLenum glError = glGetError();
         const uint64_t publishStartedUs = policy_.perfSummary ? NowUs() : 0;
         const EGLBoolean swapped = glError == GL_NO_ERROR
-            ? eglSwapBuffers(display_, surface_) : EGL_FALSE;
+            ? (direct ? (glesDirect_.Publish() ? EGL_TRUE : EGL_FALSE)
+                      : eglSwapBuffers(display_, surface_)) : EGL_FALSE;
+        if (direct && swapped != EGL_TRUE) {
+            glesDirect_.AbortFrame();
+            LockDirectFallback();
+        }
         const EGLint eglError = swapped == EGL_TRUE ? EGL_SUCCESS : eglGetError();
         const uint64_t restoreStartedUs = policy_.perfSummary ? NowUs() : 0;
         const EGLBoolean restored = eglMakeCurrent(
@@ -223,11 +250,12 @@ public:
                             endedUs - restoreStartedUs)) {
                 OH_LOG_INFO(LOG_APP,
                     "[VIRGL-ZC][TIMING] key=%{public}llu frames=%{public}llu "
-                    "transport=egl-window count=120 request_us=%{public}llu "
+                    "transport=%{public}s count=120 request_us=%{public}llu "
                     "draw_us=%{public}llu publish_us=%{public}llu restore_us=%{public}llu "
                     "cpu_us=%{public}s interval_us=%{public}s",
                     static_cast<unsigned long long>(surfaceKey_),
                     static_cast<unsigned long long>(frames_),
+                    direct ? "gles-direct" : "egl-window",
                     static_cast<unsigned long long>(timing_.RequestUs()),
                     static_cast<unsigned long long>(timing_.DrawUs()),
                     static_cast<unsigned long long>(timing_.PublishUs()),
@@ -258,19 +286,42 @@ public:
         return 0;
     }
 
-    void Reset()
+private:
+    bool RetryWithEgl(EGLDisplay display, EGLContext sourceContext,
+                      uint32_t width, uint32_t height, const char* reason)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        ResetLocked();
+        if (directDisabled_) return false;
+        OH_LOG_WARN(LOG_APP, "[GLES-DIRECT] fallback key=%{public}llu reason=%{public}s",
+            static_cast<unsigned long long>(surfaceKey_), reason);
+        directDisabled_ = true; // A capability failure is sticky until reattach.
+        directFallbackPending_ = false;
+        return EnsureGlLocked(display, sourceContext, width, height);
     }
 
-private:
+    void LockDirectFallback()
+    {
+        if (!directFallbackPending_) {
+            OH_LOG_WARN(LOG_APP,
+                "[GLES-DIRECT] fallback key=%{public}llu reason=%{public}s error=%{public}d slots=%{public}zu",
+                static_cast<unsigned long long>(surfaceKey_),
+                glesDirect_.Reason(), glesDirect_.Error(), glesDirect_.ImportedSlots());
+        }
+        directFallbackPending_ = true;
+        directDisabled_ = true;
+    }
+
     bool EnsureGlLocked(EGLDisplay sourceDisplay, EGLContext sourceContext,
                         uint32_t width, uint32_t height)
     {
+        resetDeferred_ = false;
         if (display_ != EGL_NO_DISPLAY &&
-            (display_ != sourceDisplay || width_ != width || height_ != height))
-            ResetGlLocked();
+            (display_ != sourceDisplay || sourceContext_ != sourceContext ||
+             width_ != width || height_ != height || directFallbackPending_)) {
+            if (!ResetGlLocked()) { resetDeferred_ = true; return false; }
+            timing_.Reset(); // Never label a mixed-generation/transport window.
+            directFallbackPending_ = false;
+            ++generation_;
+        }
         if (context_ != EGL_NO_CONTEXT && surface_ != EGL_NO_SURFACE) return true;
 
         if (OH_NativeWindow_NativeWindowHandleOpt(
@@ -293,7 +344,7 @@ private:
                     width, height, queueSize, timeoutResult);
 
         const EGLint configAttributes[] = {
-            EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+            EGL_SURFACE_TYPE, directDisabled_ ? EGL_WINDOW_BIT : EGL_PBUFFER_BIT,
             EGL_RED_SIZE, 8,
             EGL_GREEN_SIZE, 8,
             EGL_BLUE_SIZE, 8,
@@ -305,25 +356,45 @@ private:
         EGLConfig config = nullptr;
         if (!eglChooseConfig(sourceDisplay, configAttributes, &config, 1, &configCount) ||
             configCount == 0)
-            return false;
+            return RetryWithEgl(sourceDisplay, sourceContext, width, height, "pbuffer-config");
 
         const EGLint contextAttributes[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
         EGLContext context = eglCreateContext(
             sourceDisplay, config, sourceContext, contextAttributes);
-        if (context == EGL_NO_CONTEXT) return false;
-        EGLSurface surface = eglCreateWindowSurface(
+        if (context == EGL_NO_CONTEXT)
+            return RetryWithEgl(sourceDisplay, sourceContext, width, height, "shared-context");
+        const EGLint pbufferAttributes[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+        EGLSurface surface = directDisabled_ ? eglCreateWindowSurface(
             sourceDisplay, config,
-            reinterpret_cast<EGLNativeWindowType>(windowLease_.Get()), nullptr);
+            reinterpret_cast<EGLNativeWindowType>(windowLease_.Get()), nullptr)
+            : eglCreatePbufferSurface(sourceDisplay, config, pbufferAttributes);
         if (surface == EGL_NO_SURFACE)
         {
             eglDestroyContext(sourceDisplay, context);
-            return false;
+            return RetryWithEgl(sourceDisplay, sourceContext, width, height, "pbuffer-surface");
         }
         if (eglMakeCurrent(sourceDisplay, surface, surface, context) != EGL_TRUE)
         {
             eglDestroySurface(sourceDisplay, surface);
             eglDestroyContext(sourceDisplay, context);
-            return false;
+            return RetryWithEgl(sourceDisplay, sourceContext, width, height, "pbuffer-current");
+        }
+
+        if (!directDisabled_) {
+            winehua::GlesBufferOwner owner{surfaceKey_, generation_,
+                reinterpret_cast<uintptr_t>(sourceDisplay), reinterpret_cast<uintptr_t>(context),
+                width, height, NATIVEBUFFER_PIXEL_FMT_RGBA_8888};
+            if (!glesDirect_.Configure(owner, windowLease_.Get())) {
+                LockDirectFallback();
+                directFallbackPending_ = false;
+                eglMakeCurrent(sourceDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+                eglDestroySurface(sourceDisplay, surface);
+                eglDestroyContext(sourceDisplay, context);
+                return EnsureGlLocked(sourceDisplay, sourceContext, width, height);
+            }
+            OH_LOG_INFO(LOG_APP, "[GLES-DIRECT] ready key=%{public}llu generation=%{public}llu size=%{public}ux%{public}u",
+                static_cast<unsigned long long>(surfaceKey_),
+                static_cast<unsigned long long>(generation_), width, height);
         }
 
         static constexpr const char* vertexSource = R"(#version 300 es
@@ -365,10 +436,11 @@ void main() { outColor = texture(uTexture, vTexCoord); }
         if (fragment) glDeleteShader(fragment);
         if (!program)
         {
+            glesDirect_.Reset(); // no draws/imports yet
             eglMakeCurrent(sourceDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
             eglDestroySurface(sourceDisplay, surface);
             eglDestroyContext(sourceDisplay, context);
-            return false;
+            return RetryWithEgl(sourceDisplay, sourceContext, width, height, "present-program");
         }
 
         GLuint sampler = 0;
@@ -381,6 +453,7 @@ void main() { outColor = texture(uTexture, vTexCoord); }
 
         display_ = sourceDisplay;
         context_ = context;
+        sourceContext_ = sourceContext;
         surface_ = surface;
         program_ = program;
         sampler_ = sampler;
@@ -390,7 +463,7 @@ void main() { outColor = texture(uTexture, vTexCoord); }
         return true;
     }
 
-    void ResetGlLocked()
+    bool ResetGlLocked()
     {
         if (display_ != EGL_NO_DISPLAY)
         {
@@ -401,11 +474,18 @@ void main() { outColor = texture(uTexture, vTexCoord); }
             const bool cleanupCurrent = context_ != EGL_NO_CONTEXT &&
                 surface_ != EGL_NO_SURFACE &&
                 eglMakeCurrent(display_, surface_, surface_, context_) == EGL_TRUE;
+            if (glesDirect_.Ready() && (!cleanupCurrent || !glesDirect_.Reset())) {
+                if (previousDisplay != EGL_NO_DISPLAY && previousContext != context_)
+                    eglMakeCurrent(previousDisplay, previousDraw, previousRead, previousContext);
+                else
+                    eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+                return false;
+            }
             if (cleanupCurrent)
             {
                 if (sampler_) glDeleteSamplers(1, &sampler_);
                 if (program_) glDeleteProgram(program_);
-                if (previousDisplay != EGL_NO_DISPLAY)
+                if (previousDisplay != EGL_NO_DISPLAY && previousContext != context_)
                     eglMakeCurrent(previousDisplay, previousDraw, previousRead, previousContext);
                 else
                     eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -415,19 +495,22 @@ void main() { outColor = texture(uTexture, vTexCoord); }
         }
         display_ = EGL_NO_DISPLAY;
         context_ = EGL_NO_CONTEXT;
+        sourceContext_ = EGL_NO_CONTEXT;
         surface_ = EGL_NO_SURFACE;
         program_ = 0;
         sampler_ = 0;
         textureLocation_ = -1;
         width_ = 0;
         height_ = 0;
+        return true;
     }
 
-    void ResetLocked()
+    bool ResetLocked()
     {
-        ResetGlLocked();
+        if (!ResetGlLocked()) return false;
         ReleaseWindowLocked();
         surfaceKey_ = 0;
+        return true;
     }
 
     void ReleaseWindowLocked()
@@ -440,6 +523,7 @@ void main() { outColor = texture(uTexture, vTexCoord); }
     uint64_t surfaceKey_ = 0;
     EGLDisplay display_ = EGL_NO_DISPLAY;
     EGLContext context_ = EGL_NO_CONTEXT;
+    EGLContext sourceContext_ = EGL_NO_CONTEXT;
     EGLSurface surface_ = EGL_NO_SURFACE;
     GLuint program_ = 0;
     GLuint sampler_ = 0;
@@ -452,6 +536,11 @@ void main() { outColor = texture(uTexture, vTexCoord); }
     uint64_t throttled_ = 0;
     winehua::PresenterRuntimePolicy policy_;
     winehua::PresentTimingWindow timing_;
+    winehua::NativeWindowGlesTarget glesDirect_;
+    uint64_t generation_ = 0;
+    bool directDisabled_ = !winehua::kGlesDirectQualified;
+    bool directFallbackPending_ = false;
+    bool resetDeferred_ = false;
     uint64_t lastPresentNs_ = 0;
     uint64_t displayPeriodNs_ = winehua::kDefaultPresentFramePeriodNs;
     uint64_t framePeriodNs_ = winehua::kDefaultPresentFramePeriodNs;
@@ -464,10 +553,23 @@ public:
     {
         if (!surfaceKey || !window) return -1;
         std::lock_guard<std::mutex> lock(mutex_);
-        auto& entry = surfaces_[surfaceKey];
-        entry.missingTargetLogged = false;
+        CollectRetiredVirglTargetsLocked();
         const bool releaseWindowWithUnreference =
             (flags & winehua::virgl_ipc::kSurfaceNativeObjectReference) != 0;
+        // Stop admitting GL generations after a hung GPU has filled quarantine.
+        // Active targets can still detach safely; never destroy their live writes.
+        size_t liveGlTargets = retiredVirglTargets_.size();
+        for (const auto& item : surfaces_) if (item.second.virglTarget) ++liveGlTargets;
+        if (!(flags & winehua::virgl_ipc::kSurfaceVulkan) &&
+            winehua::kGlesDirectQualified &&
+            liveGlTargets >= 2 * winehua::virgl_ipc::kMaxSurfaces) {
+            // Attach transfers ownership only on success; the caller releases
+            // this incoming window on failure (both IPC and in-process paths).
+            return -EAGAIN;
+        }
+        auto& entry = surfaces_[surfaceKey];
+        entry.missingTargetLogged = false;
+        RetireVirglTargetLocked(surfaceKey, entry.virglTarget);
         entry.info.flags =
             (entry.info.flags & ~(winehua::virgl_ipc::kSurfaceVulkan |
                                   winehua::virgl_ipc::kSurfaceAttached)) |
@@ -475,10 +577,6 @@ public:
         int result;
         if (entry.info.flags & winehua::virgl_ipc::kSurfaceVulkan)
         {
-            if (entry.virglTarget) {
-                entry.virglTarget->Detach(surfaceKey);
-                entry.virglTarget.reset();
-            }
             RetireVenusTargetLocked(surfaceKey, entry.venusTarget);
             entry.venusTarget = std::make_unique<winehua::VenusSurfaceQueueTarget>();
             result = entry.venusTarget->Attach(surfaceKey, framePeriodNs, window,
@@ -487,8 +585,7 @@ public:
         else
         {
             RetireVenusTargetLocked(surfaceKey, entry.venusTarget);
-            if (!entry.virglTarget)
-                entry.virglTarget = std::make_unique<SurfaceQueueTarget>();
+            entry.virglTarget = std::make_unique<SurfaceQueueTarget>();
             result = entry.virglTarget->Attach(surfaceKey, framePeriodNs, window,
                                                releaseWindowWithUnreference);
         }
@@ -504,7 +601,8 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = surfaces_.find(surfaceKey);
         if (it == surfaces_.end()) return 0;
-        if (it->second.virglTarget) it->second.virglTarget->Detach(surfaceKey);
+        RetireVirglTargetLocked(surfaceKey, it->second.virglTarget);
+        CollectRetiredVirglTargetsLocked();
         RetireVenusTargetLocked(surfaceKey, it->second.venusTarget);
         ++surfaceGenerations_[surfaceKey];
         surfaces_.erase(it);
@@ -586,6 +684,7 @@ public:
         const uint64_t surfaceKey =
             (static_cast<uint64_t>(clientPid) << 32) | surfaceId;
         std::lock_guard<std::mutex> lock(mutex_);
+        CollectRetiredVirglTargetsLocked();
         auto& entry = surfaces_[surfaceKey];
         if (entry.info.flags & winehua::virgl_ipc::kSurfaceVulkan) return -EINVAL;
         entry.info.surfaceKey = surfaceKey;
@@ -683,9 +782,10 @@ public:
             nextPresentDeadlineNs, releaseQueue, queueSyncData);
     }
 
-    winehua::virgl_ipc::SurfaceQueryReply Query() const
+    winehua::virgl_ipc::SurfaceQueryReply Query()
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        CollectRetiredVirglTargetsLocked();
         winehua::virgl_ipc::SurfaceQueryReply reply;
         const uint64_t nowUs = NowUs();
         std::vector<const Entry*> candidates;
@@ -726,15 +826,36 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         for (auto& [surfaceKey, entry] : surfaces_)
         {
-            if (entry.virglTarget) entry.virglTarget->Detach(surfaceKey);
+            RetireVirglTargetLocked(surfaceKey, entry.virglTarget);
             RetireVenusTargetLocked(surfaceKey, entry.venusTarget);
             ++surfaceGenerations_[surfaceKey];
         }
         surfaces_.clear();
+        CollectRetiredVirglTargetsLocked();
         targetCondition_.notify_all();
     }
 
 private:
+    void RetireVirglTargetLocked(uint64_t surfaceKey,
+                                 std::unique_ptr<SurfaceQueueTarget>& target)
+    {
+        if (!target) return;
+        if (target->Detach(surfaceKey) == -EAGAIN)
+            retiredVirglTargets_.push_back(std::move(target));
+        else
+            target.reset();
+    }
+
+    void CollectRetiredVirglTargetsLocked()
+    {
+        // Each target polls its fences once, with zero timeout. The regular
+        // surface query also retires targets while the game is backgrounded.
+        retiredVirglTargets_.erase(
+            std::remove_if(retiredVirglTargets_.begin(), retiredVirglTargets_.end(),
+                [](const auto& target) { return target->Detach(0) == 0; }),
+            retiredVirglTargets_.end());
+    }
+
     void RetireVenusTargetLocked(
         uint64_t surfaceKey,
         std::unique_ptr<winehua::VenusSurfaceQueueTarget>& target)
@@ -759,6 +880,7 @@ private:
     std::condition_variable targetCondition_;
     std::unordered_map<uint64_t, Entry> surfaces_;
     std::unordered_map<uint64_t, uint64_t> surfaceGenerations_;
+    std::vector<std::unique_ptr<SurfaceQueueTarget>> retiredVirglTargets_;
     std::vector<std::unique_ptr<winehua::VenusSurfaceQueueTarget>>
         retiredVenusTargets_;
 };

@@ -116,6 +116,7 @@ add_library(virgl_child SHARED
     virgl_surface_presenter.cpp
     venus_surface_presenter.cpp
     native_window_vk_target.cpp
+    native_window_gles_target.cpp
     phone_adapter/phone_virgl_dispatch.cpp
 )
 target_link_libraries(virgl_child PUBLIC
