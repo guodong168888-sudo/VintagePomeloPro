@@ -15,6 +15,13 @@ not a declaration that the optimization roadmap or device gates are complete.
 - Reuse `vp-build` and `/home/maple/vp-src`; incremental Host/HAP builds only.
   Build-machine paths are evidence, not portable defaults.
 
+Later HUD/navigation + production-runtime baseline used for the evening reconnect
+tests: `.hvigor/outputs/host-stage-baseline-20260831/hud-nav-baseline-1.3.2-arm64.hap`,
+SHA-256 `64a8fc96ebedda8c28be4234b20f83a9596b56a4157e4e9cafe622ed160fc154`.
+It remains available for rollback from the separately installed
+[GL failure backoff candidate](gl-background-backoff.md). Do not confuse these
+later artifacts with the original fullscreen/input checkpoint above.
+
 ## Measurement entry
 
 `automation/Measure-WineHuaGlPerformance.ps1` launches the regular game Want
@@ -163,12 +170,23 @@ merge (11), mapped ranges (27), product policy, timing, GLES target mock/failure
 handling, and actual API 23 declarations for both ARM64 and x86_64 syntax checks.
 It does not constitute new ARM64/x86_64 HAP linkage, visual or hardware acceptance.
 
-Remaining current-batch evidence is unchanged: real core GL/audio after reconnect;
-War3 cold start/input/restore x3; GL 32/64-bit lifecycle x5 and ten minutes; Modern
-video + surrounding CPU UI through completion; both DXVK D3D11 cubes; and bounded
-investigation of the existing EGL 0x505 observation. The 18:31 core session timed out
-after HDC disconnected and cannot satisfy any of those gates. Normal-session
-restoration after that attempt must also be confirmed after reconnect.
+After reconnect, the obsolete smoke Want was found to be ignored by current
+EntryAbility. Core tests now use the normal game launcher: 18:59 GL/audio x86/x64
+functional checks passed, but x64 GL had an actual 0x505 drop, so this is not a
+clean stability gate. Both DXVK D3D11 cubes passed 40/40 frame-order samples;
+Modern media showed actual logo animation and reached EC_COMPLETE, with its Wine
+title bar and surrounding desktop visible. These precede the new Native candidate.
+
+Lifecycle testing exposed an unbounded GL error loop while the desktop consumer
+is paused and the application library is active. The [bounded GL failure retry
+candidate](gl-background-backoff.md) is separately packaged and measured; it is
+not GLES Direct enablement. The candidate completed GL x86/x64 resize/background/
+resume x5 each with visible recovery, but hidden-state failures remain rate-limited,
+not eliminated. War3 cold start/input/restore x3, GL frame order, ten continuous
+minutes and resource-growth gates, and eliminating sporadic 0x505 remain open.
+Post-install candidate cross-checks also passed both DXVK cubes (40/40 each) and
+Modern Quartz/GStreamer visible logo animation with one fresh EC_COMPLETE.
+Player window/desktop visibility is not a complete game's CPU UI acceptance.
 
 GLES Direct remains default-off. Its actual-device matrix and three alternating
 performance pairs additionally require native-buffer import capability; this

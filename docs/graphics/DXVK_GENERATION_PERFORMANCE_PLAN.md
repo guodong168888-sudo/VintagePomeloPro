@@ -100,7 +100,9 @@ VirGLRenderer、NativeWindow 与系统合成路径，但会产生不同的命令
   产出帧时，候选只可按 NCP 的“最近 present 优先”顺序、且在合成器可见和未被绑定的前提下提升，
   已产出帧的绑定绝不抖动切换。
 - 真机受控验证使用同一 `mv000.pak`，在 `dxvk_modern_2_6` 路由上显示了实际影片帧并以
-  `EC_COMPLETE` 结束（约 30.5 s）。这证明当前候选的 Quartz/GStreamer 解码和可视呈现可用。
+  `EC_COMPLETE` 结束。历史最终 PTS 约 30.5 s，不等同于墙钟播放时长；
+  2026-08-31 复测的 progress 墙钟约 15 s，结束 PTS 约 30.5 s，二者差异保留。
+  这证明该次 Quartz/GStreamer 解码和可视呈现可用，不验证播放时长精度。
   若 WA2 重启后仍停在黑屏，先检查该进程是否真的创建了 Quartz/GStreamer graph：本轮重启后的
   Legacy 与 Modern 都未创建 graph，属于游戏入口状态，不能归因到任一 DXVK runtime 或 presenter。
 
@@ -110,11 +112,12 @@ VirGLRenderer、NativeWindow 与系统合成路径，但会产生不同的命令
 
 如果 2.6 每帧发布更多 dirty range，即使最终字节数相近，也会增加 Guest flush、协议序列化、
 Host coverage sort 和 inline upload 命令数。command-list mapped-flush batching 当前已经是 Modern 产品
-capability，因此首个单变量应当是保持真实产品基线，再显式关闭 batching，验证它究竟在改善还是放大开销。
+capability。历史关闭对照已证明 batching 的重要性；按当前用户要求不再复跑 off。
+新的单变量只比较保持 batching 开启的改前/改后算法。
 
 当前候选在 batching 内增加了相邻 range 在线合并。诊断计数在合并前记录原始
 `queued_ranges/queued_bytes`，`emitted_ranges/emitted_bytes` 则记录排序和两级合并后的 Vulkan
-flush 输入；统计关闭时不做原子计数。正式判断仍要用同一 DLL 的 product/batch-off，以及改前/改后
+flush 输入；统计关闭时不做原子计数。正式判断使用 batching 均开启的改前/改后
 DLL 单变量，避免把工作负载波动误判为合并收益。
 
 在线与最终排序合并现共用 `dxvk_winehua_mapped_range.h`，其相邻、重叠、逆序、间隙、
@@ -122,7 +125,7 @@ DLL 单变量，避免把工作负载波动误判为合并收益。
 Meson/Ninja 的 MinGW x64/x86 单对象编译。现有 `winehua-dev` 不含真实 `glslangValidator`，因此该结果
 不冒充完整 DXVK DLL 构建；完整 DLL/HAP/真机仍保留为候选门禁。
 
-判据：Modern product 与 Modern batch-off 的 Host/Guest range 数、flush call、uploaded bytes、
+判据：Modern 改前与改后（均为 product/on）的 Host/Guest range 数、flush call、uploaded bytes、
 present FPS 和 P95/P99 同时对比。
 
 ### H2：Guest/Box64 CPU hot path 成本

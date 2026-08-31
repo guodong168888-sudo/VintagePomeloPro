@@ -95,6 +95,20 @@
 - 上游路径：将 OHOS/Venus 非同址 coherent 映射语义最小化后提交到 VKD3D/Venus；若 transport 获得正确 coherent 可见性则删除显式 flush
 - 删除条件：目标设备关闭强制同步后仍逐帧更新正确，且 P95/P99 不劣于 Width flush 路径
 
+### Q008 — GL 隐藏桌面错误重试退避
+
+- 状态：`active`（`refact/gl-optimization` 候选，Native 提交 `8de093d`）
+- Owner：Host `SurfaceQueueTarget` / Guest vtest present pacing
+- 影响：GL consumer 暂停但应用仍活跃，以及暂时性 fence/context/present 失败
+- 症状：失败返回不带未来 deadline，清空 Guest 限速；隐藏桌面时实测约 328 次/秒错误尝试
+- 当前措施：失败仍返回原错误，同时传递一帧至 50 ms 的有界退避；早到请求返回 deferred，成功或新 target 清零
+- 生产默认：只在候选现有 GL 错误路径生效，不新增开关；健康帧、Vulkan target 和 `batchMappedFlush` 产品开启策略不变
+- 主要位置：`present_pacing.h`、`virgl_surface_presenter.cpp`；不修改 Guest 库或 IPC
+- 回归：退避边界/溢出 Host 测试；GL x86/x64 各五轮恢复；两代 DXVK 各 40/40 帧序；Modern 视频可见并正常结束
+- 上游路径：先补齐 NativeImage consumer 与 producer 的暂停/恢复协调，再考虑用明确 queue-full/deferred 语义替代驱动模糊错误
+- 删除条件：生命周期及故障注入均证明失败不再形成无界循环，恢复和长稳无回归；仅消除后台错误不足以删除通用失败限速
+- 未完成：`0x505` 根因、完整后台停产、十分钟/资源增长及 GL 帧序门槛；详见 [证据与回退](gl-background-backoff.md)
+
 ## 新增记录模板
 
 新增条目需包含：状态、Owner、影响范围、可见症状、当前措施、生产默认、代码位置、回归测试、上游路径和可验证的删除条件。

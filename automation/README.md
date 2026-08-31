@@ -54,6 +54,7 @@ ELF 和内嵌 runtime 哈希；签名与 Guest 嵌套载荷完整性须已在该
 .\automation\Test-GraphicsTestPolicy.ps1
 .\automation\Test-NormalSmoke.ps1
 .\automation\Test-SmokeVisual.ps1
+.\automation\Test-FrameOrderGate.ps1
 ```
 
 DXVK 性能测量的 `-ConditionSet` 仅支持 `product`（两代交替）、`legacy`、
@@ -64,8 +65,9 @@ DXVK 性能测量的 `-ConditionSet` 仅支持 `product`（两代交替）、`le
 ## 本轮验证状态（2026-08-31）
 
 预检单测、HDC 零退出码失败模拟、GL 计时解析测试通过；真实 1.3.2 ARM64
-基线的哈希/身份/ABI 只读预检及现有 `vp-build` 绑定检查通过。本次只改测试
-工具与文档，没有为了它们重建或安装 HAP，没有执行构建分支。
+基线的哈希/身份/ABI 只读预检及现有 `vp-build` 绑定检查通过。测试工具迁移
+本身没有触发 HAP 重建或安装；后续因发现 Native 后台错误忙循环，单独增量
+构建并安装了[限速候选](../docs/graphics/gl-background-backoff.md)。
 
 重连后确认：18:31/18:52 的旧请求虽被系统接受，但应用忽略 `mode=smoke`，
 probe 并未启动；此前将其仅归因断连的判断不完整。改为正常 `game` 入口后，
@@ -78,3 +80,7 @@ probe 并未启动；此前将其仅归因断连的判断不完整。改为正�
 现按每个启动 PID 隔离日志，新增 blit drop、非零 failed_swaps、fatal signal
 门禁，避免既混入旧会话错误、又漏过本次错误。未知的 GPU/CPU-copy 指标仍为
 未知，不补零，不把模拟输入/音频 drain 当成真人听感或全套生命周期验证。
+
+同名 Wine/Appspawn 子进程不能靠 `pidof` 的数量判定重启。公共入口按
+`PID,PPID,NAME` 进程树选唯一主 PID，主机测试覆盖同名子进程与多根歧义；
+PowerShell 函数向 `ps -o` 转发字段时使用单个带引号字符串。
