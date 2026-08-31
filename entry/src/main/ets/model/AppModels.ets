@@ -130,7 +130,7 @@ export function box64PresetLabel(presetId: string): string {
     case BOX64_PRESET_STABILITY:
       return '稳定模式';
     case BOX64_PRESET_UNITY:
-      return 'Unity 兼容';
+      return 'Pura X Max · IL2CPP/Burst';
     case BOX64_PRESET_CONSERVATIVE:
       return '兼容模式';
     case BOX64_PRESET_INTERMEDIATE:
@@ -147,7 +147,7 @@ export function box64PresetDescription(presetId: string): string {
     case BOX64_PRESET_STABILITY:
       return '优先保证兼容与稳定，适合新引擎、Unity 或频繁崩溃的程序。';
     case BOX64_PRESET_UNITY:
-      return '针对 Unity 引擎的稳定档：信号处理走解释器，规避模拟层信号竞态导致的启动失败/黑屏。仅对当前游戏生效，可能略微降低帧率。';
+      return '《极品采花郎》专用：基于新版图形直出，启用 Box64 Unity/IL2CPP/Burst 兼容、4 核与对齐原子操作，并强制单游戏 DXVK 2.6.2。';
     case BOX64_PRESET_CONSERVATIVE:
       return '兼容与性能之间偏保守，适合大部分老游戏。';
     case BOX64_PRESET_INTERMEDIATE:
@@ -177,12 +177,22 @@ export function resolveBox64PresetEnv(presetId: string): string[] {
         'BOX64_DYNAREC_FASTROUND=0',
         'BOX64_DYNAREC_X87DOUBLE=1',
         'BOX64_DYNAREC_BIGBLOCK=0',
-        'BOX64_DYNAREC_STRONGMEM=2',
+        'BOX64_DYNAREC_STRONGMEM=1',
         'BOX64_DYNAREC_FORWARD=128',
         'BOX64_DYNAREC_CALLRET=0',
-        'BOX64_DYNAREC_WAIT=0',
+        'BOX64_DYNAREC_WAIT=1',
         'BOX64_DYNAREC_NATIVEFLAGS=0',
-        'BOX64_DYNAREC_INTERP_SIGNAL=1'
+        'BOX64_DYNAREC_INTERP_SIGNAL=1',
+        'BOX64_UNITYPLAYER=1',
+        'BOX64_UNITY=1',
+        'BOX64_MAXCPU=4',
+        'BOX64_DYNAREC_ALIGNED_ATOMICS=1',
+        'WINEESYNC=0',
+        'WINEFSYNC=0',
+        'WINEHUA_FORCE_DXVK_MODERN=1',
+        'DXVK_STATE_CACHE=0',
+        'DXVK_LOG_LEVEL=info',
+        'DXVK_LOG_PATH=C:\\windows\\temp'
       ];
     case BOX64_PRESET_STABILITY:
       return [
@@ -251,7 +261,15 @@ export function box64PresetEnvString(presetId: string): string {
  * Stability 预设之外还需要 -force-gfx-direct，让 Unity 跳过 GDI 间接
  * 渲染路径，直接绘制到窗口，减少黑屏/花屏。
  */
-export const UNITY_COMPAT_LAUNCH_ARGS: string[] = ['-force-gfx-direct'];
+export const UNITY_COMPAT_LAUNCH_ARGS: string[] = [
+  '-force-d3d11',
+  '-force-d3d11-no-singlethreaded',
+  '-screen-fullscreen', '0',
+  '-screen-width', '960',
+  '-screen-height', '540',
+  '-job-worker-count', '4',
+  '-logFile', 'C:\\windows\\temp\\RE-Player.log'
+];
 
 /** 判断某预设是否启用了 Unity 兼容模式（决定是否注入启动参数）。 */
 export function isUnityCompatPreset(presetId: string): boolean {
