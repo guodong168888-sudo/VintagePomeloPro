@@ -142,8 +142,13 @@ bool EglRenderer::TryAttachZeroCopySurface(uint32_t rendererToplevelId)
         {
             if (zeroCopyLayerX_ != layer.x || zeroCopyLayerY_ != layer.y ||
                 zeroCopyLayerW_ != layer.width || zeroCopyLayerH_ != layer.height ||
-                zeroCopyFullscreen_ != (layer.fullscreen && server->Policy().RootCompositing()))
+                zeroCopyFullscreen_ != (layer.fullscreen && server->Policy().RootCompositing())) {
                 zeroCopyGeometryDirty_ = true;
+                // A viewport/position change can expose CPU content without a
+                // new SHM frame. Re-evaluate the base once, not on every present.
+                if (zeroCopyReadyPublished_ && server->Policy().RootCompositing())
+                    server->ForceToplevelRedraw(rendererToplevelId);
+            }
             zeroCopyLayerX_ = layer.x;
             zeroCopyLayerY_ = layer.y;
             zeroCopyLayerW_ = layer.width;
@@ -971,31 +976,13 @@ void EglRenderer::RenderLoop() {
                             zeroCopyLayerX_, zeroCopyLayerY_, zeroCopyFullscreen_,
                             zeroCopySourceW_, zeroCopySourceH_);
             int layerViewportX, layerViewportY, layerViewportW, layerViewportH;
-            if (zeroCopyFullscreen_) {
-                // ZC 游戏全屏: 层内容保比例缩放进桌面帧的显示区, 而非按帧比例
-                // 映射 — 全屏后 buffer 被 Wine 扩到输出尺寸, 但层几何仍是游戏
-                // 内部分辨率, 直接映射会把画面缩到左上角一块。CPU 侧整帧已填黑
-                // (TakeToplevelFrame ZC 分支), 这里的 letterbox 与 SHM 全屏同效
-                FitRect zcFit;
-                if (ComputeFitRect(letterbox_.dstW, letterbox_.dstH,
-                                   zeroCopyLayerW_, zeroCopyLayerH_, zcFit)) {
-                    layerViewportX = letterbox_.offX + zcFit.offX;
-                    layerViewportY = letterbox_.offY + zcFit.offY;
-                    layerViewportW = zcFit.dstW;
-                    layerViewportH = zcFit.dstH;
-                } else {
-                    layerViewportX = letterbox_.offX;
-                    layerViewportY = letterbox_.offY;
-                    layerViewportW = letterbox_.dstW;
-                    layerViewportH = letterbox_.dstH;
-                }
-            } else {
-                // 帧内坐标 → surface 视口: 与 letterbox 同一映射 (GL 坐标系 Y 向上, 翻转)
-                layerViewportX = FitMapDisplayX(letterbox_, zeroCopyLayerX_);
-                layerViewportY = FitMapDisplayY(letterbox_, frameH_ - zeroCopyLayerY_ - zeroCopyLayerH_);
-                layerViewportW = std::max(1, FitSizeDisplayW(letterbox_, zeroCopyLayerW_));
-                layerViewportH = std::max(1, FitSizeDisplayH(letterbox_, zeroCopyLayerH_));
-            }
+            // The compositor resolves fullscreen/windowed child placement using
+            // the same parent fit as input. Image dimensions never define a
+            // separate fullscreen coordinate space (e.g. a video subregion).
+            layerViewportX = FitMapDisplayX(letterbox_, zeroCopyLayerX_);
+            layerViewportY = FitMapDisplayY(letterbox_, frameH_ - zeroCopyLayerY_ - zeroCopyLayerH_);
+            layerViewportW = std::max(1, FitSizeDisplayW(letterbox_, zeroCopyLayerW_));
+            layerViewportH = std::max(1, FitSizeDisplayH(letterbox_, zeroCopyLayerH_));
             glViewport(layerViewportX, layerViewportY, layerViewportW, layerViewportH);
             glUseProgram(zeroCopyProgram_);
             glBindTexture(GL_TEXTURE_EXTERNAL_OES, zeroCopyTexture_);

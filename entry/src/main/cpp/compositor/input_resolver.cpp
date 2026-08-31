@@ -51,30 +51,32 @@ bool InputResolver::FindInputTargetAt(int x, int y, InputTarget& out)
     const auto layers = compositor_.BuildLayerListLocked(rootW, rootH);
 
     // 全屏目标选取 + fit 几何 — 与渲染侧 (TakeToplevelFrame) 共用单一实现:
-    // PickFullscreenLayerLocked: 可见全屏窗口中取 fsPriority 最大者 (多窗口
+    // PickFullscreenToplevelLocked: 可见全屏窗口中取 fsPriority 最大者 (多窗口
     // 可同时 fullscreen, 显示模式切换时 Wine 会连带标记旧窗口 — 2026-07 实测
     // notepad 被连带标记并压在游戏上), 规则原因/局限见 ToplevelState::fsPriority
-    // 注释; ComputeFullscreenFitLocked: ZC 游戏用全屏前尺寸 (游戏分辨率),
-    // SHM 游戏用 buffer 尺寸 (见该函数注释)
-    const uint32_t fullscreenId = compositor_.PickFullscreenLayerLocked(layers);
+    // 注释; ComputeFullscreenFitLocked uses current committed window geometry
+    // for both SHM and GPU presentation, never a pre-fullscreen snapshot.
+    const uint32_t fullscreenId = compositor_.PickFullscreenToplevelLocked();
     const ToplevelManager::ToplevelState* zst =
         fullscreenId ? tmgr_.FindToplevelLocked(fullscreenId) : nullptr;
     FitRect transform;
     const bool fsOk = zst &&
         compositor_.ComputeFullscreenFitLocked(fullscreenId, rootW, rootH, transform);
     if (fsOk) {
-        // 诊断: 全屏输入目标选取 (仅目标变化时输出 — 多窗口同时全屏时
+        // 诊断: 全屏输入目标选取 (仅目标/几何变化时输出 — 多窗口同时全屏时
         // 选错窗口的点击路由问题靠它定位, 例如旧窗口被连带标记压在游戏上)
         static uint32_t sLastPicked = 0;
-        if (fullscreenId != sLastPicked) {
+        static FitRect sLastFit;
+        if (fullscreenId != sLastPicked || !SameFitRect(transform, sLastFit)) {
             sLastPicked = fullscreenId;
+            sLastFit = transform;
             OH_LOG_INFO(LOG_APP,
                 "[Input] fs-pick tl=#%{public}u pri=%{public}llu zc=%{public}d"
-                " preFs=%{public}dx%{public}d buf=%{public}dx%{public}d → content=%{public}dx%{public}d",
+                " buf=%{public}dx%{public}d → content=%{public}dx%{public}d fit=%{public}d,%{public}d+%{public}dx%{public}d",
                 fullscreenId, static_cast<unsigned long long>(zst->FsPriority()),
                 compositor_.HasZeroCopyLayerForToplevelLocked(fullscreenId) ? 1 : 0,
-                zst->PreFsW(), zst->PreFsH(), zst->Width(), zst->Height(),
-                transform.srcW, transform.srcH);
+                zst->Width(), zst->Height(), transform.srcW, transform.srcH,
+                transform.offX, transform.offY, transform.dstW, transform.dstH);
         }
     }
     const int fsWinX = zst ? zst->X() : 0;
@@ -237,12 +239,9 @@ bool InputResolver::SurfaceLocalToDesktop(wl_resource* surface, double lx, doubl
     auto lk = tmgr_.Lock();
     const auto* st = tmgr_.FindToplevelLocked(tl);
     if (!st) return false;
-    // NOTE: 此处按 IsFullscreen() 判定, 与 FindInputTargetAt 的 fs-pick
-    // (fsPriority 最大者) 是两套全屏定义 — 显示模式切换时被连带标记的旧
-    // 窗口 IsFullscreen()=true 但非 fs-pick 选中。warp 请求 (SetCursorPos
-    // 回中等) 一般只针对当前前台窗口, 实际不冲突; 若未来观察到连带窗口
-    // warp 错位, 统一为 fs-pick 语义 (PickFullscreenLayerLocked 选中者)。
+    // Do not warp through a cascaded fullscreen window that is not displayed.
     if (st->IsFullscreen()) {
+        if (compositor_.PickFullscreenToplevelLocked() != tl) return false;
         // 与 FindInputTargetAt 全屏分支同一几何 (ComputeFullscreenFitLocked),
         // 保证 warp 锚点与输入逆映射互为正反变换
         int rootW, rootH;

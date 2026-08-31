@@ -195,6 +195,8 @@ private:
     uint32_t lastRelativeToplevel_ = 0;
     wl_resource* lastRelativeSurface_ = nullptr;
     uint64_t lastRelativeSpaceEpoch_ = 0;
+    FitRect lastRelativeFit_;
+    FitRect lastRelativeDisplayFit_;
     std::atomic<uint64_t> relativeSpaceEpoch_{1};
 
     // 最近一次按下时刻 (ACT_RELEASE 的脉冲拉伸计时, 见 input_manager.cpp)

@@ -24,7 +24,9 @@ struct ZeroCopyLayerInfo {
     uint64_t shmCommitSerial = 0;
     bool desktopCoordinates = false;
     bool protocolOnly = false;
-    bool fullscreen = false;  // 所属 toplevel 全屏: GL 层保比例缩放铺满视口 (ZC 游戏)
+    // In desktop mode x/y/width/height are already mapped through the parent's
+    // fullscreen fit. The renderer must not fit this child independently.
+    bool fullscreen = false;
 };
 
 struct ZeroCopyOccluderRect {
@@ -142,7 +144,7 @@ public:
     // 2026-07 实测 notepad 被连带标记并压在游戏上), 规则原因/局限见
     // ToplevelState::fsPriority 注释。调用方须已持有 tmgr mutex;
     // 返回 id 对应的 state 由调用方锁内查询 (pick 时已确认非空)。
-    uint32_t PickFullscreenLayerLocked(const std::vector<CompositorLayer>& layers) const;
+    uint32_t PickFullscreenToplevelLocked() const;
 
     // 非主全屏窗口 (显示模式切换时被 winewayland 连带标记的旧窗口) 是否应
     // 跳过合成/命中 — 渲染 blitToplevel/blitSubsurface 与输入
@@ -154,9 +156,9 @@ public:
                                             uint32_t fullscreenId, bool fsOk,
                                             ToplevelManager& tmgr);
 
-    // 全屏内容 fit 几何 (渲染/输入共用): 内部做全屏内容尺寸选择
-    // (SelectFullscreenContentSize: ZC 游戏用 preFs 分辨率, SHM 用 buffer
-    // 尺寸) + ComputeFitRect — 该规则的唯一实现, 替换两侧各自组合。
+    // Fullscreen fit of the current committed window content, shared by CPU,
+    // GPU children, input and cursor warps. Pre-fullscreen sizes are restore
+    // metadata in SurfaceData only; producer image size is not an input space.
     // 调用方须已持有 tmgr mutex; 找不到 toplevel state 返回 false。
     bool ComputeFullscreenFitLocked(uint32_t toplevelId, int rootW, int rootH,
                                     FitRect& out) const;
@@ -206,6 +208,11 @@ public:
     bool HasZeroCopyLayerForToplevelLocked(uint32_t id) const;
 
 private:
+    bool ResolveZeroCopyLayerInfoLocked(uint64_t surfaceKey, uint32_t rendererToplevelId,
+                                        int fallbackWidth, int fallbackHeight,
+                                        ZeroCopyLayerInfo& info);
+    bool HasFullscreenZeroCopyContentLocked(uint32_t id);
+
     ToplevelManager& tmgr_;
     const DisplayPolicy& policy_;
     const uint32_t& desktopRootToplevelId_;

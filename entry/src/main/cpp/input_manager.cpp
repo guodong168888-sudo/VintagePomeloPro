@@ -418,8 +418,9 @@ void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double p
     // wl_surface, 必须 enter 它并用层相对坐标 — 经父窗口 surface 的越界
     // 坐标会被 winewayland 的 motion clamp 夹回窗口内, 菜单伸出部分点不中)
     wl_resource* targetSurf = nullptr;
+    FitRect inputFit, displayFit;
     if (ws->Policy().CompositorRoutesInput() && tl != ws->GetDesktopRootToplevelId()) {
-        CoordTransform(px, py, ws->GetDesktopRootToplevelId(), &wx, &wy);
+        CoordTransform(px, py, ws->GetDesktopRootToplevelId(), &wx, &wy, &displayFit);
         // 记录最近一次注入的桌面全局指针位置 (grab 建立时算固定偏移用)
         lastGlobalPtrX_.store(wx);
         lastGlobalPtrY_.store(wy);
@@ -445,6 +446,11 @@ void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double p
             if (target.swallow && action == ACT_PRESS) return;
             tl = target.toplevelId;
             targetSurf = target.surface;
+            inputFit.srcW = target.contentW;
+            inputFit.srcH = target.contentH;
+            inputFit.offX = target.originX;
+            inputFit.offY = target.originY;
+            inputFit.scale = target.scale;
             // 桌面坐标 → surface 局部坐标 (即 geometry.h 的 FitUnmapX/Y;
             // target.origin/scale 由 InputResolver 的 ComputeFitRect 给出)。
             // target.scale > 1 表示全屏窗口保比例放大显示, 局部坐标需按同一缩放除回来
@@ -462,6 +468,7 @@ void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double p
     } else {
         FitRect lb{};
         CoordTransform(px, py, tl, &wx, &wy, &lb);
+        displayFit = lb;
         // 钳到内容区 (全屏 letterbox 黑边 / 拖出窗口边缘的越界坐标):
         // 与可见光标位置对齐, 防相对增量差分累积幽灵位移 (见 ClampToContent)
         if (lb.srcW > 0 && lb.srcH > 0) {
@@ -493,8 +500,13 @@ void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double p
     if (action == ACT_MOVE) {
         const double localX = wl_fixed_to_double(wx);
         const double localY = wl_fixed_to_double(wy);
-        const double diffDx = hasLastLocal_ ? (localX - lastLocalX_) : 0.0;
-        const double diffDy = hasLastLocal_ ? (localY - lastLocalY_) : 0.0;
+        const uint64_t spaceEpoch = relativeSpaceEpoch_.load();
+        const bool sameSpace = hasLastLocal_ && lastRelativeToplevel_ == tl &&
+            lastRelativeSurface_ == relativeSurface && lastRelativeSpaceEpoch_ == spaceEpoch &&
+            SameFitRect(inputFit, lastRelativeFit_) &&
+            SameFitRect(displayFit, lastRelativeDisplayFit_);
+        const double diffDx = sameSpace ? (localX - lastLocalX_) : 0.0;
+        const double diffDy = sameSpace ? (localY - lastLocalY_) : 0.0;
         if (relativeActive) {
             double dx = 0.0, dy = 0.0;
             if (rawDx != 0.0 || rawDy != 0.0) {
@@ -517,7 +529,9 @@ void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double p
             }
             lastRelativeToplevel_ = tl;
             lastRelativeSurface_ = relativeSurface;
-            lastRelativeSpaceEpoch_ = relativeSpaceEpoch_.load();
+            lastRelativeSpaceEpoch_ = spaceEpoch;
+            lastRelativeFit_ = inputFit;
+            lastRelativeDisplayFit_ = displayFit;
         } else {
             lastRelativeToplevel_ = 0;
             lastRelativeSurface_ = nullptr;

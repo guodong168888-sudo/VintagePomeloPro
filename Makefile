@@ -413,6 +413,16 @@ test: graphics-contract-check
 	    $(ROOT)/host_tests/geometry_test.cpp \
 	    $(ROOT)/entry/src/main/cpp/compositor/geometry.cpp
 	$(HOST_TEST_DIR)/geometry_test
+	g++ -std=c++17 -Wall -Wextra -Werror -DWINEHUA_DEBUG_ASSERT \
+	    -I $(ROOT)/host_tests/stubs -I $(ROOT)/entry/src/main/cpp \
+	    -o $(HOST_TEST_DIR)/compositor_state_test \
+	    $(ROOT)/host_tests/compositor_state_test.cpp \
+	    $(ROOT)/entry/src/main/cpp/compositor/desktop_compositor.cpp \
+	    $(ROOT)/entry/src/main/cpp/compositor/input_resolver.cpp \
+	    $(ROOT)/entry/src/main/cpp/compositor/toplevel_manager.cpp \
+	    $(ROOT)/entry/src/main/cpp/compositor/geometry.cpp \
+	    $(ROOT)/entry/src/main/cpp/compositor/compositor_blit.cpp
+	$(HOST_TEST_DIR)/compositor_state_test
 	g++ -std=c++17 -Wall -Wextra -I $(ROOT)/entry/src/main/cpp \
 	    -o $(HOST_TEST_DIR)/blit_scaled_test \
 	    $(ROOT)/host_tests/blit_scaled_test.cpp \
