@@ -317,12 +317,17 @@ export function resolveUnityRescueLaunchArgs(argumentsIn: string[]): string[] {
   const result = resolveUnityLaunchArgsForBackend(argumentsIn, '-force-d3d11', 960, 540);
   result.push('-force-gfx-st');
   result.push('-force-d3d11-singlethreaded');
+  // Romantic Escapades writes its normal Unity log below
+  // AppData\LocalLow\Salamander\RE.  Force a second, deterministic copy so
+  // diagnostics still work if the game's persistent-data folder is delayed or
+  // cannot be created while the loading screen is stuck at 99%.
+  result.push('-logFile', 'C:\\windows\\temp\\RE-Player.log');
   return result;
 }
 
 function resolveUnityLaunchArgsForBackend(argumentsIn: string[], backend: string,
   width: number = 1280, height: number = 720): string[] {
-  const pairedOptions: string[] = ['-screen-fullscreen', '-screen-width', '-screen-height'];
+  const pairedOptions: string[] = ['-screen-fullscreen', '-screen-width', '-screen-height', '-logfile'];
   const result: string[] = [];
   for (let index = 0; index < argumentsIn.length; index += 1) {
     const argument = argumentsIn[index];
