@@ -572,6 +572,11 @@ export class WineEngineService {
       launchEnvironment.push(
         `WINEHUA_GRAPHICS_PROFILE=${this.appliedHostGraphicsLabExperiment}`);
     }
+    const forceModernDxvk = launchEnvironment.some((line: string): boolean =>
+      line === 'WINEHUA_FORCE_DXVK_MODERN=1');
+    const effectiveD3DBackend = forceModernDxvk ? 'dxvk_modern_2_6' : this.d3dBackend;
+    hilog.info(DOMAIN, '[ENG]', 'launch renderer backend=%{public}s forcedModern=%{public}s',
+      effectiveD3DBackend, forceModernDxvk ? 'true' : 'false');
     return testNapi.runWineExe(
       WINE_BIN,
       SOCK,
@@ -580,7 +585,7 @@ export class WineEngineService {
       this.homeDirectory,
       launchArguments,
       workingDirectory,
-      this.d3dBackend,
+      effectiveD3DBackend,
       launchEnvironment
     ) as NativeLaunchResult;
   }
