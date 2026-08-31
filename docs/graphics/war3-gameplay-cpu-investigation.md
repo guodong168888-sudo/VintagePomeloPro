@@ -87,11 +87,160 @@ Hiperf 对原始 IP、调用链、unwind/expand 标记分别输出，参见
 没有重新构建或修改运行库。后一轮场景会变化，不能拿 15 FPS 与之前另一段
 剧情的 26.32 FPS 直接推断退化，更不能与菜单对比宣称优化收益。
 
+## 15:19–15:49：进一步排除节流，并识别线程职责
+
+这一轮仍用同一已验证 HAP，没有安装包/运行库/产品参数变化。
+
+- 旧局内 2,400 帧原始间隔的 120 帧窗口为 16.86–35.64 FPS；240 个间隔短于
+  30 ms，只有 418 个落在 33.33 ms ±1 ms 内。不支持“整个路径固定锁 30 帧”。
+- 原会话 `frontbuffer.log` 的 calls=14,160 至 18,240，`paced_waits=127`、
+  `paced_wait_us=265168` 均未增加。不能将这段局内低帧归因于 Host 返回的
+  deadline 节流；这不排除其他资源/驱动等待。
+- 15:47 前台局内同一 surface 的主消费者 frame=3840→3960 耗时约 7.966 秒，
+  对应约 15.06 FPS；signals 同样只增加 120，update failures 保持 0。
+  主合成另一组 120 帧统计为 16.79 FPS，total CPU P95 8.141 ms；之后依次
+  回升至 21.62、24.81，并在 15:48 多个窗口约 25–26 FPS。两组窗口边界不同，
+  不能视为逐帧对齐，也不能把此次短暂低谷称为持续十几帧。
+- 这段前台样本 source 仍为 800×600，`upload_bytes=0`、`failed_swaps=0`。
+  当前会话 calls=7,200→8,520 的 paced_waits=342、paced_wait_us=760363 均不变。
+  后续线程短测主线程约 94%、另一繁忙线程约 65%；截图为人类前哨战役、
+  25 FPS、应用 CPU 213%、系统 CPU 38%、电池 40.0℃。这些不是低谷瞬间的 CPU
+  或 GPU 计时，不据此断言着色器编译、降频或某个 Guest 函数是根因。
+
+硬件计数器验证被拒作性能证据：5 秒 `hiperf stat --per-thread` 报告出现单线程
+task-clock 大于 5 秒、异常 GHz/CPI 注释及硬件事件仅 1% coverage。不能使用
+这些数值推导 IPC、核心频率或调度瓶颈。
+
+新增独立的 `smoke/winehua_guest_inspect.c`，只在现有容器执行
+`make guest-inspect` 构建小型 Windows 诊断程序；不依赖 `wine/native/hap`
+目标，不默认打包。通过原应用启动环境读取 Toolhelp 进程/模块、线程描述、
+GetThreadTimes 和线程启动地址，不注入、不暂停、不调整目标进程。
+
+- 正常 Wine 入口的进程快照确认实际游戏进程名为 **war3.exe**，不是启动器
+  Frozen Throne.exe。Guest PID 与 Linux PID 不可混用。
+- 真机线程描述确认第二个忙线程为 **wined3d_cs**，而非凭地址猜测。
+  该诊断时段读到主线程约 95.5%、wined3d_cs 约 64.5%，但附近存在主合成
+  `paused=yes`，只用于线程职责识别，不能当作前台性能 A/B。
+- 对目标游戏的跨进程模块快照返回 `ERROR_ACCESS_DENIED (5)`。工具如实输出
+  部分失败，未绕过权限；实际 D3D8/D3D9 模块仍未验证。启动地址仅为线程角色
+  辅助信息，绝不是执行热点。
+- 第一版一次自检遇到 Box64/Wine 异常，已经关闭该诊断会话、确认相关进程退出；
+  新版增加无缓冲阶段记录和 10 秒仅终止自身的看门狗。后续顺序启动的真机
+  自检通过，但原异常根因未确认，不能宣称看门狗修复了 Wine。
+- 主机测试覆盖 JSONL、精确进程名、缺失进程、CPU 边界、启动地址非热点标记、
+  时长限制及拒绝覆盖已有证据。命令：
+  `automation/Test-GuestInspector.ps1 -Executable <构建产物的 Windows 路径>`。
+
+证据位于忽略目录 `.hvigor/outputs/war3-critical-path-20260831`；工具使用 HDC
+`file send/recv -b com.vintage.pomelopro` 的调试应用通道与 `/data/storage/el2/base/`
+逻辑沙箱路径，普通 shell 对物理路径的权限不能等同于该通道。Want 中程序路径
+使用正斜杠，参数用现有 URI 编码 JSON，不再用未转义反斜杠。
+
+现有 `winehua.mode=game` 自动化入口会应用全局渲染设置并登记游戏会话，不是
+无副作用的采样入口。后续需为已就绪会话提供不改设置、不调用 ensureReady、
+不登记/切换游戏会话的受限诊断入口，再做前台同场景的线程采样。不要用这个
+工具替代尚缺失的每帧绘制提交、资源锁定及 Host finish/fence 阶段统计。
+
+## 16:04 后的负载变化与 Host 计时缺口
+
+同一会话 16:04 的两个窗口回升至 34.99 / 35.54 FPS。用户明确说明此时已经
+没有兵，渲染目标减少。因此这是场景负载变化，不能当作代码优化收益，也不能
+用它与之前密集单位场景做 A/B。单位数量同时影响模拟、可见性、绘制提交和
+GPU 工作量；“主线程接近一核”也可能包含忙等待，仍不能直接锁定 CPU 根因。
+
+检查当前 `vtest_resource_busy_wait` 实现发现，在
+`VTEST_SYNC_GL_FINISH` 生效时，`virgl_renderer_context_finish` **先执行**，
+原 `busy wait begin/end` 日志随后才覆盖隐式 fence 的轮询。原日志中没有长等待，
+并不能排除前面的 finish 阶段有成本。本轮没有关闭该同步机制。
+
+已新增独立 Host 计时桥，见 [诊断库说明](host-stage-timing-diagnostic.md)。只编译
+主仓库的一份 C 文件，再使用原生构建缓存重新链接；没有修改 Wine/Mesa/
+VirGLRenderer 子模块或原缓存库。独立 library 目标不部署，后续显式 HAP 目标仅
+临时替换 `entry/libs`，打包后已恢复并校验生产库。
+主机模拟测试、ARM64 交叉编译和重复构建无操作检查通过；反汇编确认原 submit、
+finish 和 callback 注册确实经过计时桥。这是诊断工具，不是性能优化成果。
+
+图形契约应针对 Windows 主仓库检查：本轮容器镜像目录的父仓库 Git 元数据仍
+引用旧 Wine gitlink，直接在那里运行会失败；其 Wine 子模块实际 HEAD 和主仓库
+均为 `3fc36c426830211751248ae3f5e7485a2295c323`，字体修改仍在。未为消除此
+检查失败而重置镜像 Git 元数据。Windows 主仓库完整契约检查已通过。
+
+已验证的 HUD/导航栏 HAP 已备份到忽略目录
+`.hvigor/outputs/host-stage-baseline-20260831/hud-nav-baseline-1.3.2-arm64.hap`，
+SHA-256 仍为 `64a8fc96ebedda8c28be4234b20f83a9596b56a4157e4e9cafe622ed160fc154`。
+用户随后授权不必保存，诊断 HAP 已通过原增量打包流程生成并覆盖安装，嵌套 Wine
+数据不变、原生产库已恢复。最初启动被系统锁屏错误 10106102 拒绝，用户解锁后
+启动成功。第一版 stderr 没进入 Host 文件日志，第二版修正日志接入后已采集到
+阶段数据；具体产物哈希与回退状态见诊断库说明。
+
+## 16:28–16:46：第二版 Host 诊断与实际低帧段
+
+第一版安装末期曾捕获兽族/巨魔雨林剧情约 11–15 FPS，主合成无上传、无交换
+失败；但没有 Host 阶段日志，不能拿它补全 Host/GPU 根因。第二版经正常入口启动，
+加载现有 `sss` 存档后实际是暗夜精灵 Rise of the Naga；与之前兽族场景不同。
+后续用户操作场景、视角和单位状态也有变化，以下是负载敏感性诊断，不是优化 A/B。
+
+同一进程、surface 52、context generation 6、source 800×600：
+
+- 前台较轻局内段：53 个完整窗口，6,360 帧 / 207.676353 秒，30.62 FPS。
+  `end_ns` 范围 206811324604226–207015017582351。Host RPC 每帧 wall 均值：
+  submit 1.859 ms、get 0.966 ms、busy 2.700 ms、present 0.530 ms。
+  submit 3 次/帧、busy 查询 28.414 次/帧、finish 3 次/帧；finish wall 2.329 ms/帧。
+- 16:40:39 后出现 `paused=yes`，后台期间 callback 失败，不纳入前台性能分析。
+  一次 `gl=0x505` blit 错误在后台切换后发生；恢复后重新产生有效帧，不能用它
+  解释此前稳定低帧，也不能据此宣称前后台完整回归已经通过。
+- 16:43 恢复前台后，精灵门附近截图约 28 FPS、应用 CPU 212%、系统 CPU 38%、
+  电池 38℃。短时出现 CPU 图层上传；16:44:11 起多个窗口恢复为零。
+- 随后场景继续变化，16:44:28 后持续降至约 19–21 FPS。16:45:57 附近截图为
+  精灵门前多个单位，HUD 20 FPS、应用 CPU 228%、系统 CPU 37%、电池 39℃。
+  同期 `top` 主线程 95%、第二个忙线程 71%；后者当前 Linux TID 为 33027，
+  未用旧进程的线程号或线程描述替代本会话的职责验证。
+- 低帧稳态选取 7 个完整窗口（排除前一窗口约 198.6 ms 的单次 submit 尖峰）：
+  840 帧 / 41.387110 秒，20.30 FPS；`end_ns` 为
+  207313121693289–207348480281726。全部 presented=120、deferred=0、failed=0，
+  阶段时钟有效且无非零返回。每帧 Host RPC wall 均值为 submit 3.514 ms、
+  get 0.950 ms、busy 2.624 ms、present 0.528 ms；对应 CPU 均值分别为
+  3.490 / 0.499 / 0.708 / 0.513 ms。
+- 低帧时 submit 4 次/帧，busy 查询 60.337 次/帧；finish 仍为 3 次/帧，
+  wall 1.881 ms、CPU 0.043 ms/帧。driver submit 3.081 ms wall、3.062 ms CPU/帧；
+  每帧约 72,766 个提交 DWORD，约为较轻段约 24,700 DWORD 的三倍，
+  **不是三倍 draw call 或三倍纹理上传**。
+- 16:44:40–16:44:58 的主合成窗口约 19.3–21.0 FPS，upload_bytes=0、failed_swaps=0，
+  total CPU P95 约 6.3–6.8 ms。当前 producer calls=27120→27480 的
+  paced_waits=184、paced_wait_us=257862 均未增加。后续 source/几何不变，
+  consumer update failures 仍为 0。Host 与主合成窗口不作逐帧强行对齐。
+
+低帧段整帧约 49.27 ms，已计入的 Host RPC 合计约 7.62 ms，且呈现与 finish
+没有随降帧增长。证据更支持继续追 Guest 绘制准备、资源检查和同步提交链路，
+不支持把当前差距主要归因于全屏放大/末端 swap 或 Host deadline 节流。
+但未测的 socket header/调度、Guest CPU 和异步 GPU 工作不能从差值自动分配；
+GPU 时间仍未测，游戏主线程高 CPU 也可能包含 Wine 命令队列忙等待。
+
+源码复核找到可区分的查询来源，而非已经确认的热函数：
+
+1. `virgl_vtest_busy_wait` 每次使用两次写、两次读完成一次同步往返；Host 端
+   resource handle 当前不参与 busy 判断，依据上下文的 implicit fence 状态。
+2. Guest 的资源缓存复用检查、discard/map 检查、query result 和有限超时 fence
+   轮询都可能调用此路径；仅凭 60 次/帧不能称为 60 次 `glFinish` 或无效轮询。
+3. `virgl_resource.c` 的读回路径可能在传输前、传输内部以及传输后等待，符合
+   当前“一次 get、三次 finish”的计数形态，但尚未确认具体资源及调用链。
+4. Wine `wined3d_cs_mt_finish` 存在队列清空等待，`wined3d_cs_run` 也会轮询查询；
+   因而不能将主线程接近一核直接解释成全部用于游戏 AI/逻辑。
+
+下一步优先补充实际绘制/inline transfer 的命令分类、读回资源范围，以及 Guest
+查询调用来源与往返耗时，区分“更多必要工作”和“重复检查”。确认冗余后才做
+有提交代次失效规则的查询复用或更窄同步候选；不得固定返回 idle、关掉 finish，
+或修改 `batchMappedFlush`。本轮没有安装新的性能候选，也没有改变运行环境。
+
+原始证据保存在忽略目录 `.hvigor/outputs/host-stage-baseline-20260831`：
+`v2-host-stages-1642.log`、`v2-resumed-host-1645.log`、`v2-resumed-graphics-1645.log`、
+`v2-lowfps-host-1646.log`、`v2-lowfps-top-1646.log` 及对应游戏截图。
+
 ## 下一轮的优先顺序
 
-1. 固定同一存档/地图、视角与单位数量；先测窗口/全屏各一个短样本确认
-   分辨率与场景一致，再按原计划做三组交替、预热 30 秒/采样 90 秒。
-   区分游戏全屏与应用沉浸布局，不把菜单与实际对局混为一组。
+1. War3 当前入口无法切换窗口/分辨率，不再将它们列为前置条件。固定同一
+   存档/地图、视角与单位数量，对基线和候选做三组交替、预热 30 秒/采样 90 秒。
+   空地/基地/密集单位只用于负载敏感性诊断，不混入同场景性能 A/B。
 2. 同步观察生产端间隔、主消费者间隔、合成/交换耗时、上传量、CPU 与温度；
    GPU 指标不可用时标为未测，电池温度不得当作芯片温度。
 3. CPU 短采样独立于性能 A/B；补齐匹配构建的 JIT 地址归属。若仍无法可信

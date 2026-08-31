@@ -477,6 +477,31 @@ test-performance-hud:
 test-bottom-navigation:
 	node $(SCRIPTS)/test_bottom_navigation.cjs
 
+# Standalone diagnostic only: no runtime/HAP dependency or default packaging.
+.PHONY: guest-inspect
+guest-inspect: $(BUILD_DIR)/guest-inspect/winehua_guest_inspect.exe
+
+$(BUILD_DIR)/guest-inspect/winehua_guest_inspect.exe: $(ROOT)/smoke/winehua_guest_inspect.c
+	@mkdir -p "$(@D)"
+	x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -Werror \
+	    -mwindows -static-libgcc -o "$@" "$<"
+
+# Opt-in diagnostics: library target stays isolated; HAP target stages temporarily.
+.PHONY: host-stage-timing host-stage-timing-hap test-host-stage-timing
+host-stage-timing:
+	python3 $(SCRIPTS)/build_host_stage_timing.py --arch $(NATIVE_ARCH)
+
+host-stage-timing-hap: host-stage-timing test-host-stage-timing
+	bash $(SCRIPTS)/package_host_stage_timing.sh
+
+test-host-stage-timing:
+	@mkdir -p $(HOST_TEST_DIR)
+	gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+	    -I $(ROOT)/thirdparty/virglrenderer/vtest -I $(ROOT)/thirdparty/virglrenderer/src \
+	    -I $(BUILD_DIR)/native_$(NATIVE_ARCH)/virglrenderer/src \
+	    $(ROOT)/host_tests/host_stage_timing_test.c -o $(HOST_TEST_DIR)/host_stage_timing_test
+	$(HOST_TEST_DIR)/host_stage_timing_test
+
 # ============================================================
 # clean
 # ============================================================
