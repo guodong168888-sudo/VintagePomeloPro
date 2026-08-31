@@ -139,7 +139,7 @@ export function box64PresetLabel(presetId: string): string {
     case BOX64_PRESET_UNITY_DXVK:
       return 'Unity DXVK（备用）';
     case BOX64_PRESET_UNITY_RESCUE:
-      return 'Unity D3D11（单线程救援）';
+      return 'Pura X Max · Unity DXVK 2.6';
     case BOX64_PRESET_CONSERVATIVE:
       return '兼容模式';
     case BOX64_PRESET_INTERMEDIATE:
@@ -160,7 +160,7 @@ export function box64PresetDescription(presetId: string): string {
     case BOX64_PRESET_UNITY_DXVK:
       return 'Unity DXVK 备用方案：使用 D3D11/DXVK、窗口化 1280×720，但不启用 gfx-direct；OpenGL 不兼容时可切换此档。';
     case BOX64_PRESET_UNITY_RESCUE:
-      return 'Unity 黑屏救援方案：D3D11 单线程、窗口化 960×540，关闭 Wine ESYNC/FSYNC，并取消极慢的信号解释器。适合进程仍存活但迟迟没有首帧的游戏。';
+      return 'Pura X Max 专用方案：强制 DXVK 2.6.2、D3D11 单线程、窗口化 800×450，限制 Unity 工作线程并降低 99% 加载阶段的内存峰值。';
     case BOX64_PRESET_CONSERVATIVE:
       return '兼容与性能之间偏保守，适合大部分老游戏。';
     case BOX64_PRESET_INTERMEDIATE:
@@ -204,7 +204,9 @@ export function resolveBox64PresetEnv(presetId: string): string[] {
         'BOX64_DYNAREC_FASTNAN=0',
         'BOX64_DYNAREC_FASTROUND=0',
         'BOX64_DYNAREC_X87DOUBLE=1',
-        'BOX64_DYNAREC_BIGBLOCK=1',
+        // Pura X Max has 12 GB RAM, also the game's stated minimum. Keep
+        // translated blocks small during the 99% asset/IL2CPP load spike.
+        'BOX64_DYNAREC_BIGBLOCK=0',
         'BOX64_DYNAREC_STRONGMEM=1',
         'BOX64_DYNAREC_FORWARD=256',
         'BOX64_DYNAREC_CALLRET=0',
@@ -212,6 +214,11 @@ export function resolveBox64PresetEnv(presetId: string): string[] {
         'BOX64_DYNAREC_NATIVEFLAGS=0',
         'WINEESYNC=0',
         'WINEFSYNC=0',
+        // Force the bundled WineHua DXVK 2.6.2 overlay for this game process;
+        // do not depend on global settings or GPU marketing-name heuristics.
+        'WINEHUA_FORCE_DXVK_MODERN=1',
+        // Avoid reusing a partially written cache from an earlier black screen.
+        'DXVK_STATE_CACHE=0',
         'DXVK_LOG_LEVEL=info',
         'DXVK_LOG_PATH=C:\\windows\\temp'
       ];
@@ -314,9 +321,10 @@ export function resolveUnityDxvkLaunchArgs(argumentsIn: string[]): string[] {
 
 /** D3D11 单线程救援路径：降低首帧尺寸并避开 Unity 图形工作线程死锁。 */
 export function resolveUnityRescueLaunchArgs(argumentsIn: string[]): string[] {
-  const result = resolveUnityLaunchArgsForBackend(argumentsIn, '-force-d3d11', 960, 540);
+  const result = resolveUnityLaunchArgsForBackend(argumentsIn, '-force-d3d11', 800, 450);
   result.push('-force-gfx-st');
   result.push('-force-d3d11-singlethreaded');
+  result.push('-job-worker-count', '2');
   // Romantic Escapades writes its normal Unity log below
   // AppData\LocalLow\Salamander\RE.  Force a second, deterministic copy so
   // diagnostics still work if the game's persistent-data folder is delayed or
@@ -327,7 +335,9 @@ export function resolveUnityRescueLaunchArgs(argumentsIn: string[]): string[] {
 
 function resolveUnityLaunchArgsForBackend(argumentsIn: string[], backend: string,
   width: number = 1280, height: number = 720): string[] {
-  const pairedOptions: string[] = ['-screen-fullscreen', '-screen-width', '-screen-height', '-logfile'];
+  const pairedOptions: string[] = [
+    '-screen-fullscreen', '-screen-width', '-screen-height', '-logfile', '-job-worker-count'
+  ];
   const result: string[] = [];
   for (let index = 0; index < argumentsIn.length; index += 1) {
     const argument = argumentsIn[index];
