@@ -395,8 +395,34 @@ export class AppLog {
       }
     } catch (_) {}
 
+    // DXVK_LOG_PATH and Unity's forced -logFile use Windows paths, therefore
+    // Wine resolves them inside the managed prefix rather than the native
+    // Harmony temp directory above.
+    const wineTempRoot = '/data/storage/el2/base/files/.wine/drive_c/windows/temp';
+    try {
+      const wineTempLogs = fs.listFileSync(wineTempRoot)
+        .filter((name: string): boolean => name.toLowerCase().endsWith('.log'))
+        .sort()
+        .slice(-12);
+      for (let index = 0; index < wineTempLogs.length; index += 1) {
+        const text = AppLog.tailText(wineTempRoot + '/' + wineTempLogs[index], 20000);
+        if (text.length > 0) sections.push('=== Wine temp: ' + wineTempLogs[index] + '（末尾）===\n' + text);
+      }
+    } catch (_) {}
+
     const playerLogs: string[] = [];
-    AppLog.findPlayerLogs('/data/storage/el2/base/files/.wine/drive_c/users', 6, playerLogs, [4000]);
+    // The game's developer confirmed this exact Unity persistent-data path.
+    // Read it first so the generic traversal budget cannot hide the useful log.
+    const usersRoot = '/data/storage/el2/base/files/.wine/drive_c/users';
+    try {
+      const users = fs.listFileSync(usersRoot);
+      for (let index = 0; index < users.length; index += 1) {
+        const exact = usersRoot + '/' + users[index] + '/AppData/LocalLow/Salamander/RE/Player.log';
+        const text = AppLog.tailText(exact, 24000);
+        if (text.length > 0) sections.push('=== 极品采花郎 Player.log\n' + exact + ' ===\n' + text);
+      }
+    } catch (_) {}
+    AppLog.findPlayerLogs(usersRoot, 7, playerLogs, [8000]);
     for (let index = 0; index < playerLogs.length; index += 1) {
       const text = AppLog.tailText(playerLogs[index], 16000);
       if (text.length > 0) sections.push('=== Unity Player.log\n' + playerLogs[index] + ' ===\n' + text);
