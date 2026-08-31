@@ -30,6 +30,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'AutomationPreflight.ps1')
+. (Join-Path $PSScriptRoot 'NormalSmoke.ps1')
 $batchMappedFlushOverrideRequested = $PSBoundParameters.ContainsKey('BatchMappedFlush')
 Assert-AutomationOptions -SkipBuild $SkipBuild -SkipInstall $SkipInstall -HapPath $HapPath `
     -ExpectedHapSha256 $ExpectedHapSha256 -BatchOverrideRequested $batchMappedFlushOverrideRequested `
@@ -122,7 +123,9 @@ function Test-FixedFrame {
                 $name = $null
                 if ($pixel.R -gt 170 -and $pixel.G -lt 100 -and $pixel.B -lt 120) { $name = 'red' }
                 elseif ($pixel.G -gt 150 -and $pixel.R -lt 120 -and $pixel.B -lt 130) { $name = 'green' }
-                elseif ($pixel.B -gt 160 -and $pixel.R -lt 130 -and $pixel.G -lt 140) { $name = 'blue' }
+                # Desktop blue also occupies most of a windowed screenshot.
+                # Match the saturated probe blue, not the surrounding desktop.
+                elseif ($pixel.B -gt 200 -and $pixel.R -lt 90 -and $pixel.G -lt 100) { $name = 'blue' }
                 elseif ($pixel.R -gt 170 -and $pixel.G -gt 140 -and $pixel.B -lt 120) { $name = 'yellow' }
                 if ($name) {
                     $classes[$name].Count++
@@ -774,6 +777,9 @@ if ($PreflightOnly) {
         artifact = $referenceArtifact; archiveRoot = $ArchiveRoot } | ConvertTo-Json -Depth 6
     return
 }
+# The former App-side SmokeRunner was removed. Reject unmigrated suites before
+# build/install/launch instead of starting a library page and waiting for files.
+Assert-NormalSmokeSuite $Suite $Prefix ([bool]$Gate)
 if (-not (Test-Path -LiteralPath $Hdc)) { throw "Windows HDC not found: $Hdc" }
 
 if (-not $DeviceId) {
@@ -873,17 +879,12 @@ foreach ($entry in $matrix) {
     $runPrefix = $entry[1]
     $runId = "$sessionId-$('{0:D2}' -f $index)-$runSuite-$runPrefix"
     try {
-        $passed = Invoke-OneRun -RunSuite $runSuite -RunPrefix $runPrefix -RunId $runId -RootDirectory $sessionDirectory
+        $passed = Invoke-NormalSmokeRun -RunSuite $runSuite -RunId $runId -RootDirectory $sessionDirectory
     } catch {
         $passed = $false
         $_ | Out-String | Set-Content -LiteralPath (Join-Path $sessionDirectory "$runId-infrastructure-error.txt") -Encoding UTF8
     } finally {
-        # Smoke uses the singleton EntryAbility with winehua.mode=smoke.  If it
-        # remains alive, a later icon launch is delivered through onNewWant and
-        # can retain the automation page/window state instead of rebuilding the
-        # normal Tablet desktop.  Stop only our test app after all result and
-        # screenshot collection for this run has completed; the next run (or a
-        # normal user launch) will then start from the correct mode boundary.
+        # Stop our normal game-launcher test session after evidence collection.
         try { Stop-AutomationApp } catch {
             # A disconnected device must not mask the original run failure or
             # prevent the session summary from recording incomplete cleanup.

@@ -16,12 +16,13 @@ param(
     [int]$StartupTimeoutSeconds = 45,
     [string]$DeviceId = '',
     [string]$HdcPath = 'C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe',
-    [string]$OutputRoot = 'D:\MyProject\winehua-logs\automation'
+    [string]$OutputRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $hdc = $HdcPath
 $bundle = 'com.vintage.pomelopro'
+if (-not $OutputRoot) { $OutputRoot = Join-Path $PSScriptRoot '../.hvigor/outputs/frame-order' }
 $startScript = Join-Path $PSScriptRoot 'Start-WineHuaGameTest.ps1'
 $batchLabel = if ($BatchMappedFlushMode -eq 'product') {
     ''
@@ -53,7 +54,7 @@ Add-Type -AssemblyName System.Drawing
 function Invoke-Hdc {
     param([Parameter(Mandatory)][string[]]$Arguments)
     $result = & $hdc -t $DeviceId @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    if ($LASTEXITCODE -ne 0 -or @($result | Where-Object { $_ -match '^\[Fail\]' }).Count) {
         throw "hdc failed ($LASTEXITCODE): $($Arguments -join ' ')`n$($result -join "`n")"
     }
     return $result
@@ -311,7 +312,7 @@ try {
     }
     $status = if ($valid.Count -lt $minimumValid) {
         'INCONCLUSIVE'
-    } elseif ($regressions.Count -gt 0 -or $trailingInvalid -gt 2) {
+    } elseif ($regressions.Count -gt 0 -or $trailingInvalid -gt 2 -or $forwardDeltas.Count -eq 0) {
         'FAIL'
     } else {
         'PASS'
@@ -387,7 +388,9 @@ try {
     $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'summary.json') -Encoding UTF8
 } finally {
     try {
-        $hilog = Invoke-Hdc -Arguments @('shell', 'hilog', '-x')
+        $hilog = @(Invoke-Hdc -Arguments @('shell', 'hilog', '-x') | Where-Object {
+            $_ -match 'com\.vintage\.pomelopro/' -and $_ -notmatch '__env|entryParams='
+        })
         $hilog | Set-Content -LiteralPath (Join-Path $output 'hilog.txt') -Encoding UTF8
         $presentLines = @($hilog | Where-Object {
             $_ -match '\[VENUS-PRESENT\]\[NCP\].*\bframes=' })
@@ -400,6 +403,9 @@ try {
                 $summary['presentActionContract'] -ne $true) {
                 $summary['status'] = 'INCONCLUSIVE'
             }
+        } elseif ($D3DBackend -ne 'wined3d' -and $summary['status'] -eq 'PASS') {
+            $summary['status'] = 'INCONCLUSIVE'
+            $summary['message'] = 'DXVK present action evidence missing'
         }
         $timelineLines = @($hilog | Where-Object {
             $_ -match '\[VENUS-FRAME-TIMELINE\]\[NCP\]' } |
@@ -418,6 +424,9 @@ try {
             Set-Content -LiteralPath (Join-Path $output 'summary.json') -Encoding UTF8
     } catch {
         $_ | Out-String | Set-Content -LiteralPath (Join-Path $output 'hilog-error.txt') -Encoding UTF8
+        if ($summary['status'] -eq 'PASS') { $summary['status'] = 'INCONCLUSIVE' }
+        $summary | ConvertTo-Json -Depth 8 |
+            Set-Content -LiteralPath (Join-Path $output 'summary.json') -Encoding UTF8
     }
     if ($started) {
         try { Invoke-Hdc -Arguments @('shell', 'aa', 'force-stop', $bundle) | Out-Null } catch {}

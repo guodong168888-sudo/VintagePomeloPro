@@ -10,7 +10,7 @@
 ```
 
 移除 `-PreflightOnly`，添加 `-Suite core` 即测试当前已安装包。它会退出当前
-游戏，通过正常应用入口运行 x64/x86 音频与 OpenGL smoke，结束后停止测试应用。
+游戏，通过正常 `game` 入口逐个运行 x64/x86 音频与 OpenGL probe，结束后停止测试应用。
 `-Suite opengl` 只测两种 Guest 位数；`-Prefix reuse` 为默认值，保留用户 Wine 前缀。
 
 `-SkipInstall` 不验证安装二进制与参考 HAP 相同，只核对产品版本。报告明确写为
@@ -40,9 +40,11 @@ ELF 和内嵌 runtime 哈希；签名与 Guest 嵌套载荷完整性须已在该
 过滤其他应用和序列化启动环境。`batchMappedFlush` 使用产品开启策略，拒绝 off。
 主机汇总中的 `batchMappedFlush: null` 表示没有覆盖，而非关闭。
 
-`-Gate` 仍表示三次 reuse core 与一次独立 `.wine-smoke` clean core；它不等于
-游戏、两代 DXVK 视频、五次生命周期或十分钟稳定性全部验收。此脚本不替代
-`Start-WineHuaGameTest.ps1` 的正常游戏性能测试入口。
+当前仅迁移了 `core/audio/opengl` + `reuse`。旧 App `smoke` Want 已删除，
+其它 Suite、`clean` 和 `-Gate` 在构建/安装/连接设备前拒绝，不能继续使用历史示例。
+两代 DXVK 的短测使用 `Measure-WineHuaFrameOrder.ps1`，同样通过正常游戏入口。
+核心 probe 通过不等于视频、五次生命周期或十分钟稳定性全部验收。
+正常 launcher 负责产品环境，不恢复独立的 SmokeRunner 或 `.wine-smoke` 启动链。
 
 主机测试（无需设备、Docker 或 HAP）：
 
@@ -50,6 +52,8 @@ ELF 和内嵌 runtime 哈希；签名与 Guest 嵌套载荷完整性须已在该
 .\automation\Test-AutomationPreflight.ps1
 .\automation\Test-GlTiming.ps1
 .\automation\Test-GraphicsTestPolicy.ps1
+.\automation\Test-NormalSmoke.ps1
+.\automation\Test-SmokeVisual.ps1
 ```
 
 DXVK 性能测量的 `-ConditionSet` 仅支持 `product`（两代交替）、`legacy`、
@@ -63,8 +67,14 @@ DXVK 性能测量的 `-ConditionSet` 仅支持 `product`（两代交替）、`le
 基线的哈希/身份/ABI 只读预检及现有 `vp-build` 绑定检查通过。本次只改测试
 工具与文档，没有为了它们重建或安装 HAP，没有执行构建分支。
 
-真机 `core/reuse` 会话 `phase2-20260831-183142` 已正常接受启动请求，但随后
-HDC 设备数变为 0，没有收到 suite-summary；主机记录 `FAIL` / 结果超时。
-这不是 GL/音频通过，也不足以判定应用失败。断连情况下无法确认测试会话
-退出或正常模式恢复；重连后先检查当前会话，再补完整 core 回归。
-已用 mock 补测断连失败识别，不能替代重连后的真机验证。
+重连后确认：18:31/18:52 的旧请求虽被系统接受，但应用忽略 `mode=smoke`，
+probe 并未启动；此前将其仅归因断连的判断不完整。改为正常 `game` 入口后，
+18:57 四个 probe 完成，旧判图把蓝色桌面也计入 GL 蓝色块，导致视觉误报。
+失败原件保留；修正饱和蓝阈值并补背景/旋转/镜像/缺色单测后，18:59 完整
+重跑 `phase2-20260831-185944` 的四项功能及两张视觉图均通过。
+
+但日志复核发现该次 x64 GL 在 19:00:48 出现一次 `0x505` blit drop，随后恢复；
+原报告 PASS 仅代表旧门禁的功能检查，**不能作为无丢帧稳定性验收**。
+现按每个启动 PID 隔离日志，新增 blit drop、非零 failed_swaps、fatal signal
+门禁，避免既混入旧会话错误、又漏过本次错误。未知的 GPU/CPU-copy 指标仍为
+未知，不补零，不把模拟输入/音频 drain 当成真人听感或全套生命周期验证。
