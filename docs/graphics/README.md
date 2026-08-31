@@ -11,6 +11,8 @@
 - Legacy/Modern 的 `batchMappedFlush` 保持产品开启策略，不跑 off 对照。
 - 性能监控在系统设置中独立分区，采用小字号顶部横条；指标含义、
   采样边界和测试入口见 [performance-hud.md](performance-hud.md)。
+- 局内低帧率仍在定位；原 FP 采样不能直接作函数热点结论，新 DWARF 短采样、
+  数据可信度检查和下一轮对照见 [war3-gameplay-cpu-investigation.md](war3-gameplay-cpu-investigation.md)。
 - 最新回退包、测量入口、真机能力门禁与未完成项见
   [gles-direct-validation.md](gles-direct-validation.md)。历史 1.2.8/1.2.9
   记录仅作为历史证据，不再代表当前安装包或设备连接状态。

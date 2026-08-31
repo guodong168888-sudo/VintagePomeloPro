@@ -113,6 +113,13 @@ This points investigation toward Guest execution/draw submission, not simply
 the sub-millisecond presenter tail; it does not yet distinguish game logic,
 WineD3D or Box64 translation overhead.
 
+Follow-up inspection found raw IP placeholders and FP stacks ending at Box64
+thread entrypoints. A short DWARF capture recovered more diverse user-address
+candidates, but Guest/JIT attribution still requires review. The bounded capture
+tool, sample-quality tests and exact limitations are documented in
+[War3 CPU investigation](war3-gameplay-cpu-investigation.md). This is diagnostic
+progress, not an FPS gain or a qualified fullscreen/windowed comparison.
+
 This was an exploratory cinematic/gameplay scene, not a fixed save/camera
 benchmark. Battery temperature rose from about 40 to 42°C; this is not chip
 temperature and conditions were not controlled. Do not compare it directly to
