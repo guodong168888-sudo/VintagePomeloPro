@@ -311,7 +311,7 @@ static napi_value LaunchClient(napi_env env, napi_callback_info info) {
     if (argc >= 7) {
         char prefixMode[32] = {};
         napi_get_value_string_utf8(env, args[6], prefixMode, sizeof(prefixMode), nullptr);
-        if (!strcmp(prefixMode, "clean")) p->prefixDir = WINE_SMOKE_PREFIX;
+        if (!strcmp(prefixMode, "clean")) p->prefixDir = WINE_SMOKE_PREFIX;\n        else if (!strcmp(prefixMode, "proton_unity")) p->prefixDir = WINE_PROTON_UNITY_PREFIX;
     }
     if (argc >= 8) {
         char d3dBackend[64] = {};
