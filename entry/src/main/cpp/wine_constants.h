@@ -12,6 +12,9 @@
 // of the normal user's prefix lifecycle.
 #define WINE_SMOKE_PREFIX    "/data/storage/el2/base/files/.wine-smoke"
 
+// Persistent isolated prefix for the Proton-derived Unity product profile.
+#define WINE_PROTON_UNITY_PREFIX "/data/storage/el2/base/files/.wine-proton-unity"
+
 // Wine runtime and the non-interactive HOME used by automation.
 #define WINE_RUNTIME_ROOT    "/data/storage/el2/base/files/wine"
 #define WINE_RUNTIME_BIN     WINE_RUNTIME_ROOT "/bin"

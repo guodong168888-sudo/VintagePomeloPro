@@ -130,7 +130,7 @@ export function box64PresetLabel(presetId: string): string {
     case BOX64_PRESET_STABILITY:
       return '稳定模式';
     case BOX64_PRESET_UNITY:
-      return 'Pura X Max · IL2CPP/Burst';
+      return 'Proton 补丁实验 · Pura X Max';
     case BOX64_PRESET_CONSERVATIVE:
       return '兼容模式';
     case BOX64_PRESET_INTERMEDIATE:
@@ -147,7 +147,7 @@ export function box64PresetDescription(presetId: string): string {
     case BOX64_PRESET_STABILITY:
       return '优先保证兼容与稳定，适合新引擎、Unity 或频繁崩溃的程序。';
     case BOX64_PRESET_UNITY:
-      return '《极品采花郎》专用：基于新版图形直出，启用 Box64 Unity/IL2CPP/Burst 兼容、4 核与对齐原子操作，并强制单游戏 DXVK 2.6.2。';
+      return '《极品采花郎》专用 Proton 派生方案：独立 Wine 前缀、Box64 Unity/IL2CPP/Burst 兼容、4 核、对齐原子操作和 DXVK 2.6.2。';
     case BOX64_PRESET_CONSERVATIVE:
       return '兼容与性能之间偏保守，适合大部分老游戏。';
     case BOX64_PRESET_INTERMEDIATE:
@@ -189,6 +189,13 @@ export function resolveBox64PresetEnv(presetId: string): string[] {
         'BOX64_DYNAREC_ALIGNED_ATOMICS=1',
         'WINEESYNC=0',
         'WINEFSYNC=0',
+        // Compatible Proton policies applied directly because full Linux Proton
+        // cannot run inside an OpenHarmony HAP/musl WineHua session.
+        'WINEDLLOVERRIDES=winemenubuilder.exe=d;mscoree=d;mshtml=d',
+        'WINEDEBUG=warn+seh,warn+module,warn+tid',
+        'GST_PLUGIN_SYSTEM_PATH_1_0=/data/storage/el2/base/files/wine/lib/gstreamer-1.0',
+        'PULSE_LATENCY_MSEC=60',
+        'WINEHUA_PROTON_DERIVED=1',
         'WINEHUA_FORCE_DXVK_MODERN=1',
         'DXVK_STATE_CACHE=0',
         'DXVK_LOG_LEVEL=info',

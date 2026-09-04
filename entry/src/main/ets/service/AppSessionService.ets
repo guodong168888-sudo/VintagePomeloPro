@@ -3,6 +3,7 @@ import { hilog } from './LogService';
 import testNapi from 'libentry.so';
 import {
   BOX64_PRESET_DEFAULT,
+  BOX64_PRESET_UNITY,
   AppDescriptor,
   DesktopWindowMode,
   DisplayMode,
@@ -204,8 +205,13 @@ export class AppSessionService {
     //   避免 ensureReady 返回后继续执行造成的竞态（桌面会话未入表、
     //   DesktopAbility startAbility 阻塞等）。
     const engine = WineEngineService.getInstance();
+    const requestedAppSettings = AppSettingsStore.getInstance().getAppSettings(app.id);
+    const requestedPreset = requestedAppSettings.box64Preset !== BOX64_PRESET_DEFAULT
+      ? requestedAppSettings.box64Preset : settings.box64Preset;
+    engine.selectPrefixMode(requestedPreset === BOX64_PRESET_UNITY ? 'proton_unity' : 'reuse');
     engine.selectHostGraphicsBackendForExecutable(app.launchTarget.executable);
-    if (engine.isReady() && engine.getPresentationMode() === presentationMode) {
+    if (engine.isReady() && engine.getPresentationMode() === presentationMode &&
+      !engine.needsPrefixRestart()) {
       return this.launchReady(app, settings, mode, presentationMode, homeDirectory);
     }
     return this.deferLaunchUntilReady(app, settings, mode, presentationMode, homeDirectory);
