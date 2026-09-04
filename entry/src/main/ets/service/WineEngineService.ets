@@ -333,6 +333,8 @@ export class WineEngineService {
   private prefixRefreshRequired: boolean = false;
   private pendingPrefixVersion: Uint8Array = new Uint8Array(0);
   private d3dBackend: string = 'dxvk_legacy';
+  private prefixMode: string = 'reuse';
+  private appliedPrefixMode: string = 'reuse';
   private hostGraphicsBackend: string = 'dxvk_legacy';
   // Product sessions derive Host and Guest from the same D3D backend. Only
   // the qualified VKD3D smoke path owns an explicit one-session override.
@@ -416,6 +418,14 @@ export class WineEngineService {
     return this.state === EngineState.READY;
   }
 
+  selectPrefixMode(prefixMode: string): void {
+    this.prefixMode = prefixMode === 'proton_unity' ? 'proton_unity' : 'reuse';
+  }
+
+  needsPrefixRestart(): boolean {
+    return this.appliedPrefixMode !== this.prefixMode;
+  }
+
   subscribe(listener: EngineStateListener): void {
     this.listeners.add(listener);
     listener(this.state, this.message);
@@ -440,7 +450,8 @@ export class WineEngineService {
     if (this.state === EngineState.READY && this.mode === mode &&
       this.presentationMode === presentationMode && this.d3dBackend === requestedD3DBackend &&
       this.appliedHostGraphicsBackend === this.hostGraphicsBackend &&
-      this.appliedHostGraphicsLabExperiment === this.hostGraphicsLabExperiment) {
+      this.appliedHostGraphicsLabExperiment === this.hostGraphicsLabExperiment &&
+      this.appliedPrefixMode === this.prefixMode) {
       this.syncManagedSmokePayload('ready-reuse');
       return true;
     }
@@ -448,7 +459,8 @@ export class WineEngineService {
       this.presentationMode === presentationMode &&
       this.d3dBackend === requestedD3DBackend &&
       this.appliedHostGraphicsBackend === this.hostGraphicsBackend &&
-      this.appliedHostGraphicsLabExperiment === this.hostGraphicsLabExperiment) return this.waitForReady();
+      this.appliedHostGraphicsLabExperiment === this.hostGraphicsLabExperiment &&
+      this.appliedPrefixMode === this.prefixMode) return this.waitForReady();
 
     if (this.state === EngineState.ERROR) {
       // native 进程仍存活说明协调者可能还在推进 (例如之前 ArkTS 侧瞬态失败):
@@ -465,7 +477,8 @@ export class WineEngineService {
       (this.mode !== mode || this.presentationMode !== presentationMode ||
        this.d3dBackend !== requestedD3DBackend ||
        this.appliedHostGraphicsBackend !== this.hostGraphicsBackend ||
-       this.appliedHostGraphicsLabExperiment !== this.hostGraphicsLabExperiment)) {
+       this.appliedHostGraphicsLabExperiment !== this.hostGraphicsLabExperiment ||
+       this.appliedPrefixMode !== this.prefixMode)) {
       const switchingHost = (this.appliedHostGraphicsBackend !== this.hostGraphicsBackend ||
         this.appliedHostGraphicsLabExperiment !== this.hostGraphicsLabExperiment) &&
         this.mode === mode && this.presentationMode === presentationMode &&
@@ -530,8 +543,9 @@ export class WineEngineService {
       // Native runs wineboot --init only for a new prefix. Existing prefixes
       // are migrated above before any wineserver process starts.
       testNapi.launchClient(BOX64, [], SOCK, WINE_BIN + ':' + WINE_LIB,
-        homeDirectory, false, '', this.d3dBackend,
+        homeDirectory, false, this.prefixMode, this.d3dBackend,
         box64PresetEnvString(AppSettingsStore.getInstance().getGlobalSettings().box64Preset));
+      this.appliedPrefixMode = this.prefixMode;
       return this.waitForReady();
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'ensureReady failed: %{public}s', JSON.stringify(error));
